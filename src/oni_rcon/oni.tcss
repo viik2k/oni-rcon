@@ -66,5 +66,7 @@ ModalScreen { align: center middle; background: $background 75%; }
 
 /* boot */
 #boot { align: center middle; background: $background; }
-#boot-emblem, #boot-title { width: 100%; text-align: center; }
+#boot-title { width: 100%; text-align: center; }
+#boot-emblem, #crest { width: auto; }
+#crest { margin: 1 0; }
 #boot-log { width: 64; height: auto; margin-top: 2; }

@@ -1,5 +1,7 @@
 # oni-rcon
 
+![oni-rcon boot screen: the ONI emblem over the clearance check](docs/boot.png)
+
 **An ONI-themed terminal admin console for Project Reclaimer Halo 3 dedicated servers.**
 Every server you run on one screen: players, live intercepts, kicks and bans, map and mode control, votes, VPN
 allowances and a raw command console, wrapped in Office of Naval Intelligence, Section Three dossier styling.
@@ -31,7 +33,10 @@ Also:
 - **Destructive actions ask first.** The confirm button defaults to ABORT.
 - **A refused password is never retried.** The server locks an address out after 5 wrong passwords in 10 minutes, so oni-rcon won't trip it.
 
-![Intercepts tab](docs/intercepts.png)
+<p>
+  <img src="docs/intercepts.png" alt="Intercepts tab: one feed of chat, kills and joins from every server" width="49%">
+  <img src="docs/operations.png" alt="Operations tab: sitrep, rotation and server controls" width="49%">
+</p>
 
 ## Install
 
@@ -151,7 +156,7 @@ The demo servers (`oni_rcon/demo.py`) speak the same protocol as a real server a
 
 oni-rcon is an unofficial, fan-made tool. It is not affiliated with or endorsed by Microsoft, Halo Studios or the
 Project Reclaimer team. Halo and related names are trademarks of Microsoft Corporation, and the ONI styling is a fan
-tribute. oni-rcon contains no game assets.
+tribute: the emblem in the interface is a fan-made pixel rendition. oni-rcon contains no game files.
 
 ## Licence
 

@@ -12,6 +12,7 @@ import threading
 import time
 
 from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosed
 
 CALLSIGNS = ["Bravo", "Echo 4", "Viper", "Nomad", "Ghost", "Rook", "Sable", "Kestrel", "Juno", "Tango", "Onyx",
              "Hollow", "Vesper", "Mako", "Quill", "Atlas", "Cinder", "Lark", "Drift", "Static"]
@@ -84,6 +85,8 @@ class Fake:
                 args = [str(a) for a in msg.get("args") or []] or parts[1:]
                 reply = await self.command(parts[0], args, msg.get("by") or "an admin")
                 await ws.send(json.dumps({"type": "reply", "id": msg.get("id"), **reply}))
+        except ConnectionClosed:  # the console quit mid-conversation: normal, not worth a traceback
+            pass
         finally:
             self.clients.discard(ws)
 

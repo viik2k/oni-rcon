@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from os.path import commonprefix
+from pathlib import Path
 
 from rich.console import Group
 from rich.json import JSON
@@ -64,8 +65,31 @@ OPS = [("load", "LOAD MAP+MODE", "primary"), ("map", "CHANGE MAP", "default"), (
 BAN_OPS = [("newban", "NEW BAN", "error"), ("unban", "UNBAN  u", "warning"), ("vpnallow", "VPN ALLOW  a", "default"),
            ("vpnrevoke", "VPN REVOKE  r", "default"), ("vpncheck", "CHECK IP", "default")]
 
-EMBLEM = "\n".join(["▄█▄", "▄███▄", "▄██▀██▄", "▄██▀ ▀██▄", "▄██▀ ▄ ▀██▄", "▄██▀ ▄█▄ ▀██▄", "▄██▀ ▄███▄ ▀██▄",
-                    "▄██▀▀▀▀▀▀▀▀▀▀▀██▄", "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"])
+# The ONI emblem, traced into pixel grids (largest first); tones 1 dark face, 2 rays, 3 bright face.
+EMBLEMS = [b.split() for b in re.sub(r"(?m)^#.*\n", "", Path(__file__).with_name("emblem.txt")
+                                     .read_text(encoding="utf-8")).strip().split("\n\n")]
+TONES = {"1": "#2C2415", "2": "#6F5626", "3": AMBER}
+
+
+def emblem(rows: int, cols: int = 999) -> Text:
+    """The largest emblem that fits in rows x cols cells, two pixels per cell in half blocks. Empty if none fits."""
+    g = next((g for g in EMBLEMS if len(g) // 2 <= rows and len(g[0]) <= cols), [])
+    lines = []
+    for top, bot in zip(g[::2], g[1::2]):
+        line = Text()
+        for a, b in zip(top, bot):
+            if a == b == "0":
+                line.append(" ")
+            elif a == b:  # a solid cell is a coloured space: no glyph seams between rows
+                line.append(" ", f"on {TONES[a]}")
+            elif b == "0":
+                line.append("▀", TONES[a])
+            elif a == "0":
+                line.append("▄", TONES[b])
+            else:
+                line.append("▀", f"{TONES[a]} on {TONES[b]}")
+        lines.append(line)
+    return Text("\n").join(lines)
 
 
 # --- reading tolerant: field names come from the docs, so every lookup accepts the plausible spellings ---------
@@ -325,7 +349,8 @@ class Boot(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="boot"):
-            yield Static(Text(EMBLEM, AMBER), id="boot-emblem")
+            with Center():
+                yield Static(id="boot-emblem")
             yield Static(Text.assemble(("\nO F F I C E   O F   N A V A L   I N T E L L I G E N C E\n", f"bold {AMBER}"),
                                        ("SECTION THREE  ·  REMOTE CONSOLE TERMINAL  ·  ", DIM),
                                        ("TOP SECRET", f"bold {RED}")), id="boot-title")
@@ -335,6 +360,10 @@ class Boot(Screen):
     def on_mount(self) -> None:
         self.t0, self.done = time.monotonic(), None
         self.set_interval(0.07, self.tick)
+        self.on_resize()
+
+    def on_resize(self) -> None:  # leave room for the title and a log line per station
+        self.query_one("#boot-emblem", Static).update(emblem(self.app.size.height - 12 - len(self.app.stations)))
 
     @staticmethod
     def dotted(k: str, v: str, color: str) -> Text:
@@ -427,6 +456,8 @@ class OniApp(App):
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
                 yield ListView(*[ListItem(c) for c in self.cards], id="stations")
+                with Center():
+                    yield Static(id="crest")
                 yield Static(id="uplink")
             with TabbedContent(id="tabs", initial="assets"):
                 with TabPane("ASSETS", id="assets"):
@@ -498,6 +529,14 @@ class OniApp(App):
             st.worker = self.run_worker(st.rcon.run(), group="rcon", exit_on_error=False)
 
         self.set_interval(1, self.paint_masthead)
+        self.on_resize()
+
+    def on_resize(self) -> None:
+        # the sidebar crest takes what the station cards and uplink leave, and goes when that's too little
+        free = self.size.height - 9 - len(self.tunnels) - 3 * len(self.stations)
+        crest = self.query_one("#crest", Static)
+        crest.update(art := emblem(min(free, 16), 32))
+        crest.display = bool(art.plain)
         self.set_interval(3, self.poll_fast)
         self.set_interval(15, self.poll_slow)
         self.paint_all()
@@ -506,6 +545,8 @@ class OniApp(App):
 
     # --- connections -----------------------------------------------------------------------------------------
     def on_rcon_state(self, rcon: Rcon, state: str, detail: str) -> None:
+        if not self.is_running:  # a late reply or event while quitting: the widgets are already gone
+            return
         st = next(s for s in self.stations if s.rcon is rcon)
         if state == "online":
             self.relabel()
@@ -522,6 +563,8 @@ class OniApp(App):
         self.paint_card(st)
 
     def on_tunnel(self, tun: Tunnel, state: str, detail: str) -> None:
+        if not self.is_running:  # a late reply or event while quitting: the widgets are already gone
+            return
         if state == "down":
             self.log_event(None, {"event": "uplink", "text": f"SSH {tun.dest} DOWN  {detail}"})
         self.paint_uplink()
@@ -596,6 +639,8 @@ class OniApp(App):
         self.run_worker(go(), group="cmd", exit_on_error=False)
 
     def on_rcon_event(self, rcon: Rcon, ev: dict) -> None:
+        if not self.is_running:  # a late reply or event while quitting: the widgets are already gone
+            return
         st = next(s for s in self.stations if s.rcon is rcon)
         self.log_event(st, ev)
         if self.raw_events:
@@ -631,6 +676,8 @@ class OniApp(App):
 
     # --- painting --------------------------------------------------------------------------------------------
     def paint(self, st: Station, what: tuple) -> None:
+        if not self.is_running:  # a late reply or event while quitting: the widgets are already gone
+            return
         self.paint_card(st)
         if st is not self.cur:
             return

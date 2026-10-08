@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from oni_rcon.app import OniApp, render_event, target_of
+from oni_rcon.app import OniApp, emblem, render_event, target_of
 from oni_rcon.config import Server, load_config, parse_target, resolve_passwords
 from oni_rcon.demo import serve_fakes
 from oni_rcon.rcon import Rcon
@@ -28,6 +28,14 @@ def test_config(tmp_path, monkeypatch):
     resolve_passwords(servers)
     assert by == "op" and [s.ssh for s in servers] == ["box", ""]
     assert [s.password for s in servers] == ["42", "fromenv"]
+
+
+def test_emblem_fits():
+    for rows, cols in [(30, 999), (20, 999), (16, 32), (12, 24)]:
+        lines = emblem(rows, cols).split("\n")
+        assert 0 < len(lines) <= rows and all(len(line) <= cols for line in lines)
+        assert len({len(line) for line in lines}) == 1  # one block: the rows stay aligned when centred
+    assert emblem(11).plain == ""
 
 
 def test_event_lines():
