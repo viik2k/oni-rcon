@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from os.path import commonprefix
 from pathlib import Path
+from typing import Callable
 
 from rich.console import Group
 from rich.json import JSON
@@ -432,9 +433,9 @@ class OniApp(App):
         *[Binding(str(i), f"station({i - 1})", show=False) for i in range(1, 10)],
     ]
 
-    def __init__(self, servers: list[Server], by: str, intro: bool = True):
+    def __init__(self, servers: list[Server], by: str, intro: bool = True, updater: Callable[[], str] | None = None):
         super().__init__()
-        self.by, self.intro = by, intro
+        self.by, self.intro, self.updater = by, intro, updater
         self.stations = [Station(s, s.name or s.where) for s in servers]
         self.cards = [Static(classes="card") for _ in servers]
         self.sel, self.redact, self.raw_events = 0, True, False
@@ -530,6 +531,12 @@ class OniApp(App):
 
         self.set_interval(1, self.paint_masthead)
         self.on_resize()
+        if self.updater:
+            self.run_worker(self.check_update, thread=True, exit_on_error=False)
+
+    def check_update(self) -> None:
+        if msg := self.updater():
+            self.call_from_thread(self.notify, msg, title="UPDATE", timeout=20)
 
     def on_resize(self) -> None:
         # the sidebar crest takes what the station cards and uplink leave, and goes when that's too little

@@ -37,9 +37,13 @@ def parse_target(target: str, **common) -> Server:
     return Server(host=host.strip("[]") or "127.0.0.1", port=int(port), **common)
 
 
-def default_config() -> Path | None:
+def user_config() -> Path:
     base = Path(os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    for p in (os.environ.get("ONI_RCON_CONFIG"), "oni-rcon.toml", base / "oni-rcon" / "config.toml"):
+    return base / "oni-rcon" / "config.toml"
+
+
+def default_config() -> Path | None:
+    for p in (os.environ.get("ONI_RCON_CONFIG"), "oni-rcon.toml", user_config()):
         if p and Path(p).is_file():
             return Path(p)
     return None

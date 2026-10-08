@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import sys
 
-from . import __version__
-from .config import Server, default_config, load_config, parse_target, resolve_passwords
+from . import __version__, update
+from .config import Server, default_config, load_config, parse_target, resolve_passwords, user_config
 
 
 def main() -> None:
@@ -20,21 +21,31 @@ def main() -> None:
     ap.add_argument("-V", "--version", action="version", version=f"oni-rcon {__version__}")
     a = ap.parse_args()
 
-    cfg_by = ""
+    cfg_by, path = "", None
+    if not (a.demo or a.targets):
+        path = a.config or default_config()
+        if not path:
+            if not sys.stdin.isatty():
+                ap.error("no targets and no config file; try `oni-rcon --demo`, or `oni-rcon HOST:PORT` with the game port")
+            # a double-clicked exe gets no arguments: offer the demo instead of an error in a window that closes
+            try:
+                input(f"No servers set up yet. Put them in {user_config()} (see the README), or run oni-rcon HOST:PORT.\n"
+                      "Press Enter to look around the demo, or close this window. ")
+            except (EOFError, KeyboardInterrupt):
+                return
+            a.demo = True
     if a.demo:
         from .demo import start_in_thread
         servers = [Server(port=p, password="demo") for p in start_in_thread()]
     elif a.targets:
         servers = [parse_target(t, ssh=a.ssh) for t in a.targets]
     else:
-        path = a.config or default_config()
-        if not path:
-            ap.error("no targets and no config file; try `oni-rcon --demo`, or `oni-rcon HOST:PORT` with the game port")
         cfg_by, servers = load_config(path)
     resolve_passwords(servers)
 
     from .app import OniApp
-    OniApp(servers, by=a.by or cfg_by or getpass.getuser(), intro=not a.no_intro).run()
+    OniApp(servers, by=a.by or cfg_by or getpass.getuser(), intro=not a.no_intro,
+           updater=update.check).run()
 
 
 if __name__ == "__main__":

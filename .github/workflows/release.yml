@@ -1,0 +1,44 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            asset: oni-rcon-windows-x64.exe
+          - os: ubuntu-22.04  # an older glibc, so the binary also runs on Debian 12 and friends
+            asset: oni-rcon-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv run pytest -q
+      - shell: bash
+        run: |
+          printf 'from oni_rcon.__main__ import main\n\nmain()\n' > launch.py
+          uv run --with pyinstaller pyinstaller --onefile --name oni-rcon --collect-data oni_rcon \
+            --collect-submodules textual --collect-submodules websockets launch.py
+          mv dist/oni-rcon* "${{ matrix.asset }}"
+          # the self-updater compares this against the tag: a mismatch would update itself on every start
+          test "$("./${{ matrix.asset }}" --version)" = "oni-rcon ${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" oni-rcon-* --repo "$GITHUB_REPOSITORY" --title "oni-rcon $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

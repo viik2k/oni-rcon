@@ -8,10 +8,9 @@ allowances and a raw command console, wrapped in Office of Naval Intelligence, S
 
 ![Assets tab: players table and personnel dossier](docs/assets.png)
 
-```
-uv tool install git+https://github.com/viik2k/oni-rcon
-oni-rcon --demo        # three simulated servers, no setup needed
-```
+**[Download for Windows](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-windows-x64.exe)** · [Linux](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-linux-x64) ·
+or `uv tool install git+https://github.com/viik2k/oni-rcon`. Run it with no servers set up (or with `--demo`) to look
+around three simulated ones.
 
 ## What it does
 
@@ -40,13 +39,30 @@ Also:
 
 ## Install
 
-You need Python 3.11+ and a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7).
+You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7).
+
+**Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-windows-x64.exe) and double-click it. The build
+isn't code-signed, so SmartScreen may stop it the first time: choose **More info**, then **Run anyway**.
+
+**Linux:**
+
+```
+curl -Lo oni-rcon https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-linux-x64
+chmod +x oni-rcon
+./oni-rcon --demo
+```
+
+**With Python 3.11+** (any OS, macOS included):
 
 ```
 uv tool install git+https://github.com/viik2k/oni-rcon
 ```
 
 or `pipx install git+https://github.com/viik2k/oni-rcon`. From a clone, `uv tool install .` also works.
+
+**Updates.** The downloads update themselves: at start they check GitHub for a newer release, swap it in, and tell you
+to restart. A Python install tells you to run `uv tool upgrade oni-rcon` instead. Set `ONI_RCON_NO_UPDATE=1` to turn
+the check off.
 
 Use a terminal with true colour and a font that has box-drawing glyphs, such as Windows Terminal, iTerm2, kitty or
 WezTerm. At least 140×40 looks best.
@@ -91,7 +107,7 @@ The name the server's admin log records you under is `--by`, then the config's `
 With no targets on the command line, oni-rcon reads the first of these that exists:
 
 1. `$ONI_RCON_CONFIG`
-2. `./oni-rcon.toml`
+2. `./oni-rcon.toml`, which is the exe's own folder when you double-click it
 3. `%APPDATA%\oni-rcon\config.toml` on Windows, or `~/.config/oni-rcon/config.toml` on Linux and macOS
 
 Start from [`oni-rcon.example.toml`](oni-rcon.example.toml). A typical host setup tunnels to the game box and reads
@@ -151,6 +167,10 @@ uv run oni-rcon --demo
 ```
 
 The demo servers (`oni_rcon/demo.py`) speak the same protocol as a real server and are what the tests run against.
+
+To release, bump `__version__` in `src/oni_rcon/__init__.py`, commit, and push a matching tag (`git tag v0.2.0 &&
+git push --tags`). The release workflow builds the Windows and Linux binaries and publishes them, and running copies
+pick the new version up on their next start.
 
 ## Disclaimer
 
