@@ -1,0 +1,70 @@
+/* ONI: charcoal, amber primary, holo cyan, red for anything that bites. Colours come from the `oni` theme. */
+Screen { background: $background; }
+
+#masthead { height: 1; padding: 0 1; background: $panel; color: $foreground; }
+#body { height: 1fr; }
+
+#sidebar { width: 36; border-right: vkey $primary 40%; }
+#stations { height: 1fr; background: $background; }
+#stations > ListItem { padding: 0 1; height: 3; border-bottom: hkey $panel-lighten-1; background: $background; }
+#stations > ListItem.-highlight { background: $primary 15%; }
+#stations:focus > ListItem.-highlight { background: $primary 25%; }
+.card { height: 2; }
+#uplink { height: auto; padding: 1; border-top: hkey $primary 40%; }
+
+#tabs { width: 1fr; }
+DataTable, RichLog, #sitrep, #dossier-box {
+    border: round $primary 35%;
+    border-title-color: $primary;
+    border-title-style: bold;
+    background: $background;
+}
+DataTable:focus, RichLog:focus, #dossier-box:focus-within { border: round $secondary; border-title-color: $secondary; }
+DataTable > .datatable--header { background: $panel; color: $primary; text-style: bold; }
+DataTable > .datatable--cursor { background: $primary 30%; color: $foreground; }
+
+Assets { height: 1fr; }
+#players { width: 3fr; height: 1fr; }
+#dossier-box { width: 2fr; min-width: 44; height: 1fr; padding: 0 1; }
+
+#filters { height: 1; margin: 0 1; }
+#filters Checkbox { height: 1; border: none; padding: 0 2 0 0; background: transparent; }
+#feed { height: 1fr; padding: 0 1; }
+#say { margin: 0 0 0 0; }
+
+#ops-top { height: auto; }
+#sitrep { width: 1fr; height: auto; padding: 0 1; }
+#ops-grid { width: 2fr; height: auto; grid-size: 4; grid-gutter: 0 1; padding: 1 1 0 1; }
+#ops-grid Button { width: 1fr; min-width: 0; }
+#rotation { height: 1fr; min-height: 6; }
+
+Blacklist { height: 1fr; }
+#bans { height: 2fr; }
+#vpn { height: 1fr; }
+.bar { height: auto; padding: 0 1; }
+.bar Button { margin-right: 1; min-width: 0; }
+
+#console-log { height: 1fr; padding: 0 1; }
+#console-bar { height: auto; }
+#cmd { width: 1fr; }
+#raw { width: auto; }
+
+Button { text-style: bold; }
+
+/* dialogs */
+ModalScreen { align: center middle; background: $background 75%; }
+.dialog { width: 68; height: auto; max-height: 90%; padding: 1 2; background: $surface; border: thick $primary; }
+.dialog.danger { border: thick $error; }
+.dialog-title { text-style: bold; color: $primary; margin-bottom: 1; }
+.danger .dialog-title { color: $error; }
+.dialog-body { color: $text-muted; margin-bottom: 1; }
+.dialog Label { color: $secondary; margin-top: 1; }
+.dialog-buttons { height: auto; align-horizontal: right; margin-top: 1; }
+.dialog-buttons Button { margin-left: 1; }
+.pick { height: auto; }
+#pick-list { height: auto; max-height: 20; border: round $primary 35%; background: $background; }
+
+/* boot */
+#boot { align: center middle; background: $background; }
+#boot-emblem, #boot-title { width: 100%; text-align: center; }
+#boot-log { width: 64; height: auto; margin-top: 2; }

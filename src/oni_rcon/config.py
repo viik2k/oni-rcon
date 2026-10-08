@@ -1,0 +1,91 @@
+"""Which servers to manage, how to reach them, and where each password comes from."""
+from __future__ import annotations
+
+import getpass
+import os
+import subprocess
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass
+class Server:
+    port: int = 0  # RCON TCP port: the server's game port unless rcon_port is set in dedicated.toml
+    host: str = "127.0.0.1"  # RCON address; with ssh, as seen from the ssh destination
+    name: str = ""  # label in the UI; empty = the name the server reports
+    ssh: str = ""  # reach host:port through an SSH tunnel to this destination (key auth)
+    url: str = ""  # ws:// or wss:// URL instead of host/port, e.g. behind an HTTPS reverse proxy
+    password: str = field(default="", repr=False)
+    password_env: str = ""
+    password_command: str | list[str] = ""
+
+    def __post_init__(self):
+        if not (self.url or self.port):
+            raise ValueError("every server needs a port or a url")
+
+    @property
+    def where(self) -> str:
+        return self.url or f"{self.host}:{self.port}" + (f" via ssh {self.ssh}" if self.ssh else "")
+
+
+def parse_target(target: str, **common) -> Server:
+    """PORT, HOST:PORT, [IPv6]:PORT or a ws(s):// URL."""
+    if "://" in target:
+        return Server(url=target, **common)
+    host, _, port = target.rpartition(":")
+    return Server(host=host.strip("[]") or "127.0.0.1", port=int(port), **common)
+
+
+def default_config() -> Path | None:
+    base = Path(os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    for p in (os.environ.get("ONI_RCON_CONFIG"), "oni-rcon.toml", base / "oni-rcon" / "config.toml"):
+        if p and Path(p).is_file():
+            return Path(p)
+    return None
+
+
+def load_config(path: Path) -> tuple[str, list[Server]]:
+    """Returns (moderator name, servers). [defaults] applies to every [[server]] unless it sets the key itself."""
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    base = data.get("defaults", {})
+    try:
+        servers = [Server(**{**base, **s}) for s in data.get("server", [])]
+    except (TypeError, ValueError) as e:
+        raise SystemExit(f"{path}: {e}") from None
+    if not servers:
+        raise SystemExit(f"{path}: no [[server]] entries")
+    return data.get("by", ""), servers
+
+
+def resolve_passwords(servers: list[Server]) -> None:
+    """password > password_env > password_command > $ONI_RCON_PASSWORD > one prompt shared by the rest."""
+    ran: dict[str, str] = {}
+    typed = None
+    for s in servers:
+        if s.password:
+            pass
+        elif s.password_env and os.environ.get(s.password_env):
+            s.password = os.environ[s.password_env]
+        elif s.password_command:
+            key = repr(s.password_command)
+            if key not in ran:
+                ran[key] = _run(s.password_command)
+            s.password = ran[key]
+        elif os.environ.get("ONI_RCON_PASSWORD"):
+            s.password = os.environ["ONI_RCON_PASSWORD"]
+        else:
+            if typed is None:
+                typed = getpass.getpass("RCON password (used for every server without its own): ")
+            s.password = typed
+        if not s.password:
+            raise SystemExit(f"{s.where}: empty RCON password")
+
+
+def _run(cmd: str | list[str]) -> str:
+    # A string runs through the shell; a list runs as-is (no quoting surprises, works the same on Windows).
+    r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    if r.returncode:
+        raise SystemExit(f"password_command exited {r.returncode}: {r.stderr.strip()}")
+    return r.stdout.splitlines()[0] if r.stdout else ""

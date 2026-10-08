@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+# your own server list (may name hosts; never put a password in it)
+oni-rcon.toml
