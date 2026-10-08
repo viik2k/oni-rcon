@@ -530,6 +530,11 @@ class OniApp(App):
             st.worker = self.run_worker(st.rcon.run(), group="rcon", exit_on_error=False)
 
         self.set_interval(1, self.paint_masthead)
+        self.set_interval(3, self.poll_fast)
+        self.set_interval(15, self.poll_slow)
+        self.paint_all()
+        if self.intro:
+            self.push_screen(Boot())
         self.on_resize()
         if self.updater:
             self.run_worker(self.check_update, thread=True, exit_on_error=False)
@@ -544,11 +549,6 @@ class OniApp(App):
         crest = self.query_one("#crest", Static)
         crest.update(art := emblem(min(free, 16), 32))
         crest.display = bool(art.plain)
-        self.set_interval(3, self.poll_fast)
-        self.set_interval(15, self.poll_slow)
-        self.paint_all()
-        if self.intro:
-            self.push_screen(Boot())
 
     # --- connections -----------------------------------------------------------------------------------------
     def on_rcon_state(self, rcon: Rcon, state: str, detail: str) -> None:
@@ -614,6 +614,8 @@ class OniApp(App):
         self.paint(st, what)
 
     def poll_fast(self) -> None:
+        if not self.is_running:  # the 3 s timer can fire once more while quitting
+            return
         self.fetch(self.cur, "players", "status")
         if self.query_one(TabbedContent).active == "operations":
             self.fetch(self.cur, "vote")
@@ -706,6 +708,8 @@ class OniApp(App):
         self.repaint_feed()
 
     def paint_masthead(self) -> None:
+        if not self.is_running:  # the 1 s timer can fire once more while quitting
+            return
         online = sum(st.online for st in self.stations)
         assets = sum(st.data.get("status", {}).get("players") or 0 for st in self.stations if st.online)
         g = Table.grid(expand=True)

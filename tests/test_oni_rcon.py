@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from oni_rcon.app import OniApp, emblem, render_event, target_of
+from oni_rcon.app import Boot, OniApp, emblem, render_event, target_of
 from oni_rcon.config import Server, load_config, parse_target, resolve_passwords
 from oni_rcon.demo import serve_fakes
 from oni_rcon.rcon import Rcon
@@ -80,8 +80,12 @@ def test_rcon_against_fake():
 def test_app_against_fakes():
     async def go():
         ports, keep = await serve_fakes(tick=False)
-        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False)
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest")
         async with app.run_test(size=(160, 48)) as pilot:
+            await pilot.press("escape")  # skip the splash
+            await pilot.resize_terminal(150, 44)
+            await pilot.pause()
+            assert not isinstance(app.screen, Boot)  # a resize must not replay it
             for _ in range(100):
                 await pilot.pause(0.05)
                 if all(st.online and "players" in st.data for st in app.stations):
