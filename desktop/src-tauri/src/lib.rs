@@ -37,6 +37,7 @@ struct Args {
     setup: bool,
     intro: Option<String>,
     no_intro: bool,
+    devtools: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +52,7 @@ fn parse_args() -> Result<Args, String> {
             "--demo" => a.demo = true,
             "--setup" => a.setup = true,
             "--no-intro" => a.no_intro = true,
+            "--devtools" => a.devtools = true,
             "--intro" => {
                 let v = val("--intro")?;
                 if !["full", "quick", "off"].contains(&v.as_str()) {
@@ -63,7 +65,7 @@ fn parse_args() -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-h" | "--help" => {
-                println!("oni-rcon [targets...] [-c CONFIG] [--ssh DEST] [--by NAME] [--demo] [--setup] [--intro full|quick|off] [--no-intro]");
+                println!("oni-rcon [targets...] [-c CONFIG] [--ssh DEST] [--by NAME] [--demo] [--setup] [--intro full|quick|off] [--no-intro] [--devtools]");
                 std::process::exit(0);
             }
             s if s.starts_with('-') && !s.starts_with("--psn") => return Err(format!("unknown option {s}")),
@@ -566,12 +568,33 @@ mod tests {
     }
 }
 
+/// oni-rcon.log beside the config file: faults the window hit, and the backend's panics.
+fn log_path() -> PathBuf {
+    config::user_config().with_file_name("oni-rcon.log")
+}
+
+fn log_line(text: &str) {
+    use std::io::Write;
+    let p = log_path();
+    let _ = std::fs::create_dir_all(p.parent().unwrap());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{} oni-rcon {} {}: {}", util::utc_iso(), env!("CARGO_PKG_VERSION"), std::env::consts::OS, util::scrub(text));
+    }
+}
+
+#[tauri::command]
+fn log_error(text: String) {
+    log_line(&text);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (args, arg_error) = match parse_args() {
         Ok(a) => (a, String::new()),
         Err(e) => (Args::default(), e),
     };
+    std::panic::set_hook(Box::new(|info| log_line(&format!("panic: {info}"))));
+    let devtools = args.devtools;
     let demo = args.demo; // until the setup screen saves servers of the operator's own
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -585,8 +608,16 @@ pub fn run() {
             demo: Mutex::new(demo),
             hint: Mutex::new(String::new()),
         })
+        .setup(move |app| {
+            if devtools {
+                if let Some(w) = app.get_webview_window("main") {
+                    w.open_devtools();
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_open, start_console, call, reconnect, set_password,
+            launch_info, setup_probe, setup_check, setup_save, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check
         ])

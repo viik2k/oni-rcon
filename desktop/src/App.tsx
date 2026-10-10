@@ -159,9 +159,13 @@ type Screen = { kind: "loading" } | { kind: "setup"; info: Dict } | { kind: "arc
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
   const launch = useCallback(async () => {
-    const info: Dict = await invoke("launch_info");
-    if (info.mode === "setup") return setScreen({ kind: "setup", info });
-    await startConsole(false);
+    try {
+      const info: Dict = await invoke("launch_info");
+      if (info.mode === "setup") return setScreen({ kind: "setup", info });
+      await startConsole(false);
+    } catch (e) {
+      setScreen({ kind: "error", text: `Couldn't start: ${String(e)}` });
+    }
   }, []);
   const startConsole = async (demo: boolean) => {
     try {
