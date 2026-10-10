@@ -520,21 +520,49 @@ fn prefs_intro(full: Option<bool>, seen: Option<bool>) -> Value {
     json!({"full_intro": p.full_intro, "intro_seen": p.intro_seen})
 }
 
-/// A newer release on GitHub, in one line; empty when up to date, offline or turned off (ONI_RCON_NO_UPDATE=1).
+/// The newest desktop release newer than `current`, as (version, page): the terminal console's v* releases share
+/// the repository, so only desktop-v* tags count, read without their prefix.
+fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
+    let parse = |v: &str| v.split(['.', '-', '+']).take(3).map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    releases
+        .as_array()?
+        .iter()
+        .filter(|r| r["draft"] != true && r["prerelease"] != true)
+        .filter_map(|r| {
+            let v = r["tag_name"].as_str()?.strip_prefix("desktop-v")?;
+            Some((v.to_string(), r["html_url"].as_str().unwrap_or("https://github.com/viik2k/oni-rcon/releases").to_string()))
+        })
+        .max_by(|a, b| parse(&a.0).cmp(&parse(&b.0)))
+        .filter(|(v, _)| parse(v) > parse(current))
+}
+
+/// A newer desktop release on GitHub, in one line; empty when up to date, offline or turned off
+/// (ONI_RCON_NO_UPDATE=1).
 #[tauri::command]
 async fn update_check() -> String {
     if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
         return String::new();
     }
-    let parse = |v: &str| v.trim_start_matches('v').split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
     let Ok(c) = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build() else { return String::new() };
-    let Ok(r) = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases/latest").send().await else { return String::new() };
+    let Ok(r) = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await else { return String::new() };
     let Ok(v) = r.json::<Value>().await else { return String::new() };
-    let tag = v["tag_name"].as_str().unwrap_or_default();
-    if !tag.is_empty() && parse(tag) > parse(env!("CARGO_PKG_VERSION")) {
-        format!("oni-rcon {tag} is out: download it from https://github.com/viik2k/oni-rcon/releases/latest")
-    } else {
-        String::new()
+    match newer_desktop(&v, env!("CARGO_PKG_VERSION")) {
+        Some((ver, url)) => format!("ONI RCON desktop {ver} is out: download it from {url}"),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_desktop_releases_are_updates() {
+        let rel = |tag: &str| json!({"tag_name": tag, "html_url": format!("https://x/{tag}"), "draft": false, "prerelease": false});
+        let list = json!([rel("v0.9.5"), rel("desktop-v1.0.0"), rel("desktop-v1.2.0"), rel("desktop-v1.10.0"), {"tag_name": "desktop-v9.0.0", "draft": true}]);
+        assert_eq!(newer_desktop(&list, "1.0.0"), Some(("1.10.0".into(), "https://x/desktop-v1.10.0".into())));
+        assert_eq!(newer_desktop(&list, "1.10.0"), None);
+        assert_eq!(newer_desktop(&json!([rel("v2.0.0")]), "1.0.0"), None);
     }
 }
 
