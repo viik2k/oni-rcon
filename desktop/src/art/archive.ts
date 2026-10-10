@@ -7,7 +7,7 @@ import { Pic, smoothCached, tones } from "./pixels";
 
 // The ONI emblem as traced pixel grids, largest first; tones 1 dark face, 2 rays, 3 bright face.
 export const EMBLEMS: string[][] = emblemText
-  .replace(/^#.*\n/gm, "")
+  .replace(/^#.*\r?\n/gm, "") // CRLF on a Windows checkout: without the \r the comments stay and become a 1 pixel wide "grid"
   .trim()
   .split(/\n\s*\n/)
   .map((b) => b.split(/\s+/).filter(Boolean));
