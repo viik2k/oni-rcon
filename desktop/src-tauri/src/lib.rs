@@ -37,6 +37,7 @@ struct Args {
     setup: bool,
     intro: Option<String>,
     no_intro: bool,
+    devtools: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +52,7 @@ fn parse_args() -> Result<Args, String> {
             "--demo" => a.demo = true,
             "--setup" => a.setup = true,
             "--no-intro" => a.no_intro = true,
+            "--devtools" => a.devtools = true,
             "--intro" => {
                 let v = val("--intro")?;
                 if !["full", "quick", "off"].contains(&v.as_str()) {
@@ -63,7 +65,7 @@ fn parse_args() -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-h" | "--help" => {
-                println!("oni-rcon [targets...] [-c CONFIG] [--ssh DEST] [--by NAME] [--demo] [--setup] [--intro full|quick|off] [--no-intro]");
+                println!("oni-rcon [targets...] [-c CONFIG] [--ssh DEST] [--by NAME] [--demo] [--setup] [--intro full|quick|off] [--no-intro] [--devtools]");
                 std::process::exit(0);
             }
             s if s.starts_with('-') && !s.starts_with("--psn") => return Err(format!("unknown option {s}")),
@@ -520,22 +522,69 @@ fn prefs_intro(full: Option<bool>, seen: Option<bool>) -> Value {
     json!({"full_intro": p.full_intro, "intro_seen": p.intro_seen})
 }
 
-/// A newer release on GitHub, in one line; empty when up to date, offline or turned off (ONI_RCON_NO_UPDATE=1).
+/// The newest desktop release newer than `current`, as (version, page): the terminal console's v* releases share
+/// the repository, so only desktop-v* tags count, read without their prefix.
+fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
+    let parse = |v: &str| v.split(['.', '-', '+']).take(3).map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    releases
+        .as_array()?
+        .iter()
+        .filter(|r| r["draft"] != true && r["prerelease"] != true)
+        .filter_map(|r| {
+            let v = r["tag_name"].as_str()?.strip_prefix("desktop-v")?;
+            Some((v.to_string(), r["html_url"].as_str().unwrap_or("https://github.com/viik2k/oni-rcon/releases").to_string()))
+        })
+        .max_by(|a, b| parse(&a.0).cmp(&parse(&b.0)))
+        .filter(|(v, _)| parse(v) > parse(current))
+}
+
+/// A newer desktop release on GitHub, in one line; empty when up to date, offline or turned off
+/// (ONI_RCON_NO_UPDATE=1).
 #[tauri::command]
 async fn update_check() -> String {
     if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
         return String::new();
     }
-    let parse = |v: &str| v.trim_start_matches('v').split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
     let Ok(c) = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build() else { return String::new() };
-    let Ok(r) = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases/latest").send().await else { return String::new() };
+    let Ok(r) = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await else { return String::new() };
     let Ok(v) = r.json::<Value>().await else { return String::new() };
-    let tag = v["tag_name"].as_str().unwrap_or_default();
-    if !tag.is_empty() && parse(tag) > parse(env!("CARGO_PKG_VERSION")) {
-        format!("oni-rcon {tag} is out: download it from https://github.com/viik2k/oni-rcon/releases/latest")
-    } else {
-        String::new()
+    match newer_desktop(&v, env!("CARGO_PKG_VERSION")) {
+        Some((ver, url)) => format!("ONI RCON desktop {ver} is out: download it from {url}"),
+        None => String::new(),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_desktop_releases_are_updates() {
+        let rel = |tag: &str| json!({"tag_name": tag, "html_url": format!("https://x/{tag}"), "draft": false, "prerelease": false});
+        let list = json!([rel("v0.9.5"), rel("desktop-v1.0.0"), rel("desktop-v1.2.0"), rel("desktop-v1.10.0"), {"tag_name": "desktop-v9.0.0", "draft": true}]);
+        assert_eq!(newer_desktop(&list, "1.0.0"), Some(("1.10.0".into(), "https://x/desktop-v1.10.0".into())));
+        assert_eq!(newer_desktop(&list, "1.10.0"), None);
+        assert_eq!(newer_desktop(&json!([rel("v2.0.0")]), "1.0.0"), None);
+    }
+}
+
+/// oni-rcon.log beside the config file: faults the window hit, and the backend's panics.
+fn log_path() -> PathBuf {
+    config::user_config().with_file_name("oni-rcon.log")
+}
+
+fn log_line(text: &str) {
+    use std::io::Write;
+    let p = log_path();
+    let _ = std::fs::create_dir_all(p.parent().unwrap());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{} oni-rcon {} {}: {}", util::utc_iso(), env!("CARGO_PKG_VERSION"), std::env::consts::OS, util::scrub(text));
+    }
+}
+
+#[tauri::command]
+fn log_error(text: String) {
+    log_line(&text);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -544,6 +593,8 @@ pub fn run() {
         Ok(a) => (a, String::new()),
         Err(e) => (Args::default(), e),
     };
+    std::panic::set_hook(Box::new(|info| log_line(&format!("panic: {info}"))));
+    let devtools = args.devtools;
     let demo = args.demo; // until the setup screen saves servers of the operator's own
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -557,8 +608,16 @@ pub fn run() {
             demo: Mutex::new(demo),
             hint: Mutex::new(String::new()),
         })
+        .setup(move |app| {
+            if devtools {
+                if let Some(w) = app.get_webview_window("main") {
+                    w.open_devtools();
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_open, start_console, call, reconnect, set_password,
+            launch_info, setup_probe, setup_check, setup_save, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check
         ])

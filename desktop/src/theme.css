@@ -172,4 +172,6 @@ pre.json .k { color: var(--cyan); } pre.json .s { color: var(--green); } pre.jso
 .beat { animation: beat 3s steps(1) infinite; }
 @keyframes beat { 0% { color: #b4f5d0; text-shadow: 0 0 6px #5fb98a; } 10% { color: inherit; text-shadow: none; } }
 @media (prefers-reduced-motion: reduce) { .spin, .beat, .pane, .toast, .dialog, .card.pulse { animation: none; } }
+.fatal { position: fixed; inset: 0; z-index: 100; background: var(--ink); color: var(--white); padding: 24px; overflow: auto; user-select: text; }
+.fatal pre { white-space: pre-wrap; color: var(--grey); }
 .lbl { display: block; color: var(--cyan); margin: 10px 0 2px; }

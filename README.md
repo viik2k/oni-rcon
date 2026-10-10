@@ -8,14 +8,14 @@ allowances and a raw command console, wrapped in Office of Naval Intelligence, S
 
 ![Assets tab: players table and personnel dossier](docs/assets.png)
 
-**[Download for Windows](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-windows-x64.exe)** · [Linux](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-linux-x64) ·
+**[Download the desktop app](https://github.com/viik2k/oni-rcon/releases/latest)** for Windows, macOS or Linux · the terminal console for [Windows](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-windows-x64.exe) · [Linux](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-linux-x64) ·
 or `uv tool install git+https://github.com/viik2k/oni-rcon`. The first time it opens a setup screen: type your server's
 address and RCON password, it tests them, and you're in. Or choose **Try the demo** to look around three simulated
 servers first.
 
 **Desktop app.** [`desktop/`](desktop/README.md) is the same console rebuilt as a native window (Rust and React, on
 Tauri): the same config, keys and look, with the emblem, the archive and the Superintendent drawn at four times the
-resolution, and lighter on a big fleet. Build it from there.
+resolution, and lighter on a big fleet. Installers are on the [releases page](https://github.com/viik2k/oni-rcon/releases/latest).
 
 ## What it does
 
@@ -89,14 +89,14 @@ Also:
 
 You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7).
 
-**Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-windows-x64.exe) and double-click it. The build
+**Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-windows-x64.exe) and double-click it. The build
 isn't code-signed, so SmartScreen may stop it the first time: choose **More info**, then **Run anyway**. The setup screen
 takes it from there.
 
 **Linux:**
 
 ```
-curl -Lo oni-rcon https://github.com/viik2k/oni-rcon/releases/latest/download/oni-rcon-linux-x64
+curl -Lo oni-rcon https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-linux-x64
 chmod +x oni-rcon
 ./oni-rcon --demo
 ```
