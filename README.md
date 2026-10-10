@@ -13,6 +13,10 @@ or `uv tool install git+https://github.com/viik2k/oni-rcon`. The first time it o
 address and RCON password, it tests them, and you're in. Or choose **Try the demo** to look around three simulated
 servers first.
 
+**Desktop app.** [`desktop/`](desktop/README.md) is the same console rebuilt as a native window (Rust and React, on
+Tauri): the same config, keys and look, with the emblem, the archive and the Superintendent drawn at four times the
+resolution, and lighter on a big fleet. Build it from there.
+
 ## What it does
 
 | Tab | |
