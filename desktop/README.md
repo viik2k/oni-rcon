@@ -33,7 +33,11 @@ seven tabs, the dialogs, the field manual, the Halo ASCII Archive boot and the S
   (`ONI_RCON_NO_UPDATE=1` turns that off). Signed self-updates need a signing key set up first.
 - **Reduced motion follows the OS setting** (prefers-reduced-motion) instead of `TEXTUAL_ANIMATIONS`.
 
-Everything else is the same: the setup screen, `--demo`, the command line (`oni-rcon 11774`, `--ssh`, `-c`, `--by`,
+Only here, not in the terminal console: the setup screen can start a server on this computer (**HOST ONE HERE**) or
+find the ones on a game box (**FIND SERVERS ON IT**), showing each step as it happens. See
+[hosting](../docs/hosting.md).
+
+Everything else is the same: the setup screen, `--demo`, the command line (`oni-rcon 49176`, `--ssh`, `-c`, `--by`,
 `--setup`, `--intro full|quick|off`, `--no-intro`), the config file and where it's found, `forge-state.json`,
 `rounds.jsonl` and `prefs.json`, the keys, and every safety rule (a refused password is never retried, ABORT is the
 default, addresses are redacted until `x`). The [main README](../README.md) documents all of it.

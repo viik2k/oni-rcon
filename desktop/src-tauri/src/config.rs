@@ -308,9 +308,19 @@ pub fn toml_str(s: &str) -> String {
     out
 }
 
-/// Save the Forge API key in the config file: only ever when the operator ticks for it. It goes in at the top, after
-/// the opening comments, or replaces one saved there before.
+/// Save the Forge API key in the config file: only ever when the operator ticks for it.
 pub fn remember_forge_key(path: &Path, key: &str) -> Result<(), String> {
+    if set_top_level(path, "forge_api_key", &toml_str(key), false, true, Some(key)) {
+        Ok(())
+    } else {
+        Err("the key couldn't be saved in that config file".into())
+    }
+}
+
+/// Set a top-level key (`value` is TOML) at the top, after the opening comments, where a top-level key is always
+/// valid TOML, or in place of a one-line one there. `keep`: leave one that's set. False, with the file as it was, if
+/// it wouldn't read back with the value (`check`, if given).
+pub fn set_top_level(path: &Path, key: &str, value: &str, keep: bool, private: bool, check: Option<&str>) -> bool {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
     if let Some(l) = lines.last_mut() {
@@ -318,28 +328,25 @@ pub fn remember_forge_key(path: &Path, key: &str) -> Result<(), String> {
             l.push('\n');
         }
     }
-    let line = format!("forge_api_key = {}\n", toml_str(key));
+    let Ok(before) = lines.concat().parse::<toml::Table>() else { return false };
+    let had = before.contains_key(key);
+    if had && keep {
+        return true;
+    }
+    let line = format!("{key} = {value}\n");
     let tables = lines.iter().position(|x| x.starts_with('[')).unwrap_or(lines.len());
-    let re = regex::Regex::new(r"^forge_api_key\s*=").unwrap();
-    if let Some(i) = lines[..tables].iter().position(|x| re.is_match(x)) {
-        lines[i] = line;
-    } else {
-        let at = lines
-            .iter()
-            .position(|x| !x.trim().is_empty() && !x.trim_start().starts_with('#'))
-            .unwrap_or(lines.len());
-        lines.insert(at, line);
+    let re = regex::Regex::new(&format!(r"^{}\s*=", regex::escape(key))).unwrap();
+    match lines[..tables].iter().position(|x| re.is_match(x)) {
+        Some(i) if had && !lines[i].contains("'''") && !lines[i].contains("\"\"\"") => lines[i] = line,
+        _ if had => return false, // spread over lines, or not where it's looked for: the operator's to change
+        _ => {
+            let at = lines.iter().position(|x| !x.trim().is_empty() && !x.trim_start().starts_with('#')).unwrap_or(lines.len());
+            lines.insert(at, line);
+        }
     }
     let out: String = lines.concat();
-    let ok = out
-        .parse::<toml::Table>()
-        .ok()
-        .and_then(|t| t.get("forge_api_key").and_then(Value::as_str).map(|v| v == key))
-        .unwrap_or(false);
-    if !ok {
-        return Err("the key couldn't be saved in that config file".into());
-    }
-    write_atomic(path, &out, true).map_err(|e| e.to_string())
+    let ok = out.parse::<toml::Table>().ok().and_then(|t| t.get(key).cloned()).is_some_and(|v| check.is_none_or(|c| v.as_str() == Some(c)));
+    ok && write_atomic(path, &out, private).is_ok() // never leave the operator a config that won't load
 }
 
 /// Append [[server]] blocks, so the comments and settings already in the file stay as they were.
@@ -366,8 +373,14 @@ pub fn add_servers(path: &Path, servers: &[Server], by: &str, remember: bool) ->
             text += &format!("host = {}\nport = {}\n", toml_str(&s.host), s.port);
         }
         text += &format!("ssh = {}\n", toml_str(&s.ssh)); // always set, so a [defaults] tunnel doesn't apply
-        if remember && !s.password.is_empty() {
-            text += &format!("password = {}\n", toml_str(&s.password));
+        match &s.password_command {
+            Cmd::Line(l) => text += &format!("password_command = {}\n", toml_str(l)), // read where the server is, each start
+            Cmd::Argv(a) => text += &format!("password_command = [{}]\n", a.iter().map(|x| toml_str(x)).collect::<Vec<_>>().join(", ")),
+            Cmd::None if remember && !s.password.is_empty() => text += &format!("password = {}\n", toml_str(&s.password)),
+            Cmd::None => {}
+        }
+        if !s.content_dir.is_empty() {
+            text += &format!("content_dir = {}\n", toml_str(&s.content_dir));
         }
     }
     if !text.ends_with('\n') {
