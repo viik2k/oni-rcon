@@ -16,7 +16,7 @@ servers first.
 **No server yet?** In the [desktop app](desktop/README.md), **HOST ONE HERE** on the setup screen downloads Project
 Reclaimer's dedicated server, sets it up from your Steam copy of MCC, turns its remote console on and connects.
 **Servers on a game box already?** **FIND SERVERS ON IT** finds them over SSH and adds them.
-[Hosting and connecting](docs/hosting.md).
+[Hosting and connecting](docs/hosting.md) · [watch the hosting demo](docs/hosting-demo.mp4).
 
 **Desktop app.** [`desktop/`](desktop/README.md) is the same console rebuilt as a native window (Rust and React, on
 Tauri): the same config, keys and look, with the emblem, the archive and the Superintendent drawn at four times the
