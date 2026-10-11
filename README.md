@@ -13,6 +13,11 @@ or `uv tool install git+https://github.com/viik2k/oni-rcon`. The first time it o
 address and RCON password, it tests them, and you're in. Or choose **Try the demo** to look around three simulated
 servers first.
 
+**No server yet?** In the [desktop app](desktop/README.md), **HOST ONE HERE** on the setup screen downloads Project
+Reclaimer's dedicated server, sets it up from your Steam copy of MCC, turns its remote console on and connects.
+**Servers on a game box already?** **FIND SERVERS ON IT** finds them over SSH and adds them.
+[Hosting and connecting](docs/hosting.md).
+
 **Desktop app.** [`desktop/`](desktop/README.md) is the same console rebuilt as a native window (Rust and React, on
 Tauri): the same config, keys and look, with the emblem, the archive and the Superintendent drawn at four times the
 resolution, and lighter on a big fleet. Installers are on the [releases page](https://github.com/viik2k/oni-rcon/releases/latest).
@@ -87,7 +92,8 @@ Also:
 
 ## Install
 
-You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7).
+You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7), or let the desktop app
+[host one](#host-a-server) for you.
 
 **Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-windows-x64.exe) and double-click it. The build
 isn't code-signed, so SmartScreen may stop it the first time: choose **More info**, then **Run anyway**. The setup screen
@@ -116,7 +122,26 @@ the check off.
 Use a terminal with true colour and a font that has box-drawing glyphs, such as Windows Terminal, iTerm2, kitty or
 WezTerm. At least 140×40 looks best.
 
+## Host a server
+
+This is in the [desktop app](desktop/README.md), on its setup screen.
+
+**HOST ONE HERE**, on Windows with MCC installed from Steam, downloads the newest Project Reclaimer dedicated server
+(checked against its published SHA-256), makes a server folder from your game (`reclaimer` on the game's drive), turns
+the remote console on with a new random password, starts the servers in a window of their own and adds them. On Linux
+it does the same with the official Docker image in `~/reclaimer`.
+
+**FIND SERVERS ON IT**, under *Advanced: reach it through SSH*, looks on the game box you give it for Reclaimer
+containers and server folders, tests each remote console and adds the ones that answer. Their password stays on the
+box: the config reads it there at each start. With containers it sets up [player ping](#player-ping) and the
+[health watch](#health-watch) too.
+
+[docs/hosting.md](docs/hosting.md) has every step, the firewall rules, copying the game files to a Linux box, and what
+it can't find yet. The servers it adds are in the shared config file, so the terminal console connects to them too.
+
 ## Turn on RCON on the server
+
+You can skip this if HOST ONE HERE or FIND SERVERS ON IT did it for you.
 
 In `dedicated.toml`:
 
@@ -141,9 +166,9 @@ and saves the password only if you leave **Remember the password** ticked.
 From the command line:
 
 ```
-oni-rcon 11774                                # a server on this machine
-oni-rcon 11774 11775 11776                    # several at once
-oni-rcon --ssh admin@game-box 11774 11775     # through an SSH tunnel to the game box
+oni-rcon 49176                                # a server on this machine
+oni-rcon 49176 49177 49178                    # several at once
+oni-rcon --ssh admin@game-box 49176 49177     # through an SSH tunnel to the game box
 oni-rcon wss://rcon.example.org/slayer        # behind a TLS reverse proxy
 ```
 
@@ -179,9 +204,9 @@ password_command = ["ssh", "-o", "BatchMode=yes", "admin@game-box",
                     "sed -n 's/^RECLAIMER_DEDICATED_RCON_PASSWORD=//p' ~/reclaimer/.env"]
 
 [[server]]
-port = 11774
+port = 49176
 [[server]]
-port = 11775
+port = 49177
 ```
 
 ### Player ping

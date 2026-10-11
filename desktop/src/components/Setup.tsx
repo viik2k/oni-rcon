@@ -1,5 +1,6 @@
 // The setup screen: add servers in a form instead of a config file, each one tested before it's saved.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
@@ -11,7 +12,7 @@ const SPIN = "◐◓◑◒";
 
 export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) => void }) {
   const s = info.setup;
-  const [f, setF] = useState<Spec>({ address: "127.0.0.1", port: "11774", password: "", name: "", ssh: "" });
+  const [f, setF] = useState<Spec>({ address: "127.0.0.1", port: "49176", password: "", name: "", ssh: "" });
   const [by, setBy] = useState(s.by);
   const [remember, setRemember] = useState(true);
   const [status, setStatus] = useState<[boolean | null, string]>([info.error ? false : null, info.error ?? ""]);
@@ -20,14 +21,21 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
   const [failed, setFailed] = useState(false);
   const [frame, setFrame] = useState(0);
   const [showSsh, setShowSsh] = useState(false);
+  const [found, setFound] = useState<Dict[]>([]); // set up here or found on a game box: in the config already
+  const [busy, setBusy] = useState(false);
   const pw = useRef<HTMLInputElement>(null);
   const [ref, { h }] = useSize<HTMLDivElement>();
   useEffect(() => pw.current?.focus(), []);
   useEffect(() => {
-    if (!testing) return;
+    if (!busy) return;
+    const off = listen<string>("setup-line", (e) => setStatus([null, e.payload]));
+    return () => void off.then((f) => f());
+  }, [busy]);
+  useEffect(() => {
+    if (!testing && !busy) return;
     const t = setInterval(() => setFrame((n) => n + 1), 100);
     return () => clearInterval(t);
-  }, [testing]);
+  }, [testing, busy]);
   const set = (k: keyof Spec) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
   const home = s.path.replace(/^\/home\/[^/]+|^\/root|^C:\\Users\\[^\\]+/, "~");
 
@@ -68,6 +76,24 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
       setFailed(true);
     }
   };
+  // HOST ONE HERE, or FIND SERVERS ON IT: the backend saves what it finds, and says how it's going as it goes
+  const hosting = async (what: "setup_host" | "setup_find") => {
+    if (what === "setup_find" && !f.ssh.trim()) {
+      setStatus([false, "Enter the game box, as you'd give it to ssh: user@game-box."]);
+      return;
+    }
+    setBusy(true);
+    setStatus([null, what === "setup_host" ? "Setting up a server on this computer…" : `Looking on ${f.ssh.trim()}…`]);
+    try {
+      const r: Dict = await invoke(what, { dest: f.ssh, by, remember });
+      setFound([...found, ...r.found.filter((x: Dict) => !found.some((y) => y.where === x.where))]);
+      const done = what === "setup_host" ? `Your server${r.found.length > 1 ? "s are" : " is"} running and added.` : `Added ${r.found.length} server${r.found.length === 1 ? "" : "s"} that answered.`;
+      setStatus([r.notes.length ? null : true, `${done} ${r.notes.join(" ")} Press START.`.replace("  ", " ")]);
+    } catch (e) {
+      setStatus([false, String(e)]);
+    }
+    setBusy(false);
+  };
   const start = async () => {
     try {
       await invoke("setup_save", { specs: added, by, remember });
@@ -83,7 +109,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
       {size >= 96 ? <Pixel pic={emblem(size / 2)} width={size} /> : null}
       <div style={{ textAlign: "center" }}>
         <div className="pre" style={{ color: AMBER }}>O N I   R C O N</div>
-        <div style={{ color: DIM }}>Let's connect to your Halo 3 server. You need its address and RCON password (dedicated.toml, under [rcon]).</div>
+        <div style={{ color: DIM }}>Let's connect to your Halo 3 server: its address and RCON password (dedicated.toml, under [rcon]). No server yet? HOST ONE HERE starts one from your copy of the game.</div>
       </div>
       <div className="panel form" style={{ padding: "16px 22px" }}>
         <div className="ptitle">ADD A SERVER</div>
@@ -103,6 +129,10 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
             {showSsh ? (
               <div style={{ paddingLeft: 18, marginTop: 6 }}>
                 <input className="input" value={f.ssh} onChange={set("ssh")} placeholder="user@game-box   (leave empty to connect directly)" onKeyDown={(e) => e.key === "Enter" && test()} />
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+                  <button className="btn" disabled={busy || testing} onClick={() => hosting("setup_find")}>FIND SERVERS ON IT</button>
+                  <span className="hint">finds its Reclaimer containers and server folders, and tests each</span>
+                </div>
                 <div className="hint">Best when the server is on another machine: RCON isn't encrypted, so keep it on 127.0.0.1 there and tunnel in. Needs an SSH key, not a password.</div>
               </div>
             ) : null}
@@ -112,20 +142,22 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
             <span className="hint">{remember ? `saved in ${home}` : "you'll be asked for it each start"}</span>
           </div>
           <div style={{ marginTop: 10, color: statusColor, minHeight: 20 }}>
-            {testing ? `${SPIN[frame % 4]} ` : status[0] === true ? "✓ " : status[0] === false && status[1] ? "✗ " : ""}{status[1]}
+            {testing || busy ? `${SPIN[frame % 4]} ` : status[0] === true ? "✓ " : status[0] === false && status[1] ? "✗ " : ""}{status[1]}
           </div>
-          {s.existing.length || added.length ? (
+          {s.existing.length || added.length || found.length ? (
             <div><span style={{ color: CYAN }}>YOUR SERVERS   </span>
               {s.existing.map((x: Dict) => <span key={x.where}><span style={{ color: DIM }}>◉ </span><span style={{ color: WHITE }}>{x.name || x.where}   </span></span>)}
+              {found.map((x) => <span key={x.where}><span style={{ color: GREEN }}>◉ </span><span style={{ color: WHITE }}>{x.name || x.where}   </span></span>)}
               {added.map((x, i) => <span key={i}><span style={{ color: GREEN }}>◉ </span><span style={{ color: WHITE }}>{x.name || `${x.address}:${x.port}`}   </span></span>)}
             </div>
           ) : null}
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
             <button className="btn" onClick={() => onDone(true)}>TRY THE DEMO</button>
+            <button className="btn" disabled={busy || testing} onClick={() => hosting("setup_host")} title="Downloads Project Reclaimer's dedicated server (checked against its SHA-256), makes a server folder from your copy of the game, and starts it. Linux: with Docker.">HOST ONE HERE</button>
             <span style={{ flex: 1 }} />
             {failed ? <button className="btn" onClick={async () => { if (await check()) add("Added without a test. It'll keep trying to connect once you start."); }}>ADD ANYWAY</button> : null}
-            <button className="btn primary" disabled={testing} onClick={test}>TEST & ADD</button>
-            <button className="btn success" disabled={!(s.existing.length || added.length)} onClick={start}>START  ▸</button>
+            <button className="btn primary" disabled={testing || busy} onClick={test}>TEST & ADD</button>
+            <button className="btn success" disabled={busy || !(s.existing.length || added.length || found.length)} onClick={start}>START  ▸</button>
           </div>
         </div>
       </div>

@@ -6,6 +6,7 @@ mod fakeforge;
 mod forge;
 mod fstate;
 mod health;
+mod host;
 mod hub;
 mod install;
 mod rcon;
@@ -20,7 +21,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use util::Secret;
 
 const DEMO_HINT: &str = "Three pretend servers to look around, and a pretend ReclaimerForge on F6. Click a player, try the buttons, and press ? for a guide. When you're ready, + ADD SERVER (left) connects your own.";
@@ -168,13 +169,16 @@ fn spec_server(s: &Spec) -> Result<Server, String> {
     Ok(srv)
 }
 
-/// Sign in once and hang up: (worked, what to tell the operator).
 #[tauri::command]
 async fn setup_probe(spec: Spec) -> Value {
-    let s = match spec_server(&spec) {
-        Ok(s) => s,
-        Err(e) => return json!({"ok": false, "text": e, "state": "invalid"}),
-    };
+    match spec_server(&spec) {
+        Ok(s) => probe(s).await,
+        Err(e) => json!({"ok": false, "text": e, "state": "invalid"}),
+    }
+}
+
+/// Sign in once and hang up: (worked, what to tell the operator).
+async fn probe(s: Server) -> Value {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut tasks = vec![];
     let (url, ready) = if !s.ssh.is_empty() && s.url.is_empty() {
@@ -250,6 +254,38 @@ fn setup_save(specs: Vec<Spec>, by: String, remember: bool, app: State<'_, App>)
     *app.hint.lock() = NEW_HINT.into();
     *app.demo.lock() = false;
     Ok(())
+}
+
+/// Servers set up here or found on a game box go straight into the config; each line of progress is a setup-line event.
+fn setup_found(found: Result<host::Hosted, String>, by: &str, remember: bool, app: &State<'_, App>) -> Result<Value, String> {
+    let (servers, notes, templates) = found?;
+    let path = config_path(&app.args).unwrap_or_else(config::user_config);
+    let added = host::save_found(&path, servers.clone(), &templates, by.trim(), remember)?;
+    let mut typed = app.typed.lock();
+    for s in &servers {
+        typed.insert(s.where_(), s.password.clone()); // a password not remembered is good for this session
+    }
+    Ok(json!({"found": servers.iter().map(|s| json!({"where": s.where_(), "name": s.name})).collect::<Vec<_>>(), "added": added.len(), "notes": notes}))
+}
+
+/// HOST ONE HERE: Project Reclaimer's dedicated server set up from the game in Steam (Windows) or Docker (Linux), started.
+#[tauri::command]
+async fn setup_host(by: String, remember: bool, handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
+    let say = move |l: &str| {
+        let _ = handle.emit("setup-line", l);
+    };
+    let found = host::host_here(&say).await.map(|s| (s, vec![], vec![]));
+    setup_found(found, &by, remember, &app)
+}
+
+/// FIND SERVERS ON IT: the Reclaimer containers and server folders on a game box over SSH, each tested.
+#[tauri::command]
+async fn setup_find(dest: String, by: String, handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
+    let say = move |l: &str| {
+        let _ = handle.emit("setup-line", l);
+    };
+    let found = host::connect_box(dest.trim(), &say).await;
+    setup_found(found, &by, true, &app)
 }
 
 #[tauri::command]
@@ -617,7 +653,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_open, start_console, log_error, call, reconnect, set_password,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check
         ])
