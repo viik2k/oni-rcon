@@ -36,7 +36,8 @@ seven tabs, the dialogs, the field manual, the Halo ASCII Archive boot and the S
   `src-tauri/tauri.conf.json`, so a lost key means shipping one release by hand with a new one.
 - **Reduced motion follows the OS setting** (prefers-reduced-motion) instead of `TEXTUAL_ANIMATIONS`.
 
-Only here, not in the terminal console: the setup screen can start a server on this computer (**HOST ONE HERE**) or
+Only here, not in the terminal console: the setup screen can start a server on this computer (**HOST ONE HERE**: name it, set a join password and a player limit,
+choose listed or hidden, then **CREATE & START**) or
 find the ones on a game box (**FIND SERVERS ON IT**), showing each step as it happens. See
 [hosting](../docs/hosting.md).
 

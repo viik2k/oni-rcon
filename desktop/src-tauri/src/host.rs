@@ -6,6 +6,7 @@ use crate::rcon::SSH_OPTS;
 use crate::util::{command, which, write_atomic};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -17,7 +18,21 @@ const GAME: &str = "Halo The Master Chief Collection";
 // the shell that runs on the game box
 const DISCOVER: &str = include_str!("discover.sh");
 const HEALTH: &str = include_str!("docker-health.sh");
-pub const FIREWALL: &str = "Players on other PCs need the game ports open. In PowerShell as administrator: New-NetFirewallRule -DisplayName \"Reclaimer games\" -Direction Inbound -Protocol UDP -LocalPort 49176-49177 -Action Allow; New-NetFirewallRule -DisplayName \"Reclaimer browser\" -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow";
+const NO_GAME: &str = "Halo: The Master Chief Collection wasn't found in your Steam libraries. Install it (with Halo 3) from Steam, then try again.";
+const NO_SYSTEM: &str = "Project Reclaimer servers run on Windows, or on Linux with Docker; not on this system";
+const NO_DOCKER: &str = "Docker isn't installed. On Ubuntu: sudo apt install docker.io docker-compose-v2, then add yourself to the docker group (sudo usermod -aG docker $USER) and log in again";
+
+/// What to tell the operator about letting players in: the ports the servers use, and the commands for them.
+fn open_ports_note(ports: &[u16], master: u16, upnp: bool) -> String {
+    let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(",");
+    let how = if cfg!(windows) {
+        format!("In PowerShell as administrator: New-NetFirewallRule -DisplayName \"Reclaimer games\" -Direction Inbound -Protocol UDP -LocalPort {list} -Action Allow; New-NetFirewallRule -DisplayName \"Reclaimer browser\" -Direction Inbound -Protocol TCP -LocalPort {master} -Action Allow")
+    } else {
+        format!("sudo ufw allow {}/udp && sudo ufw allow {master}/tcp", list.replace(',', "/udp && sudo ufw allow "))
+    };
+    let router = if upnp { "UPnP is on, so the router is asked to forward them; if friends still can't join, forward them yourself." } else { "Friends outside your home also need them forwarded on your router." };
+    format!("Players on other machines need UDP {list} and TCP {master} open. {how}. {router}")
+}
 
 pub type Say<'a> = &'a (dyn Fn(&str) + Send + Sync);
 /// (the servers, what to tell the operator about the rest, top-level config keys to add: ping_log and health_cmd)
@@ -109,11 +124,13 @@ pub struct Found {
     pub port: u16, // RCON: rcon_port, else the game port
     pub game_port: u16,
     pub password: String, // its own rcon_password, if it has one
+    pub hidden: bool,     // not listed in the server browser
 }
 
 /// The enabled [[server]]s of a dedicated.toml.
 pub fn servers_of(text: &str) -> Vec<Found> {
     let Ok(t) = text.parse::<toml::Table>() else { return vec![] };
+    let hidden = t.get("defaults").and_then(|d| d.get("hidden")).and_then(toml::Value::as_bool).unwrap_or(false);
     let port = |v: Option<&toml::Value>| v.and_then(toml::Value::as_integer).filter(|p| (1..65536).contains(p)).map(|p| p as u16);
     let s = |v: Option<&toml::Value>| v.and_then(toml::Value::as_str).unwrap_or_default().to_string();
     t.get("server")
@@ -123,9 +140,85 @@ pub fn servers_of(text: &str) -> Vec<Found> {
         .filter(|s| s.get("enabled").and_then(toml::Value::as_bool).unwrap_or(true))
         .filter_map(|x| {
             let game = port(x.get("port"))?;
-            Some(Found { name: s(x.get("name")), port: port(x.get("rcon_port")).unwrap_or(game), game_port: game, password: s(x.get("rcon_password")) })
+            Some(Found { name: s(x.get("name")), port: port(x.get("rcon_port")).unwrap_or(game), game_port: game, password: s(x.get("rcon_password")),
+                hidden: x.get("hidden").and_then(toml::Value::as_bool).unwrap_or(hidden) })
         })
         .collect()
+}
+
+/// What the operator chose on the setup screen for a server this app is about to create. Applied to a fresh
+/// dedicated.toml only: a server folder that's already there is started as it is.
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct Settings {
+    pub name: String,
+    pub host: String,     // "hosted by", shown under the name in the server browser
+    pub password: String, // to join; empty lets anyone in
+    pub max_players: u32, // 0 keeps the default
+    pub hidden: bool,     // not listed: players join by address
+    pub internet: bool,   // UPnP: ask the router to forward the ports
+    pub auto_update: bool,
+}
+
+impl Settings {
+    /// Checked before anything is downloaded, so a mistake costs nothing.
+    pub fn check(&self) -> Result<(), String> {
+        let plain = |s: &str| !s.chars().any(char::is_control);
+        if self.name.trim().chars().count() > 48 {
+            return Err("A server name can be at most 48 characters.".into());
+        }
+        if self.max_players > 63 {
+            return Err("A server holds at most 63 players.".into());
+        }
+        if ![&self.name, &self.host, &self.password].into_iter().all(|s| plain(s)) {
+            return Err("Names and passwords can't contain control characters.".into());
+        }
+        Ok(())
+    }
+}
+
+/// dedicated.toml with the settings in it and the comments left alone. `dedicated init` writes two servers; a custom
+/// one is a single server, so the first enabled [[server]] is kept and any other turned off (not deleted).
+pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
+    use toml_edit::{value, DocumentMut, Item};
+    s.check()?;
+    let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    if s.internet {
+        doc["upnp"] = value(true);
+    }
+    if s.auto_update {
+        doc["auto_update"] = value(true);
+    }
+    if !s.host.trim().is_empty() {
+        doc["host_name"] = value(s.host.trim());
+    }
+    let list = doc.get_mut("server").and_then(Item::as_array_of_tables_mut).ok_or("dedicated.toml has no [[server]]")?;
+    let mut kept = false;
+    for t in list.iter_mut() {
+        if t.get("enabled").and_then(Item::as_bool) == Some(false) {
+            continue;
+        }
+        if kept {
+            t["enabled"] = value(false);
+            continue;
+        }
+        kept = true;
+        if !s.name.trim().is_empty() {
+            t["name"] = value(s.name.trim());
+        }
+        if !s.password.is_empty() {
+            t["password"] = value(&s.password);
+        }
+        if s.max_players > 0 {
+            t["max_players"] = value(i64::from(s.max_players));
+        }
+        if s.hidden {
+            t["hidden"] = value(true);
+        }
+    }
+    if !kept {
+        return Err("dedicated.toml has no enabled [[server]]".into());
+    }
+    Ok(doc.to_string())
 }
 
 fn new_password() -> String {
@@ -237,18 +330,70 @@ async fn wait_for(found: &[Found], say: Say<'_>, secs: u64, mut alive: impl FnMu
 }
 
 // --- hosting -------------------------------------------------------------------------------------------------------
-/// Set up and start dedicated servers on this computer, in the default folder: the servers, with their password.
-pub async fn host_here(say: Say<'_>) -> Result<Vec<Server>, String> {
-    let game = find_game();
-    if cfg!(windows) {
-        // a reclaimer folder on the game's own drive, so init hard-links the maps instead of copying gigabytes
-        let drive = game.as_ref().and_then(|g| g.ancestors().last().map(Path::to_path_buf)).unwrap_or_else(|| "C:\\".into());
-        host_windows(&drive.join("reclaimer"), game.as_deref(), say).await
-    } else if cfg!(target_os = "linux") {
-        host_docker(&dirs::home_dir().unwrap_or_default().join("reclaimer"), game.as_deref(), say).await
-    } else {
-        Err("Project Reclaimer servers run on Windows, or on Linux with Docker; not on this system".into())
+/// Where the server lives: $ONI_RCON_HOST_DIR, else `reclaimer` at the root of the drive MCC is on (so init
+/// hard-links the maps instead of copying gigabytes), or in your home folder on Linux.
+fn host_folder(game: Option<&Path>) -> PathBuf {
+    if let Some(d) = std::env::var_os("ONI_RCON_HOST_DIR") {
+        return d.into();
     }
+    if cfg!(windows) {
+        game.and_then(|g| g.ancestors().last().map(Path::to_path_buf)).unwrap_or_else(|| "C:\\".into()).join("reclaimer")
+    } else {
+        dirs::home_dir().unwrap_or_default().join("reclaimer")
+    }
+}
+
+fn toml_of(folder: &Path) -> PathBuf {
+    folder.join(if cfg!(windows) { "dedicated.toml" } else { "server/dedicated.toml" })
+}
+
+/// What the setup screen shows before anything runs: where the server goes, whether one is there already (it's
+/// started as it is, and its settings are the file's), and what's missing for making a new one.
+pub fn status() -> serde_json::Value {
+    let game = find_game();
+    let folder = host_folder(game.as_deref());
+    let text = std::fs::read_to_string(toml_of(&folder)).ok();
+    let problem = if cfg!(windows) {
+        if text.is_none() && game.is_none() { NO_GAME } else { "" }
+    } else if cfg!(target_os = "linux") {
+        if which("docker").is_none() { NO_DOCKER } else { "" }
+    } else {
+        NO_SYSTEM
+    };
+    let servers: Vec<String> = text.as_deref().map(servers_of).unwrap_or_default().into_iter().map(|f| f.name).collect();
+    serde_json::json!({"folder": folder.display().to_string(), "exists": text.is_some(), "servers": servers, "problem": problem})
+}
+
+/// Set up and start dedicated servers on this computer: the servers, with what to tell the operator.
+pub async fn host_here(settings: Option<&Settings>, say: Say<'_>) -> Result<(Vec<Server>, Vec<String>), String> {
+    if let Some(s) = settings {
+        s.check()?; // before anything is downloaded
+    }
+    let game = find_game();
+    let folder = host_folder(game.as_deref());
+    if cfg!(windows) {
+        host_windows(&folder, game.as_deref(), settings, say).await
+    } else if cfg!(target_os = "linux") {
+        host_docker(&folder, game.as_deref(), settings, say).await
+    } else {
+        Err(NO_SYSTEM.into())
+    }
+}
+
+/// How players get in, once the servers are up: found in the browser, or by address when hidden.
+fn join_note(text: &str, found: &[Found]) -> String {
+    let t = text.parse::<toml::Table>().unwrap_or_default();
+    let upnp = t.get("upnp").and_then(toml::Value::as_bool).unwrap_or(false);
+    let master = t.get("master").and_then(|m| m.get("port")).and_then(toml::Value::as_integer).and_then(|p| u16::try_from(p).ok()).unwrap_or(49175);
+    let ports: Vec<u16> = found.iter().map(|f| f.game_port).collect();
+    let names = found.iter().map(|f| format!("\"{}\"", f.name)).collect::<Vec<_>>().join(", ");
+    let how = if found.iter().any(|f| f.hidden) {
+        let addr = t.get("public_address").and_then(toml::Value::as_str).filter(|a| !a.is_empty()).unwrap_or("your public IP");
+        format!("{names} is hidden: players join by address, {addr}:{}.", ports.first().copied().unwrap_or_default())
+    } else {
+        format!("Players find {names} in Halo 3's server browser.")
+    };
+    format!("{how} {}", open_ports_note(&ports, master, upnp))
 }
 
 fn read(p: &Path) -> Result<String, String> {
@@ -268,26 +413,36 @@ fn found_servers(found: &[Found], pw: &str, content: &Path) -> Vec<Server> {
         .collect()
 }
 
-pub async fn host_windows(folder: &Path, game: Option<&Path>, say: Say<'_>) -> Result<Vec<Server>, String> {
+pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&Settings>, say: Say<'_>) -> Result<(Vec<Server>, Vec<String>), String> {
     let (exe, toml) = (folder.join("project-reclaimer.exe"), folder.join("dedicated.toml"));
     if !toml.is_file() && game.is_none() {
-        return Err(format!("couldn't find {GAME} in your Steam libraries: install it, or make the server folder by hand (docs/hosting.md)"));
+        return Err(format!("{NO_GAME} Or make the server folder by hand (docs/hosting.md)."));
     }
+    let fresh = !toml.is_file(); // settings are for a server made now; one that's there is started as it is
     if !exe.is_file() {
         download_server(&exe, say).await?;
     }
-    if !toml.is_file() {
+    if fresh {
         let game = game.unwrap();
         say(&format!("Making the server folder {} from {}…", folder.display(), game.display()));
         let mut c = command(&exe.display().to_string());
         c.args(["dedicated", "init"]).arg(folder).arg("--from").arg(game);
         stream(c, say, "dedicated init").await?;
     }
-    let text = read(&toml)?;
-    let (new, pw) = ensure_rcon_password(&text, &new_password())?;
-    if new != text {
+    let disk = read(&toml)?;
+    let base = match settings {
+        Some(s) if fresh => apply_settings(&disk, s)?,
+        _ => disk.clone(),
+    };
+    let (new, pw) = ensure_rcon_password(&base, &new_password())?;
+    if new != disk {
         write_atomic(&toml, &new, false).map_err(|e| e.to_string())?;
-        say("Turned the remote console on, with a new password in dedicated.toml under [rcon].");
+        if base != disk {
+            say("Saved your settings in dedicated.toml.");
+        }
+        if new != base {
+            say("Turned the remote console on, with a new password in dedicated.toml under [rcon].");
+        }
     }
     let found = servers_of(&new);
     if found.is_empty() {
@@ -297,7 +452,7 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, say: Say<'_>) -> R
     for f in &found {
         up |= listening(f.port).await;
     }
-    if up && new != text {
+    if up && new != disk {
         return Err("the servers are running from before the password was set: stop them (Ctrl+C in their window) and try again".into());
     }
     if !up {
@@ -316,8 +471,7 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, say: Say<'_>) -> R
         let mut child = c.spawn().map_err(|e| format!("couldn't start the servers: {e}"))?;
         wait_for(&found, say, 180, || matches!(child.try_wait(), Ok(None))).await?;
     }
-    say(FIREWALL);
-    Ok(found_servers(&found, &pw, &folder.join("content")))
+    Ok((found_servers(&found, &pw, &folder.join("content")), vec![join_note(&new, &found)]))
 }
 
 fn read_env(text: &str, key: &str) -> String {
@@ -326,9 +480,11 @@ fn read_env(text: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
-pub async fn host_docker(folder: &Path, game: Option<&Path>, say: Say<'_>) -> Result<Vec<Server>, String> {
-    let docker = which("docker").ok_or("Docker isn't installed. On Ubuntu: sudo apt install docker.io docker-compose-v2, then add yourself to the docker group (sudo usermod -aG docker $USER) and log in again")?;
+pub async fn host_docker(folder: &Path, game: Option<&Path>, settings: Option<&Settings>, say: Say<'_>) -> Result<(Vec<Server>, Vec<String>), String> {
+    let docker = which("docker").ok_or(NO_DOCKER)?;
     let server = folder.join("server");
+    let toml = server.join("dedicated.toml");
+    let custom = settings.filter(|_| !toml.is_file()); // settings are for a server made now
     for sub in ["", "game", "content", "playlists"] {
         // made here, as you: a folder Docker makes belongs to root
         std::fs::create_dir_all(server.join(sub)).map_err(|e| e.to_string())?;
@@ -358,8 +514,10 @@ pub async fn host_docker(folder: &Path, game: Option<&Path>, say: Say<'_>) -> Re
     say("Starting the containers (the first start downloads the image)…");
     let mut c = command(&docker.display().to_string());
     c.args(["compose", "up", "-d"]).current_dir(folder);
+    if custom.is_some() {
+        c.arg("server-1"); // one custom server: the official compose file has a service for each of its two
+    }
     stream(c, say, "docker compose up").await?;
-    let toml = server.join("dedicated.toml");
     let end = Instant::now() + Duration::from_secs(600);
     while !toml.is_file() {
         if Instant::now() > end {
@@ -368,10 +526,21 @@ pub async fn host_docker(folder: &Path, game: Option<&Path>, say: Say<'_>) -> Re
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     tokio::time::sleep(Duration::from_secs(1)).await; // written whole by now
-    let found = servers_of(&read(&toml)?);
+    let mut text = read(&toml)?;
+    if let Some(s) = custom {
+        text = apply_settings(&text, s)?;
+        write_atomic(&toml, &text, false).map_err(|e| format!("couldn't save your settings in {}: {e}", toml.display()))?;
+        say("Saved your settings; restarting the server with them…");
+        let mut c = command(&docker.display().to_string());
+        c.args(["compose", "restart", "server-1"]).current_dir(folder);
+        stream(c, say, "docker compose restart").await?;
+    }
+    let found = servers_of(&text);
+    if found.is_empty() {
+        return Err(format!("{} has no enabled [[server]]", toml.display()));
+    }
     wait_for(&found, say, 300, || true).await?;
-    say("Players on other machines need UDP 49176-49177 and TCP 49175 open: sudo ufw allow 49176:49177/udp && sudo ufw allow 49175/tcp");
-    Ok(found_servers(&found, &pw, &server.join("content")))
+    Ok((found_servers(&found, &pw, &server.join("content")), vec![join_note(&text, &found)]))
 }
 
 // --- finding the servers on a game box -----------------------------------------------------------------------------
@@ -681,5 +850,54 @@ mod tests {
         assert!(got[0].ping_log.contains("case 50177 in") && got[0].health_cmd.contains("--since {since}"));
         assert!(save_found(&p, vec![s], &[("ping_log".into(), "\"mine\"".into())], "", true).unwrap().is_empty());
         assert!(config::load_config(&p).unwrap().1[0].ping_log.contains("reclaimer-server-2-1"));
+    }
+
+    #[test]
+    fn settings_make_one_custom_server() {
+        let s = Settings { name: "Friday \"Slayer\"".into(), host: "Finn".into(), password: "letmein".into(), max_players: 8, hidden: true, internet: true, auto_update: true };
+        let out = apply_settings(TOML, &s).unwrap();
+        assert!(out.contains("# set one to turn on the remote console")); // the file's comments stay
+        let t: toml::Table = out.parse().unwrap();
+        assert_eq!((t["upnp"].as_bool(), t["auto_update"].as_bool(), t["host_name"].as_str()), (Some(true), Some(true), Some("Finn")));
+        assert_eq!(servers_of(&out), [Found { name: "Friday \"Slayer\"".into(), port: 49176, game_port: 49176, password: String::new(), hidden: true }]);
+        assert_eq!((t["server"][0]["password"].as_str(), t["server"][0]["max_players"].as_integer()), (Some("letmein"), Some(8)));
+        assert_eq!(t["server"][1]["enabled"].as_bool(), Some(false)); // the other default server is off, not deleted
+        // nothing chosen: still one server, as dedicated init named it, and nothing else changed
+        let plain = apply_settings(TOML, &Settings::default()).unwrap();
+        let (f, t) = (servers_of(&plain), plain.parse::<toml::Table>().unwrap());
+        assert_eq!((f.len(), f[0].name.as_str(), t.contains_key("upnp"), t.contains_key("host_name")), (1, "Community Rotation", false, false));
+    }
+
+    #[test]
+    fn settings_are_checked() {
+        let bad = |s: Settings| s.check().is_err();
+        assert!(bad(Settings { name: "x".repeat(49), ..Default::default() }));
+        assert!(bad(Settings { max_players: 64, ..Default::default() }));
+        assert!(bad(Settings { password: "a\nb".into(), ..Default::default() }));
+        assert!(Settings { name: "x".repeat(48), max_players: 63, ..Default::default() }.check().is_ok());
+        assert!(apply_settings("game = \"game\"\n", &Settings::default()).is_err());
+        assert!(apply_settings("[[server]]\nport = 1\nenabled = false\n", &Settings::default()).is_err());
+    }
+
+    #[test]
+    fn join_note_says_how_to_get_in() {
+        let hidden = apply_settings(TOML, &Settings { hidden: true, internet: true, ..Default::default() }).unwrap();
+        let n = join_note(&hidden, &servers_of(&hidden));
+        assert!(n.contains("hidden") && n.contains(":49176.") && n.contains("UPnP is on"), "{n}");
+        let n = join_note(TOML, &servers_of(TOML));
+        assert!(n.contains("server browser") && n.contains("UDP 49176,49177 and TCP 49175") && n.contains("forwarded on your router"), "{n}");
+    }
+
+    #[test]
+    fn status_sees_a_server_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ONI_RCON_HOST_DIR", dir.path());
+        assert_eq!(status()["exists"], false);
+        let toml = toml_of(dir.path());
+        std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+        std::fs::write(&toml, TOML).unwrap();
+        let s = status();
+        assert_eq!((&s["exists"], &s["servers"]), (&true.into(), &serde_json::json!(["Community Rotation", "Snipers Only"])));
+        std::env::remove_var("ONI_RCON_HOST_DIR");
     }
 }

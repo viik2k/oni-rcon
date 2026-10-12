@@ -6,7 +6,7 @@ first start, or **+ ADD SERVER** in the console):
 
 | | On the setup screen |
 |---|---|
-| A server on this PC | **HOST ONE HERE** |
+| A server on this PC | **HOST ONE HERE**, then name it and press **CREATE & START** |
 | The servers on a game box | **FIND SERVERS ON IT**, under *Advanced: reach it through SSH* |
 
 Each step shows under the form as it happens. What they find goes into your config file (keeping what's already in it);
@@ -17,7 +17,11 @@ file, so it connects to them too.
 
 ### Windows
 
-You need Halo: The Master Chief Collection installed from Steam. Then **HOST ONE HERE**:
+You need Halo: The Master Chief Collection installed from Steam. Then **HOST ONE HERE**. The form asks what players
+will see: the server's **name**, who it's **hosted by**, a **join password** (empty lets anyone in), **max players**, and
+whether it's **shown in the server browser** (off: players join by its address), **open to the internet** (UPnP asks
+your router to forward the ports) and **kept up to date**. If MCC isn't found, it says so before downloading anything.
+Then **CREATE & START**:
 
 1. It finds MCC in your Steam libraries.
 2. It downloads the newest Project Reclaimer dedicated server from its
@@ -25,36 +29,43 @@ You need Halo: The Master Chief Collection installed from Steam. Then **HOST ONE
    published SHA-256, and saves it as `project-reclaimer.exe`. A download that doesn't match is thrown away.
 3. It makes the server folder with `project-reclaimer dedicated init`: `reclaimer` at the root of the drive MCC is on
    (`D:\reclaimer`), so the maps are hard-linked instead of copied.
-4. It turns the remote console on: a new random password goes into `dedicated.toml` under `[rcon]`, with the address
+4. It saves your choices in `dedicated.toml` (comments kept). A custom server is one server: the first of the two
+   `dedicated init` makes is yours, the second is turned off (`enabled = false`, not deleted).
+   It turns the remote console on: a new random password goes into `dedicated.toml` under `[rcon]`, with the address
    left on `127.0.0.1`. A password already there is kept.
 5. It runs `dedicated check`, then starts the servers in a window of their own. **Ctrl+C in that window stops them.**
    If Windows asks, allow Project Reclaimer through the firewall.
 6. Once each remote console answers, it adds the servers to your config with their password (or without it, if you
    untick **Remember the password**).
 
-Players on other machines need these open in the Windows firewall (run in an admin PowerShell):
+When it's up, it tells you how players get in ("find *Friday Night* in the server browser", or the address to join a
+hidden one) and the firewall commands for your ports, to run in an admin PowerShell:
 
 ```
-New-NetFirewallRule -DisplayName "Reclaimer games" -Direction Inbound -Protocol UDP -LocalPort 49176-49177 -Action Allow
+New-NetFirewallRule -DisplayName "Reclaimer games" -Direction Inbound -Protocol UDP -LocalPort 49176 -Action Allow
 New-NetFirewallRule -DisplayName "Reclaimer browser" -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow
 ```
 
-and the same ports forwarded on your router for players outside your home. The remote console needs nothing opened:
-it stays on this PC.
+The same ports must be forwarded on your router for players outside your home, unless you chose UPnP. The remote
+console needs nothing opened: it stays on this PC.
 
-Next time, HOST ONE HERE with the servers still running just adds them; with them stopped it starts them again. To
-change the maps or the playlists, edit `dedicated.toml` in the server folder (Project Reclaimer's
-[hosting guide](https://projectreclaimer.dev/host) has every setting) and restart the servers.
+A server folder that's already there is started as it is, and your choices aren't applied to it (the form says so):
+edit its `dedicated.toml` to change it. With the servers still running, HOST ONE HERE just adds them; stopped, it
+starts them again. To change the maps or the playlists, edit `dedicated.toml` in the server folder (Project
+Reclaimer's [hosting guide](https://projectreclaimer.dev/host) has every setting) and restart the servers. The
+folder is `reclaimer` on MCC's drive, or wherever `ONI_RCON_HOST_DIR` points.
 
 ### Linux (Docker)
 
 You need Docker with Compose (`sudo apt install docker.io docker-compose-v2` on Ubuntu) and to be in the `docker`
-group (`sudo usermod -aG docker $USER`, then log in again). Then **HOST ONE HERE**.
+group (`sudo usermod -aG docker $USER`, then log in again). Then **HOST ONE HERE**, fill in the same form, and
+**CREATE & START**; without Docker it says so first.
 
 It saves the official [`compose.yaml`](https://projectreclaimer.dev/docker/compose.yaml) in `~/reclaimer`, writes a new
 `RECLAIMER_DEDICATED_RCON_PASSWORD` into `.env` there (owner-only; a password already in it is kept), runs
 `docker compose up -d`, waits for the image's first start to write `server/dedicated.toml`, and adds the servers it
-lists once their remote consoles answer.
+lists once their remote consoles answer. For a custom server it starts only `server-1` (the first server in
+`dedicated.toml`), writes your choices into `dedicated.toml` once it exists, and restarts that container with them.
 
 **The game files.** The image needs Halo 3's files from MCC. If MCC is installed on this machine (Steam on Linux), it
 finds it and sets `GAME_DIR` in `.env`. Otherwise copy them in from the MCC folder of a PC that has the game, keeping
@@ -67,7 +78,7 @@ their folders, into `~/reclaimer/server/game`:
 For example, from a Windows PC: `scp -r "<MCC folder>\halo3" admin@game-box:~/reclaimer/server/game/` (all of it, a
 few GB). Then HOST ONE HERE again.
 
-Open the game ports: `sudo ufw allow 49176:49177/udp && sudo ufw allow 49175/tcp`.
+Open the game ports: it prints the `ufw` commands for yours (`sudo ufw allow 49176/udp && sudo ufw allow 49175/tcp`).
 
 Stop the servers with `docker compose down` in `~/reclaimer`; HOST ONE HERE starts them again.
 

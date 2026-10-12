@@ -270,12 +270,18 @@ fn setup_found(found: Result<host::Hosted, String>, by: &str, remember: bool, ap
 
 /// HOST ONE HERE: Project Reclaimer's dedicated server set up from the game in Steam (Windows) or Docker (Linux), started.
 #[tauri::command]
-async fn setup_host(by: String, remember: bool, handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
+async fn setup_host(by: String, remember: bool, settings: Option<host::Settings>, handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
     let say = move |l: &str| {
         let _ = handle.emit("setup-line", l);
     };
-    let found = host::host_here(&say).await.map(|s| (s, vec![], vec![]));
+    let found = host::host_here(settings.as_ref(), &say).await.map(|(s, notes)| (s, notes, vec![]));
     setup_found(found, &by, remember, &app)
+}
+
+/// Where HOST ONE HERE would put the server, whether one is there, and what's missing: for the setup screen.
+#[tauri::command]
+fn host_status() -> Value {
+    host::status()
 }
 
 /// FIND SERVERS ON IT: the Reclaimer containers and server folders on a game box over SSH, each tested.
@@ -668,7 +674,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
         ])

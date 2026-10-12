@@ -13,8 +13,9 @@ or `uv tool install git+https://github.com/viik2k/oni-rcon`. The first time it o
 address and RCON password, it tests them, and you're in. Or choose **Try the demo** to look around three simulated
 servers first.
 
-**No server yet?** In the [desktop app](desktop/README.md), **HOST ONE HERE** on the setup screen downloads Project
-Reclaimer's dedicated server, sets it up from your Steam copy of MCC, turns its remote console on and connects.
+**No server yet?** In the [desktop app](desktop/README.md), **HOST ONE HERE** on the setup screen asks for a name and a
+join password, downloads Project Reclaimer's dedicated server, sets it up from your Steam copy of MCC, turns its remote
+console on and connects.
 **Servers on a game box already?** **FIND SERVERS ON IT** finds them over SSH and adds them.
 [Hosting and connecting](docs/hosting.md) · [watch the hosting demo](docs/hosting-demo.mp4).
 
@@ -126,7 +127,8 @@ WezTerm. At least 140×40 looks best.
 
 This is in the [desktop app](desktop/README.md), on its setup screen.
 
-**HOST ONE HERE**, on Windows with MCC installed from Steam, downloads the newest Project Reclaimer dedicated server
+**HOST ONE HERE**, on Windows with MCC installed from Steam, asks for the server's name, join password, player limit and
+whether it's listed or open to the internet, then downloads the newest Project Reclaimer dedicated server
 (checked against its published SHA-256), makes a server folder from your game (`reclaimer` on the game's drive), turns
 the remote console on with a new random password, starts the servers in a window of their own and adds them. On Linux
 it does the same with the official Docker image in `~/reclaimer`.
