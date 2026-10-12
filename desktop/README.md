@@ -29,8 +29,11 @@ seven tabs, the dialogs, the field manual, the Halo ASCII Archive boot and the S
   colour pulse is a recolour). It's been run against 80 servers sending about 16 events a second.
 - **The Forge key never reaches the window.** It lives in the backend, goes only to reclaimerforge.net, and anything
   shaped like a key is blanked in whatever the backend sends to the window.
-- **Updates are announced, not installed.** At start it checks GitHub for a newer release and says so with a link
-  (`ONI_RCON_NO_UPDATE=1` turns that off). Signed self-updates need a signing key set up first.
+- **Updates install themselves, once you say yes.** At start it checks GitHub for a newer desktop release and asks;
+  the download is verified against the signing key built into the app, installed, and the console restarts
+  (`ONI_RCON_NO_UPDATE=1` turns that off). The Linux `.deb`/`.rpm` can't update in place, so they get a link instead.
+  Releases are signed by the `TAURI_SIGNING_PRIVATE_KEY` repository secret; the matching public key is in
+  `src-tauri/tauri.conf.json`, so a lost key means shipping one release by hand with a new one.
 - **Reduced motion follows the OS setting** (prefers-reduced-motion) instead of `TEXTUAL_ANIMATIONS`.
 
 Only here, not in the terminal console: the setup screen can start a server on this computer (**HOST ONE HERE**) or

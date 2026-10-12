@@ -193,7 +193,11 @@ export function App() {
       oni.hint = "";
     }
     askPassword();
-    invoke<string>("update_check").then((m) => m && oni.notify(m, "UPDATE", "information", 20));
+    invoke<string>("update_check").then(async (v) => {
+      if (!v || !(await oni.confirm("UPDATE", `ONI RCON ${v} is out. Install it now? The console restarts and reconnects.`, "INSTALL", false))) return;
+      oni.notify("Downloading the update...", "UPDATE", "information", 60);
+      invoke("update_install").catch((e) => oni.notify(String(e), "UPDATE FAILED", "error", 20));
+    });
   }, []);
   const toBoot = useCallback(() => setScreen({ kind: "boot" }), []);
   const onSetup = useCallback(async () => {

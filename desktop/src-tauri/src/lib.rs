@@ -574,20 +574,34 @@ fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
         .filter(|(v, _)| parse(v) > parse(current))
 }
 
-/// A newer desktop release on GitHub, in one line; empty when up to date, offline or turned off
-/// (ONI_RCON_NO_UPDATE=1).
-#[tauri::command]
-async fn update_check() -> String {
+/// The signed update for a newer desktop release, and that release's page for when installing it fails. Each
+/// release carries its own latest.json: the repository's /releases/latest is the terminal console. None when up to
+/// date, offline or turned off (ONI_RCON_NO_UPDATE=1).
+async fn find_update(app: &AppHandle) -> Option<(tauri_plugin_updater::Update, String)> {
+    use tauri_plugin_updater::UpdaterExt;
     if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
-        return String::new();
+        return None;
     }
-    let Ok(c) = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build() else { return String::new() };
-    let Ok(r) = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await else { return String::new() };
-    let Ok(v) = r.json::<Value>().await else { return String::new() };
-    match newer_desktop(&v, env!("CARGO_PKG_VERSION")) {
-        Some((ver, url)) => format!("ONI RCON desktop {ver} is out: download it from {url}"),
-        None => String::new(),
-    }
+    let c = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build().ok()?;
+    let v = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await.ok()?.json::<Value>().await.ok()?;
+    let (ver, page) = newer_desktop(&v, env!("CARGO_PKG_VERSION"))?;
+    let latest = format!("https://github.com/viik2k/oni-rcon/releases/download/desktop-v{ver}/latest.json").parse().ok()?;
+    let update = app.updater_builder().endpoints(vec![latest]).ok()?.build().ok()?.check().await.ok()??;
+    Some((update, page))
+}
+
+/// The version of a newer desktop release; empty when there is none.
+#[tauri::command]
+async fn update_check(app: AppHandle) -> String {
+    find_update(&app).await.map(|(u, _)| u.version).unwrap_or_default()
+}
+
+/// Downloads the update, checks its signature, installs it and restarts the console.
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    let (update, page) = find_update(&app).await.ok_or("no update found")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("{e}. Download it from {page}"))?;
+    app.restart()
 }
 
 #[cfg(test)]
@@ -634,6 +648,7 @@ pub fn run() {
     let demo = args.demo; // until the setup screen saves servers of the operator's own
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App {
             args,
             arg_error,
@@ -655,7 +670,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {
