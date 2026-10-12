@@ -128,11 +128,11 @@ def test_app_against_fakes():
             assert app.query_one("#op-passvote").disabled  # no vote under way
 
             await pilot.click("#pl-tell")  # the player file's buttons open the same dialogs as the keys
-            await pilot.pause()
+            await until(pilot, lambda: isinstance(app.screen, Form))
             assert isinstance(app.screen, Form)
             await pilot.press("escape")
             await pilot.press("question_mark")
-            await pilot.pause()
+            await until(pilot, lambda: isinstance(app.screen, Help))
             assert isinstance(app.screen, Help)
             await pilot.press("escape")
             await pilot.pause()
@@ -308,6 +308,13 @@ async def settle(app, pilot, *keys):
     for _ in range(100):
         await pilot.pause(0.05)
         if all(st.online and all(k in st.data for k in keys) for st in app.stations):
+            return
+
+
+async def until(pilot, ok, tries=100):  # a fixed pause is a guess on a slow runner: wait for the thing itself
+    for _ in range(tries):
+        await pilot.pause(0.05)
+        if ok():
             return
 
 
@@ -537,8 +544,8 @@ def test_a_fleet():
         ports, keep = await serve_fakes(tick=False, specs=fleet(14))
         app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest")
         async with app.run_test(size=(160, 48)) as pilot:
-            await pilot.pause(1.2)  # a line every 0.22 s
-            log = plain(app.screen.query_one("#boot-log"))
+            await until(pilot, lambda: isinstance(app.screen, Boot) and "STATIONS 1-14" in plain(app.screen.query_one("#boot-log")))
+            log = plain(app.screen.query_one("#boot-log"))  # a line every 0.22 s, and the splash goes after about 2
             assert "STATIONS 1-14" in log and "[14]" not in log  # a tally, not a line each
             await pilot.press("escape")
             await settle(app, pilot, "status")
