@@ -26,6 +26,7 @@ static STOPPED: Lazy<Regex> = Lazy::new(|| {
 });
 static MOVED_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)moved tag").unwrap());
 static NOT_PINNED: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)NOT the pinned build").unwrap());
+static CLOCK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d\d:\d\d:\d\d$").unwrap());
 static STAMP: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d(?::?\d\d)?)?)\s+").unwrap()
 });
@@ -133,7 +134,7 @@ pub fn parse_report(text: &str) -> Report {
                     .filter_map(|k| num(f.get(*k)).map(|n| (k.to_string(), n)))
                     .collect();
                 let c = f.get("clock").cloned().unwrap_or_default();
-                rep.clock = (c.len() == 8 && Regex::new(r"^\d\d:\d\d:\d\d$").unwrap().is_match(&c)).then_some(c);
+                rep.clock = (c.len() == 8 && CLOCK.is_match(&c)).then_some(c);
             }
             Some((_, f)) => {
                 let g = |k: &str| f.get(k).cloned().unwrap_or_default();

@@ -5,7 +5,7 @@ description = "An ONI-themed admin console for Project Reclaimer Halo 3 dedicate
 authors = ["Arche Labs"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.82"
 
 [lib]
 name = "oni_rcon_lib"

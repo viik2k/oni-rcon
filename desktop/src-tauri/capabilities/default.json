@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The console window",
   "windows": ["main"],
-  "permissions": ["core:default", "clipboard-manager:allow-write-text"]
+  "permissions": ["core:default", "core:window:allow-close", "clipboard-manager:allow-write-text"]
 }

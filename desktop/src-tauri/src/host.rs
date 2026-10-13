@@ -42,7 +42,14 @@ pub type Hosted = (Vec<Server>, Vec<String>, Vec<(String, String)>);
 fn steam_roots() -> Vec<PathBuf> {
     if cfg!(windows) {
         let mut roots = vec![];
-        if let Ok(out) = std::process::Command::new("reg").args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"]).output() {
+        let mut reg = std::process::Command::new("reg");
+        reg.args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            reg.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: a console flashed up while hosting
+        }
+        if let Ok(out) = reg.output() {
             let text = String::from_utf8_lossy(&out.stdout);
             if let Some(p) = text.lines().find_map(|l| l.split_once("REG_SZ").map(|(_, p)| p.trim().to_string())) {
                 roots.push(PathBuf::from(p));
