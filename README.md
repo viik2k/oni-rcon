@@ -78,6 +78,14 @@ Also:
 - **Find a player.** `Ctrl+F` searches every server's players at once: a name (a typo of four letters or more still finds
   them), `@tag`, `clan:`, `team:`, `id:`, `server:`, `node:` or `port:`, all of which must match the same player.
   Enter opens their server with them selected. (From ibigs/oni-rcon, by RifleJock.)
+- **Superintendent findings.** `F8`, or a click on the Superintendent, lists what it noticed in the last hour, with the
+  evidence behind each: chat asking for an admin or reporting a player (with up to 20 messages either side, two minutes
+  before and after), repeated or back-and-forth kick votes, a kill burst, an unusual kill rate, a cheat flag the server
+  reported and an explicit Perfection medal. They are observations for you to review, never grounds for moderation by
+  themselves: nothing is kicked, banned or muted for you, and kill heuristics stand down in Infection and SWAT-style
+  modes. A finding that needs review turns the CONDITION red, pops up and chimes; CLEAR ALL acknowledges them. The
+  chat is matched by explicit requests ("need an admin", "please kick Red", "Red is cheating"), not by words like "mod"
+  or "cheat" alone. (From ibigs/oni-rcon, by RifleJock.)
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.
@@ -453,6 +461,7 @@ download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` else
 | `1`–`9` | select server |
 | `g` | go to any server: the list puts the busiest first and filters as you type |
 | `Ctrl+F` | find a player on any server |
+| `F8` | the Superintendent's findings (the desktop app) |
 | `Ctrl+B` | broadcast |
 | `Ctrl+R` | refresh now (on F7, read every health report now) |
 | `Ctrl+P` | command palette |

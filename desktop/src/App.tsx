@@ -15,7 +15,8 @@ import { Dialogs } from "./components/Dialogs";
 import { Archive, Boot } from "./components/Boot";
 import { Setup } from "./components/Setup";
 import { useSize } from "./components/ui";
-import type { Dict } from "./lib/util";
+import { targetOf, pick, type Dict } from "./lib/util";
+import type { Opened } from "./components/Findings";
 
 const NAMES: Record<Tab, string> = { assets: "ASSETS", intercepts: "INTERCEPTS", operations: "OPERATIONS", blacklist: "BLACKLIST", console: "CONSOLE", forge: "FORGE", health: "HEALTH" };
 const FOCUS: Record<Tab, string> = { assets: "players", intercepts: "feed", operations: "op-load", blacklist: "bans", console: "cmd", forge: "listings", health: "crashes" };
@@ -38,9 +39,28 @@ async function findPlayer() {
   bump("roster");
 }
 
+/** The Superintendent's findings; open the server of the one picked, with its player selected if they're still there. */
+async function openFindings() {
+  const r: Opened | null = await oni.ask("findings", {});
+  if (!r) return;
+  oni.select(r.index);
+  const { subject } = r;
+  if (subject) {
+    const here: Dict[] = oni.stations[r.index]?.players ?? [];
+    const id = (p: Dict) => String(pick(p, "player_id", "id") ?? "");
+    const named = here.filter((p) => String(pick(p, "name") ?? "") === subject.name);
+    const p = (subject.id && here.find((x) => id(x) === subject.id)) || (named.length === 1 ? named[0] : undefined);
+    if (p) assetsUi.want = targetOf(p);
+    else oni.notify(`${subject.name || "That player"} isn't on this server any more.`, "FINDINGS");
+  }
+  setTab("assets");
+  bump("roster");
+}
+
 function palette(onSetup: () => void) {
   const items: [string, string, () => void][] = [
     ["Go to station", "every station, the busiest first  (g)", goto],
+    ["Superintendent findings", "what it noticed in the last hour, with the evidence  (F8)", openFindings],
     ["Find a player", "on any station, by name, tag, clan, team, ID or address  (Ctrl+F)", findPlayer],
     ...oni.stations.map((s, i) => [`Station ${i + 1}: ${s.label}`, s.where, () => oni.select(i)] as [string, string, () => void]),
     ...OPS.map(([o, label]) => [o === "broadcast" ? "Broadcast to stations" : `Ops: ${label.replace(/\b\w+/g, (w) => w[0] + w.slice(1).toLowerCase())}`,
@@ -68,6 +88,10 @@ function palette(onSetup: () => void) {
 /** Every key the console answers to. Typing in a box keeps its letters; the function keys and Ctrl work anywhere. */
 function useKeys(onSetup: () => void) {
   useEffect(() => {
+    oni.onFindings = openFindings; // the Superintendent's face opens them too
+    return () => { oni.onFindings = null; };
+  }, []);
+  useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (oni.dialogs.length) {
         if (e.key === "Escape") {
@@ -78,6 +102,10 @@ function useKeys(onSetup: () => void) {
       }
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
       const ctrl = e.ctrlKey || e.metaKey;
+      if (e.key === "F8") {
+        e.preventDefault();
+        return void openFindings();
+      }
       const fn = /^F([1-7])$/.exec(e.key);
       if (fn) {
         e.preventDefault();

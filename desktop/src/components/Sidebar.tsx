@@ -113,7 +113,7 @@ export function Super({ size, width }: { size: number; width: number }) {
   const [mood, color, last] = words;
   const alarm = mood === "ALARMED" || mood === "HOSTILE";
   return (
-    <div className={`super ${below ? "below" : ""}`} title={TIPS.super}>
+    <div className={`super ${below ? "below" : ""}`} title={`${TIPS.super} Click, or press F8, for its findings.`} onClick={() => oni.onFindings?.()} style={{ cursor: "pointer" }}>
       <canvas ref={canvas} className="px" style={{ width: size, height: size, flex: "none", borderRadius: "50%", boxShadow: alarm ? `0 0 10px ${blend(RED, INK, 0.6)}` : undefined }} />
       <div className="words">
         <div style={{ color: DIM }}>SUPERINTENDENT</div>

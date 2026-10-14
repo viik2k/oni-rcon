@@ -7,6 +7,7 @@ import { oni, useV, type Dialog } from "../engine";
 import { CREDIT } from "../lib/forge";
 import { everyone, rankedPlayers, type Found } from "../lib/search";
 import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
+import { FindingsView } from "./Findings";
 import { L, Pixel, Table, type Row } from "./ui";
 
 const Keys = ({ hints }: { hints: string[] }) => <div className="keys">{hints.join("   ·   ")}</div>;
@@ -163,7 +164,8 @@ const GUIDE: [string, [string, string][]][] = [
     ["Find a player", "Ctrl+F searches every server's players at once. Type a name (a typo of 4+ letters still finds them), or narrow it: @tag, clan:x, team:red, id:…, server:…, node:…, port:… All the words must match the same player; \"quotes\" keep a phrase together. Enter opens their server with them selected."],
     ["Tabs", "F1 to F7, or click the names along the top."],
     ["Anything", "Ctrl+P opens a searchable list of every action. Rest the mouse on a button to see what it does."],
-    ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels."],
+    ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels. Click it, or press F8, for what it has noticed."],
+    ["Findings", "F8 lists what the Superintendent noticed in the last hour, with the evidence behind each: a repeated vote, a vote fight, a kill burst, an unusual kill rate, a cheat flag, a request for an admin or a report of another player. They are observations to review, never grounds for action by themselves, and nothing is moderated for you. CLEAR ALL acknowledges them. Chat from 2 minutes either side is kept with a request."],
   ]],
   ["F1  ASSETS  ·  the players", [
     ["Pick a player", "Click a row, or move with ↑ ↓. Their file opens on the right, with buttons to tell, kick, ban, mute, move, allow them through a VPN or make them an admin."],
@@ -176,7 +178,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["The feed", "Chat, kills, joins, kicks and bans from every server, newest at the bottom. Scroll up to read back; it holds still until you press End."],
     ["Talk back", "Type in the box at the bottom to chat as [Server]. Start with @all to reach every server: they go out a few at a time, and the command log tallies how it went."],
     ["Medals", "Kills carry their Halo 3 medals as they happen: double kill and up, sprees, killjoys."],
-    ["Alerts", "Chat asking for an admin, or naming a cheat, pops up, plays the Superintendent chime and turns the CONDITION at the top red. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
+    ["Alerts", "A finding that needs review (chat asking for an admin or reporting a player, a repeated vote, a vote fight, a kill burst, a cheat flag) pops up, plays the Superintendent chime and turns the CONDITION at the top red; F8 shows the evidence. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
   ]],
   ["F3  OPERATIONS  ·  running the match", [
     ["Buttons", "Change map or mode, queue what plays next, end the round, shuffle teams, run votes, broadcast, and server settings. Anything that ends a game asks first."],
@@ -245,7 +247,7 @@ function Palette({ d }: { d: Dialog }) {
   return <Pick d={{ ...d, props: { title: "COMMAND PALETTE", options }, resolve: (v: string | null) => { d.resolve(null); if (v !== null) items[Number(v)][2](); } }} />;
 }
 
-const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find };
+const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find, findings: FindingsView };
 
 export function Dialogs() {
   useV((s) => s.dialog);

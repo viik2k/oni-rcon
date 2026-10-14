@@ -8,6 +8,7 @@ import { smooth, tones } from "../art/pixels";
 import { decrypt, noise } from "../art/palette";
 import { advice, level, scaleTop } from "./perf";
 import { filterTerms, nameDistance, rankedPlayers, type Found } from "./search";
+import { Findings, chatRequest, publicRoster } from "./findings";
 
 describe("console lines", () => {
   it("keeps a message whole for say, tell, kick and rename", () => {
@@ -91,7 +92,7 @@ describe("the Superintendent", () => {
     const s = new Superintendent(true, () => t);
     expect(classify({ event: "chat", channel: "all", text: "admin pls" })).toBe("call");
     expect(classify({ event: "chat", channel: "all", text: "gg" })).toBe(null);
-    expect(s.react({ event: "chat", text: "is there a mod on" }, "x")?.mood).toBe("ALARMED");
+    expect(s.react({ event: "chat", text: "is there a mod online" }, "x")?.mood).toBe("ALARMED");
     t += 1;
     expect(s.react({ event: "join" })).toBe(null);
     t += 10;
@@ -166,5 +167,148 @@ describe("player search", () => {
     expect(names("@mn")).toEqual([]);
     expect(names("id:7 clan:oni")).toEqual(["Mantis"]);
     expect(names("nothing:here")).toEqual([]);
+  });
+});
+
+describe("findings", () => {
+  const nobody = () => undefined;
+  const at = () => { const c = { t: 1000 }; return [c, new Findings(() => c.t)] as const; };
+
+  it("keeps real requests and rejects chat about mods, cheat codes and the kick button", () => {
+    const table: [string, string | null][] = [
+      ["need an admin", "admin_help"], ["any mods online?", "admin_help"], ["looking for help", "admin_help"], ["can someone help me?", "admin_help"],
+      ["help please", "admin_help"], ["please kick Red", "moderation_request"], ["Can someone ban Red for team killing", "moderation_request"],
+      ["Red needs to be kicked", "moderation_request"], ["Red is cheating", "player_report"], ["Red is using an aimbot", "player_report"],
+      ["admin? Red is hacking", "player_report"], ["did halo 3 had these tf2 fan mod modes on release", null],
+      ["that should be a no brainer, that's the whole point of this mod", null], ["How do I kick someone?", null], ["called a vote to kick Red", null],
+      ["don't kick Red", null], ["Red is not cheating", null], ["I installed a mod", null], ["this map has cheat codes", null],
+      ["help me capture the flag", null], ["kick button is broken", null],
+    ];
+    for (const [text, kind] of table) expect([text, chatRequest(text)?.kind ?? null]).toEqual([text, kind]);
+  });
+
+  it("counts repeated kick votes and a back-and-forth, and ignores results and chat", () => {
+    const [c, f] = at();
+    const vote = (a: string, b: string, server = "s") => { c.t += 10; return f.ingest(server, { event: "vote", name: a, text: "called a vote to kick " + b }); };
+    expect(vote("A", "B")).toEqual([]);
+    expect(vote("B", "A")).toEqual([]);
+    expect(vote("A", "B")).toEqual([]);
+    expect(vote("B", "A")[0].kind).toBe("vote_fight");
+    expect(vote("C", "B")[0].kind).toBe("repeated_votes");
+    expect(vote("C", "B")).toEqual([]); // cooling down
+    expect(vote("A", "B", "other")).toEqual([]);
+    expect(f.ingest("s", { event: "chat", name: "A", text: "called a vote to kick B" })).toEqual([]);
+    expect(f.ingest("s", { event: "vote", name: "A", text: "vote to kick passed (4 to 0)" })).toEqual([]);
+    c.t += 301;
+    expect(vote("A", "B")).toEqual([]);
+  });
+
+  it("flags a kill burst as a highlight, not proof; stale, repeated, suicide and betrayal kills count for nothing", () => {
+    const [c, f] = at();
+    let last: ReturnType<Findings["ingest"]> = [];
+    for (let i = 0; i < 5; i++) {
+      c.t += 1;
+      const e = { event: "kill", time: c.t, killer: "A", victim: String(i) };
+      last = f.ingest("s", e);
+      expect(f.ingest("s", e)).toEqual([]);
+    }
+    expect(last[0].kind).toBe("kill_burst");
+    expect(last[0].level).toBe("highlight");
+    expect(last[0].evidence).toContain("not evidence");
+    f.reset("s");
+    expect(f.ingest("s", { event: "kill", killer: "A", victim: "B" })).toEqual([]);
+    expect(f.ingest("s", { event: "kill", time: c.t - 31, killer: "A", victim: "C" })).toEqual([]);
+    for (let i = 0; i < 20; i++) {
+      expect(f.ingest("s", { event: "kill", killer: "A", victim: "A" })).toEqual([]);
+      expect(f.ingest("s", { event: "kill", killer: "A", victim: "B", betrayal: true })).toEqual([]);
+    }
+  });
+
+  it("reviews an extreme rate, takes Perfection only from an explicit medal, and forgets after an hour", () => {
+    const [c, f] = at();
+    for (let i = 0; i < 12; i++) {
+      c.t += 0.1;
+      f.ingest("s", { event: "kill", time: c.t, killer: "A", victim: String(i) });
+    }
+    expect(f.recent()[0].kind).toBe("unusual_rate");
+    expect(f.recent()[0].level).toBe("review");
+    expect(f.recent().some((r) => r.kind === "perfection")).toBe(false);
+    const report = f.ingest("s", { event: "medal", name: "A", medal: "Perfection" })[0];
+    expect([report.kind, report.title]).toEqual(["perfection", expect.stringContaining("Server reported")]);
+    const before = f.recent();
+    f.acknowledge();
+    expect(f.recent()).toEqual(before);
+    expect(before.every((r) => r.at <= f.acknowledgedAt)).toBe(true);
+    c.t += 3601;
+    expect(f.recent()).toEqual([]);
+  });
+
+  it("skips kill heuristics in fast modes but still reviews, flags and counts votes", () => {
+    for (const context of [{ mode: "Infection" }, { mode: "Slayer", name: "Big Team SWAT" }, { mode: "Slayer", tags: ["swat"] }, { name: "Mega Fat Kid" }]) {
+      const [c, f] = at();
+      for (let i = 0; i < 15; i++) {
+        c.t += 0.1;
+        expect(f.ingest("s", { event: "kill", time: c.t, killer: "A", victim: String(i) }, nobody, context)).toEqual([]);
+      }
+      expect(f.ingest("s", { event: "chat", name: "B", text: "need an admin" }, nobody, context)[0].kind).toBe("admin_help");
+      expect(f.ingest("s", { event: "cheat", name: "A", text: "native reason" }, nobody, context)[0].kind).toBe("native_flag");
+      expect(f.ingest("s", { event: "medal", name: "A", medal: "Perfection" }, nobody, context)[0].kind).toBe("perfection");
+      let result: ReturnType<Findings["ingest"]> = [];
+      for (let i = 0; i < 3; i++) {
+        c.t += 5;
+        result = f.ingest("s", { event: "vote", name: "B", text: "called a vote to kick A" }, nobody, context);
+      }
+      expect(result[0].kind).toBe("repeated_votes");
+    }
+  });
+
+  it("repeats nothing across a phase or reconnect, but a new target, server or time still alerts", () => {
+    const [c, f] = at();
+    const chat = { event: "chat", id: "reporter-id", name: "Reporter", text: "please kick Red" };
+    const first = f.ingest("s", chat)[0];
+    expect(first.title).toContain("Reporter");
+    expect(first.title).not.toContain("reporter-id");
+    expect(first.subjects[0].name).toBe("red");
+    f.ingest("s", { event: "phase" });
+    f.reset("s");
+    c.t += 65;
+    expect(f.ingest("s", { ...chat, id: "another", name: "Another" })).toEqual([]);
+    expect(f.ingest("s", { ...chat, text: "please kick Blue" })).not.toEqual([]);
+    expect(f.ingest("other-server", chat)).not.toEqual([]);
+    c.t += 121;
+    expect(f.ingest("s", chat)).not.toEqual([]);
+    expect(f.ingest("s", { ...chat, channel: "server" })).toEqual([]);
+  });
+
+  it("names the reported player from the roster, never a guessed slot or a duplicate name, and carries nothing private", () => {
+    const [, f] = at();
+    const [a, b, d] = ["a", "b", "c"].map((x) => x.repeat(64));
+    const roster = publicRoster([{ id: a, engine_id: 1, name: "Reporter", ip: "private" }, { id: b, engine_id: 2, name: "Red", device: "private" }]);
+    const row = f.ingest("s", { event: "chat", id: a, name: "Reporter", text: "admin? Red is hacking" }, nobody, {}, roster)[0];
+    expect(row.subjects).toEqual([{ id: b, name: "Red" }]);
+    expect(row.reporter).toEqual({ id: a, name: "Reporter" });
+    expect(JSON.stringify(row)).not.toContain("private");
+    expect(f.ingest("s", { event: "cheat", id: 2 }, nobody, {}, roster)[0].subjects[0].id).toBe(b);
+    roster.push({ id: d, engine_id: "3", name: "Red" });
+    expect(f.ingest("other", { event: "chat", name: "Reporter", text: "please ban Red" }, nobody, {}, roster)[0].subjects[0].id).toBe("");
+  });
+
+  it("drops a half-counted kill window when the mode changes, and cools highlights down per server and per player", () => {
+    const [c, f] = at();
+    const burst = (actor: string, mode: string, count = 5) => {
+      const out: unknown[] = [];
+      for (let i = 0; i < count; i++) {
+        c.t += 1;
+        out.push(...f.ingest("s", { event: "kill", killer: actor, victim: String(i) }, nobody, { mode }));
+      }
+      return out as { kind: string }[];
+    };
+    expect(burst("A", "Slayer", 4)).toEqual([]);
+    expect(burst("A", "CTF", 1)).toEqual([]);
+    expect(burst("A", "CTF", 4)[0].kind).toBe("kill_burst");
+    expect(burst("B", "CTF")).toEqual([]);
+    c.t += 61;
+    expect(burst("A", "CTF")).toEqual([]);
+    expect(burst("B", "CTF")).not.toEqual([]);
   });
 });

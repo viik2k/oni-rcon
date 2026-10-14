@@ -378,5 +378,3 @@ export function voteText(v: unknown): Line[] {
   const y = yes ?? 0, n = no ?? 0;
   return [head, [["YES ", DIM], [`${y} `, GREEN], ...splitBar([[y, GREEN], [n, RED]], 6), [` ${n}`, RED], [" NO", DIM]]];
 }
-
-export const ALERT = /\b(admins?|mods?|hack\w*|cheat\w*|aimbot|wallhack)\b/i;
