@@ -536,6 +536,15 @@ impl FakeHost {
             format!("container started={} finished=0001-01-01T00:00:00Z oom_killed=false exit_code=0 restarts=0", iso(self.started.lock()[&port])),
             format!("{} [{name}] Bob connected from 203.0.113.9 (player ID {}, ping 77 ms).", iso((n - 3600) as f64), "ab12".repeat(16)),
         ];
+        lines.push(format!("{} [{name}] Network upload over the last minute: 12 MB", iso(n as f64)));
+        if self.fakes.last().is_some_and(|(p, _)| *p == port) {
+            // the last server is the laggy one: a report for each of the last 12 minutes, on the minute so they repeat
+            for k in 0..12 {
+                let ts = (n / 60 * 60 - k * 60) as f64;
+                let avg = 22 + (ts as i64 / 60 * 7) % 18;
+                lines.push(format!("{} Server falling behind: under 54 frames a second for 58 of the last 58 seconds ({avg} on average, longest frame {} ms) with {} players. Each player gets one update a frame", iso(ts), 90 + avg * 3, 60 - k));
+            }
+        }
         lines.extend(self.logs.lock().get(&port).cloned().unwrap_or_default());
         lines.join("\n")
     }

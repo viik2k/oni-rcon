@@ -440,7 +440,7 @@ impl Hub {
             hr.check_at = self.mono() + HEALTH_EVERY;
         }
         for n in notes {
-            self.emit(json!({"kind": "health-notice", "index": if n.key.is_empty() { Value::Null } else { json!(n.key.parse::<usize>().unwrap_or(0)) }, "level": n.level, "text": n.text}));
+            self.emit(json!({"kind": "health-notice", "index": if n.key.is_empty() { Value::Null } else { json!(n.key.parse::<usize>().unwrap_or(0)) }, "level": n.level, "text": n.text, "quiet": n.quiet}));
         }
         self.emit(json!({"kind": "health", "view": self.health_view()}));
     }
@@ -479,6 +479,7 @@ impl Hub {
             "service": self.hsetup.service,
             "min_free": m.min_free,
             "crashes": m.recent(health::LAST),
+            "frames": m.frame_rates(util::now()),
             "hosts": m.hosts,
             "boxes": m.boxes,
             "services": m.services,

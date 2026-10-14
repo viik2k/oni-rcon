@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "../art/palette";
 import { oni, useV } from "../engine";
 import { age, redactText, when, type Dict, type Line } from "../lib/util";
+import { LEVEL_COLOR, SLOW, TARGET, TARGET_MS, advice, level, scaleTop } from "../lib/perf";
 import { L, Panel, Table, type Row } from "./ui";
 
 const CRASH_COLOR: Record<string, string> = { SIGNATURE: RED, BARE: AMBER, "OOM-KILL": RED, "CONTAINER-RESTART": CYAN };
@@ -33,6 +34,63 @@ function Howto() {
         <div><span style={{ color: CYAN }}>health_min_free_mb</span><span style={{ color: DIM }}> (default 1024) is the free memory below which it alerts.  </span><span style={{ color: CYAN }}>health_service</span><span style={{ color: DIM }}> names a systemd service to watch.</span></div>
       </div>
     </Panel>
+  );
+}
+
+/** The last 30 minutes of one server, a column a minute: the average frame as a bar, the longest as a tick, and the
+ *  60 fps line. Taller than the line is lag. */
+function FrameChart({ hist }: { hist: Dict[] }) {
+  if (!hist.some((b) => b.fps !== null)) return <div style={{ color: DIM }}>no frame-rate reports read for this server yet</div>;
+  const W = 600, H = 150, left = 34, col = (W - left) / hist.length, top = scaleTop(hist);
+  const y = (ms: number) => H - Math.min(ms, top) / top * H;
+  return (
+    <svg viewBox={`0 0 ${W} ${H + 16}`} width="100%" role="img" aria-label="Frame time, last 30 minutes" style={{ display: "block", maxHeight: 220 }}>
+      <text x={left - 4} y={9} textAnchor="end" fill={DIM} fontSize="10">{top}</text>
+      <text x={left - 4} y={y(TARGET_MS) + 3} textAnchor="end" fill={DIM} fontSize="10">{Math.round(TARGET_MS)}</text>
+      <line x1={left} x2={W} y1={y(TARGET_MS)} y2={y(TARGET_MS)} stroke={DIM} strokeDasharray="3 3" />
+      <text x={W} y={y(TARGET_MS) - 3} textAnchor="end" fill={DIM} fontSize="10">{TARGET} fps</text>
+      {hist.map((b, i) => b.fps === null ? null : (
+        <g key={i}>
+          <rect x={left + i * col + 1} y={y(1000 / b.fps)} width={col - 2} height={H - y(1000 / b.fps)} fill={LEVEL_COLOR[level(b.fps)]}>
+            <title>{`${Math.round(b.fps)} fps, longest frame ${b.longest ?? "—"} ms, ${b.players ?? "—"} players`}</title>
+          </rect>
+          {b.longest ? <line x1={left + i * col + 1} x2={left + (i + 1) * col - 1} y1={y(b.longest)} y2={y(b.longest)} stroke={AMBER} strokeWidth="2" /> : null}
+        </g>
+      ))}
+      <line x1={left} x2={W} y1={H} y2={H} stroke={DIM} />
+      <text x={left} y={H + 12} fill={DIM} fontSize="10">-{hist.length} min</text>
+      <text x={W} y={H + 12} textAnchor="end" fill={DIM} fontSize="10">now</text>
+    </svg>
+  );
+}
+
+function Frames() {
+  const [sel, setSel] = useState<string | null>(null);
+  const fr: Dict = oni.health.frames ?? {}, now = Date.now() / 1000;
+  const rows: Row[] = oni.stations.flatMap((s, i) => {
+    const r: Dict | undefined = fr[String(i)];
+    if (!r) return [];
+    const none: Line = [["—", DIM]];
+    return [{ id: String(i), cells: [[[s.label, WHITE]], [[String(Math.round(r.fps)), LEVEL_COLOR[level(r.fps)]]], [[String(Math.round(r.avg)), LEVEL_COLOR[level(r.avg)]]],
+      r.worst !== null ? [[String(r.worst), AMBER]] : none, r.frame_ms !== null && r.slow_minutes ? [[`${r.frame_ms} ms`, r.frame_ms > 50 ? AMBER : DIM]] : none,
+      r.players !== null && r.slow_minutes ? String(r.players) : "—", r.since && now - r.since < 1800 ? [[`${age(now - r.since)} ago`, DIM]] : [["none", DIM]]] }];
+  });
+  const cur = rows.find((r) => r.id === sel) ?? rows[0];
+  const hist: Dict[] = cur ? fr[cur.id].history : [];
+  const [what, fix] = advice(cur ? fr[cur.id] : undefined, hist);
+  return (
+    <div className="hsplit grow" style={{ minHeight: 220 }}>
+      <Panel title="FRAME RATE" style={{ flex: 3 }} sub={<span style={{ color: DIM }}>the server logs each minute under {SLOW} fps; a minute without one counts as {TARGET}</span>}>
+        <Table id="frames" cols={["SERVER", "FPS", "5 MIN", "WORST", "LONGEST", "PLAYERS", "LAST SLOW"]} rows={rows} selected={cur?.id ?? null} onSelect={setSel} />
+      </Panel>
+      <Panel title={`FRAME TIME${cur ? ` · ${oni.stations[Number(cur.id)]?.label}` : ""} · ms, a column a minute`} style={{ flex: 2 }}>
+        <div style={{ whiteSpace: "pre-wrap", marginBottom: 6 }}>
+          <div><span style={{ color: CYAN }}>WHAT'S HAPPENING  </span>{what}</div>
+          <div><span style={{ color: CYAN }}>WHAT TO DO        </span><span style={{ color: AMBER }}>{fix}</span></div>
+        </div>
+        <FrameChart hist={hist} />
+      </Panel>
+    </div>
   );
 }
 
@@ -91,6 +149,7 @@ export function Health() {
       <Panel title={`CRASHES · LAST 24 H · ${rows.length}`} sub={!rows.length && h.seen ? <span style={{ color: GREEN }}>NONE IN THE LAST 24 H</span> : null} className="grow">
         <Table id="crashes" cols={["WHEN", "SERVER", "CLASS", "PLAYERS", "DETAIL", "RCON"]} rows={rows} selected={sel} onSelect={setSel} />
       </Panel>
+      <Frames />
       <div className="hsplit grow" style={{ minHeight: 220 }}>
         <Panel title={`HOST${oneHost}`} style={{ flex: 3 }}>
           <Facts rows={hosts} />

@@ -214,7 +214,8 @@ port = 49177
 ### Restarting a server
 
 RESTART SERVER on F3 (desktop app) runs the server's `restart_cmd` where the server is: on its `ssh` host, or on
-this machine without one. The setup screen writes it for the servers it finds or hosts; for others, add it to the
+this machine without one. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
+machine that its server folder lists gets one without any config; for others, add it to the
 `[[server]]` block (or `[defaults]`; `{port}` is the server's RCON port):
 
 ```toml
@@ -292,6 +293,11 @@ but don't alert.
 **Memory.** Red under `health_min_free_mb` (that's the alert, and it turns the masthead's CONDITION amber), amber under
 twice that. Swap is amber from a quarter used and red from half. `oom_kill` shows how far it has risen since you opened
 oni-rcon.
+
+**Frame rate.** The same report carries the server's log, and a server logs every minute it spent under 54 frames a
+second. F7's FRAME RATE table and 30-minute FRAME TIME chart, the `38fps` on a lagging server's card and F3's SERVER FPS
+are read from those lines, so `health_cmd` has to print the log. [docs/SERVER-PERFORMANCE.md](docs/SERVER-PERFORMANCE.md)
+is a plain guide to reading them. (From [ibigsnet/oni-rcon](https://github.com/ibigsnet/oni-rcon), by RifleJock.)
 
 **WORKAROUND** runs `systemctl is-active` and `journalctl` for the named unit (read-only) and shows whether it's active,
 the time of its last `moved tag` line and any `NOT the pinned build` line. It needs the ssh user to be allowed to read that

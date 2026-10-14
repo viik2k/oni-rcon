@@ -241,7 +241,7 @@ class Oni {
         if (st === this.cur) bump("roster");
         return;
       }
-      case "health": this.health = m.view; return bump("health", "mast");
+      case "health": this.health = m.view; return bump("health", "mast", "cards", "ops");
       case "health-notice": return this.healthNotice(m);
       case "toast": return this.notify(m.explain ? explain(m.text) : m.text, m.title, m.severity, m.timeout);
       case "log": {
@@ -324,6 +324,7 @@ class Oni {
   private healthNotice(m: Dict) {
     const st = m.index === null ? null : this.stations[m.index];
     this.logEvent(st, { event: "health", text: m.text, level: m.level });
+    if (m.quiet) return; // the feed only: frame rate is news, not an alarm
     this.banner = { text: ` ⚠ ${st ? st.label : "HOST"}  ${m.text}      click to dismiss`, warn: m.level !== "crit", until: performance.now() + 30_000 };
     this.alert(st);
     bump("ui");

@@ -6,6 +6,7 @@ import { Superintendent, classify } from "../art/superintendent";
 import { BASE, face, faceClass } from "../art/archive";
 import { smooth, tones } from "../art/pixels";
 import { decrypt, noise } from "../art/palette";
+import { advice, level, scaleTop } from "./perf";
 
 describe("console lines", () => {
   it("keeps a message whole for say, tell, kick and rename", () => {
@@ -125,5 +126,21 @@ describe("art", () => {
     expect(noise(123456, 99)).toBe(0.6629038583487272);
     expect(decrypt("SECTION THREE", 1)).toBe("SECTION THREE");
     expect(decrypt("SECTION THREE", 0).length).toBe(13);
+  });
+});
+
+describe("frame rate", () => {
+  it("grades a rate and scales the chart to the longest frame", () => {
+    expect([60, 54, 53, 40, 39].map(level)).toEqual(["ok", "ok", "warn", "warn", "crit"]);
+    expect(scaleTop([{ fps: 60, longest: null }])).toBe(50);
+    expect(scaleTop([{ fps: 30, longest: 125 }])).toBe(125);
+    expect(scaleTop([{ fps: 30, longest: 9000 }])).toBe(500);
+  });
+  it("says what's happening in words", () => {
+    const hist = [{ fps: 30, players: 64 }, { fps: 30, players: 80 }, { fps: 60, players: 20 }, { fps: null, players: null }];
+    expect(advice(undefined, [])[0]).toMatch(/Not measured/);
+    expect(advice({ behind: false, slow_minutes: 0 }, hist)[1]).toBe("Nothing to do.");
+    expect(advice({ behind: true, fps: 29.4, slow_minutes: 2 }, hist)[0]).toMatch(/29 of 60 .* as few as 64 players/);
+    expect(advice({ behind: false, slow_minutes: 1, worst: 41 }, hist)[0]).toMatch(/dipped to 41/);
   });
 });
