@@ -183,7 +183,7 @@ export const itemsFor = (entries: Dict[], installed: Record<string, Dict>): Item
 export const MIN_GAMES = 3; // the server's ballots offer three different games each time
 export const MAX_GAMES = 128; // the most the dedicated server plays in one rotation
 const PLAYLIST_KEYS = new Set(["version", "name", "vote_seconds", "games"]);
-const GAME_KEYS = new Set(["map", "game", "name", "weight", "options", "world", "rules"]);
+const GAME_KEYS = new Set(["map", "game", "name", "weight", "options", "world", "rules", "anti_cheat", "voice_team_only"]);
 
 export interface Game { map: string; game: string; weight?: number; name?: string; options?: unknown; world?: unknown; rules?: unknown }
 export interface Playlist { version: 2; name: string; vote_seconds: number; games: Game[] }
