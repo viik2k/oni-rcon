@@ -32,7 +32,7 @@ resolution, and lighter on a big fleet. Installers are on the [releases page](ht
 | **F3 Operations** | Sitrep for the selected server with the vote under way and its tally, and the title and author of the map or gametype playing when it came from ReclaimerForge; the theatre, with each team's numbers and score as bars, the top guns and who's on a spree; the playlist rotation with the current map marked; and buttons for load map + mode, change map or mode, queue next, end round or game, shuffle, team count, call, pass or cancel a vote, broadcast, rename, join password and ping limit, and (desktop) player capacity, making game types, making and switching playlists and restarting the server |
 | **F4 Blacklist** | Bans by player, IP and device; new ban (timed or permanent), unban, VPN allow and revoke, check an IP. The admins, with who's on and where each was made: add or remove one at once on every server sharing the ban list (server 0.9.16 or later), or, on the desktop, of one server only through its `dedicated.toml` (from the next restart). `p` add admin · `d` remove admin |
 | **F5 Console** | Type any RCON command (`help` lists them) with ↑/↓ history. The command log records everything sent from this session and its replies. The message in `say`, `tell`, `kick` and `servername` is the rest of the line as typed, sent as one argument, so it needs no quotes |
-| **F6 Forge** | The [ReclaimerForge](https://www.reclaimerforge.net) catalog of community maps, gametypes and playlists, read with your own API key. Order it by trending, rising, latest, updated, downloads, rated, unrated or overlooked (trending and rising over the last 24 hours, 7 days or 30 days), or see the collections ReclaimerForge is featuring now, and search it. Each listing shows its type, authors, thumbs up and down, recent downloads, and whether it runs on the selected server's version; its file lists every version, and any of them installs on the selected server, every file checked against Forge's manifest. `i` install on this server · `l` load it now · `s` sort · `w` window · `/` search · `n` more · `k` key · `y` copy ID |
+| **F6 Forge** | The [ReclaimerForge](https://www.reclaimerforge.net) catalog of community maps, gametypes and playlists, read with your own API key. Order it by trending, rising, latest, updated, downloads, rated, unrated or overlooked (trending and rising over the last 24 hours, 7 days or 30 days), or see the collections ReclaimerForge is featuring now, and search it. Each listing shows its type, authors, thumbs up and down, recent downloads, and whether it runs on the selected server's version; its file lists every version, and any of them installs on the selected server, every file checked against Forge's manifest. In the desktop app, `p` publishes your own files to Forge, and MINE lists your listings to update, edit, withdraw or delete. `i` install on this server · `l` load it now · `s` sort · `w` window · `/` search · `n` more · `k` key · `y` copy ID · `p` publish · `u` new version · `e` edit · `x` withdraw (desktop) |
 | **F7 Health** | Whether the servers are crashing and the box is coping. CRASHES lists each server's latest crashes read from its log (time, server, class, how many players were on, whether the RCON connection dropped with it); HOST shows free memory, swap, the kernel's `oom_kill` counter and each container's start time and OOMKilled flag; WORKAROUND shows whether an optional systemd service is running. A new crash, an OOM kill or memory falling under your limit flashes a banner over every tab, goes in the feed and beeps. Needs `health_cmd` in the config: [see below](#health-watch) |
 
 Also:
@@ -312,8 +312,16 @@ email. Then open Developer tools and create a named key with the `catalog:read` 
 nothing more. The key is shown once, when you make it, so save it then. Make one for oni-rcon alone, so you can rotate
 it without touching anything else that uses a key: create the replacement, load it into oni-rcon, then revoke the old
 one. A key stops working when it expires or is revoked, when its account loses the Developer role or its verified
-email, or when the account is banned; F6 then says the key was refused. oni-rcon never writes, uploads or publishes
-anything there.
+email, or when the account is banned; F6 then says the key was refused. The terminal console never writes, uploads or
+publishes anything there.
+
+**Publishing** (desktop app only) takes a key with `listings:write`, `files:upload` and `listings:publish` as well, and
+`listings:delete` to withdraw versions and delete listings. On F6, `p` opens a file dialog (`.json`, `.mvar`, `.bin`, up
+to 100 MiB each), one form asks for the title, version, who sees it, description, tags and release notes, and the files
+are uploaded in chunks and published. If any step fails, the draft it made is taken down again. MINE (`s`) lists your
+own listings, drafts included: `u` publishes new files as the next version, `e` edits the title, description, tags and
+who sees it, `x` withdraws the selected version (Forge keeps the last one; DELETE LISTING takes the lot), and NOTES
+changes a version's label and release notes. Publishing needs a verified email on the account.
 
 **Give it to oni-rcon.** The first of these that's set wins:
 

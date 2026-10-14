@@ -68,6 +68,12 @@ export const TIPS: Record<string, string> = {
   "fg-ack": "Say you've seen that it was withdrawn: CONDITION goes back to GREEN. It stays flagged.  Key: a",
   "fg-key": "Load your own ReclaimerForge API key.  Key: k",
   "fg-more": "Fetch the next page of the catalog.  Key: n",
+  "fg-publish": "Put your own map, gametype or playlist files on ReclaimerForge: pick them, fill in one form, and it's uploaded and published.  Key: p",
+  "fg-update": "Publish new files as the next version of this listing of yours.  Key: u",
+  "fg-edit": "Change this listing's title, description, tags or who sees it.  Key: e",
+  "fg-notes": "Change the selected version's label or release notes.",
+  "fg-withdraw": "Withdraw the selected version, or discard it if it's a draft. Servers that have it are told.  Key: x",
+  "fg-delete": "Take the whole listing off ReclaimerForge, for good.",
 };
 export const TAB_TIPS: Record<string, string> = {
   assets: "Players on the selected server: click one for their file and actions.",

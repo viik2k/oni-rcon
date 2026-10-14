@@ -1,5 +1,6 @@
 // F6: the ReclaimerForge catalog, read with the operator's own key (which stays in the backend), the file of the
-// listing picked with its versions, and installing, loading and acknowledging.
+// listing picked with its versions, and installing, loading and acknowledging. With the write scopes it publishes too:
+// p puts new files up, and MINE lists the operator's own listings to update, edit, withdraw or delete.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { AMBER, CYAN, DIM, GOLD, GREEN, RED, WHITE } from "../art/palette";
@@ -14,7 +15,7 @@ import { num, pick, redactData, type Dict, type Line } from "../lib/util";
 import { Btn, Json, L, Panel, Table, type Row } from "./ui";
 
 const KIND_COLOR: Record<string, string> = { map: CYAN, gametype: AMBER, playlist: GOLD };
-const VIEW_NAMES: Record<string, string> = { installed: "INSTALLED HERE" };
+const VIEW_NAMES: Record<string, string> = { installed: "INSTALLED HERE", mine: "MINE (PUBLISHED BY YOU)" };
 
 export const fg = {
   opened: false, listings: [] as Dict[], rows: new Map<string, Dict>(), details: new Map<string, Dict>(), next: null as Dict | null,
@@ -32,6 +33,16 @@ export async function forgeLoad(more = false, fresh = false) {
   const ticket = ++fg.loading;
   if (fg.sort === "installed") {
     Object.assign(fg, { next: null, note: "", stale: 0 });
+    return bump("forge");
+  }
+  if (fg.sort === "mine") {
+    Object.assign(fg, { next: null, note: "Fetching your listings…", featured: {} });
+    bump("forge");
+    const r: Dict = await invoke("forge_mine");
+    if (ticket !== fg.loading) return;
+    if (r.error) Object.assign(fg, { note: r.error.text, listings: [] });
+    else Object.assign(fg, { listings: r.items, note: r.items.length ? "" : "You haven't published anything yet. p publishes your first.", stale: 0 });
+    if (r.status) oni.forgeStatus = r.status;
     return bump("forge");
   }
   if (fg.sort === "favourites") {
@@ -62,7 +73,7 @@ export async function forgeLoad(more = false, fresh = false) {
 }
 
 async function detail(lid: string) {
-  const r: Dict = await invoke("forge_listing", { lid });
+  const r: Dict = await invoke("forge_listing", { lid, mine: fg.sort === "mine" });
   fg.details.set(lid, r.error ? { ...fg.rows.get(lid), _error: r.error.text } : { ...fg.rows.get(lid), ...r.listing });
   bump("forge");
 }
@@ -142,6 +153,11 @@ export async function forgeAction(what: string) {
   if (what === "sort") { fg.sort = VIEWS[(VIEWS.indexOf(fg.sort) + 1) % VIEWS.length]; if (fg.opened) forgeLoad(); return bump("forge"); }
   if (what === "window") { if (!WINDOWED.has(fg.sort)) return; fg.window = WINDOWS[(WINDOWS.indexOf(fg.window) + 1) % WINDOWS.length]; if (fg.opened) forgeLoad(); return bump("forge"); }
   if (what === "copy") return x && oni.copy(listingId(x), "LISTING ID COPIED");
+  if (what === "publish") return publish(null);
+  if (["update", "edit", "notes", "withdraw", "delete"].includes(what)) {
+    if (!x || fg.sort !== "mine") return oni.notify("Pick one of your own listings first: s to MINE.", "", "warning");
+    return what === "update" ? publish(x) : manage(what, x);
+  }
   if (what === "ack") {
     const lid = x ? listingId(x) : "";
     if (!oni.forgeState.alarms?.includes(lid)) return oni.notify("Nothing here to acknowledge.", "", "warning");
@@ -173,12 +189,84 @@ export async function forgeAction(what: string) {
   }
 }
 
+const tagList = (t: string) => [...new Set(t.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean))];
+
+/** The label after the newest: 1.2 → 1.3, else the same with .1 on. */
+function nextLabel(x: Dict): string {
+  const l = versionLabel(latestOf(x)) || "1.0", m = l.match(/^(.*?)(\d+)$/);
+  return m ? m[1] + (Number(m[2]) + 1) : `${l}.1`;
+}
+
+/** Files onto Forge: picked in the backend's own dialog, described in one form, then uploaded and published. */
+async function publish(x: Dict | null) {
+  if (!oni.forgeStatus.key) return oni.notify("Load your Forge key first (k).", "", "warning");
+  const p: Dict = await invoke("forge_pick");
+  if (!p.files.length) return;
+  const names = p.files.map((f: Dict) => f.name).join(", ");
+  const note = `Uploads ${names}, then publishes it for everyone who can see it. It needs a key with listings:write, files:upload and listings:publish.`;
+  const f = x
+    ? await oni.form(`NEW VERSION  ·  ${titleOf(x)}`, [["version_label", "Version", nextLabel(x)], ["release_notes", "What changed", ""]], { verb: "PUBLISH", required: ["version_label"], note })
+    : await oni.form("PUBLISH ON RECLAIMERFORGE", [
+      ["title", "Title", p.files[0].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ")],
+      ["version_label", "Version", "1.0"],
+      ["visibility", "Who sees it", [["Everyone: it's in the catalog", "public"], ["Only you, for now", "private"]]],
+      ["description", "Description", ""],
+      ["tags", "Tags, split by commas", ""],
+      ["release_notes", "Release notes", "First release."],
+    ], { verb: "PUBLISH", required: ["title", "version_label"], note });
+  if (!f) return;
+  oni.notify(`Uploading ${names}…`, "FORGE · PUBLISHING", "information", 10);
+  const r: Dict = await invoke("forge_publish", { lid: x ? listingId(x) : null, info: x ? f : { ...f, tags: tagList(f.tags) } });
+  if (r.error) return oni.notify(r.error.text, `FORGE · ${r.error.short}`, "error", 20);
+  const lid = listingId(r.listing);
+  oni.notify(`${titleOf(r.listing)} v${versionLabel(latestOf(r.listing))} is up on ReclaimerForge.`, "FORGE · PUBLISHED", "information", 15);
+  fg.details.delete(lid);
+  Object.assign(fg, { sort: "mine", sel: lid, versionsFor: "", opened: true });
+  forgeLoad(false, true);
+}
+
+/** A change to one of the operator's own listings, asked about first. */
+async function manage(what: string, x: Dict) {
+  const lid = listingId(x), v = selectedVersion(x), vid = v ? versionId(v) : "", title = titleOf(x);
+  const draft = String(pick(v ?? {}, "status") ?? "") === "draft";
+  let change: Dict | null = null;
+  if (what === "edit") {
+    const vis = String(pick(x, "visibility") ?? "public");
+    change = await oni.form(`EDIT  ·  ${title}`, [
+      ["title", "Title", title],
+      ["visibility", "Who sees it", [["Everyone: it's in the catalog", "public"], ["Only you", "private"]].sort((a) => (a[1] === vis ? -1 : 1)) as [string, string][]],
+      ["description", "Description", blurbOf(x)],
+      ["tags", "Tags, split by commas", (Array.isArray(x.tags) ? x.tags : []).join(", ")],
+    ], { verb: "SAVE", required: ["title"] });
+    if (change) change.tags = tagList(change.tags);
+  } else if (what === "notes") {
+    if (!v) return oni.notify("Pick a version first.", "", "warning");
+    change = await oni.form(`VERSION ${versionLabel(v)}  ·  ${title}`, [["version_label", "Version", versionLabel(v)], ["release_notes", "What changed", notesOf(v)]], { verb: "SAVE", required: ["version_label"] });
+  } else if (what === "withdraw") {
+    if (!v) return oni.notify("Pick a version first.", "", "warning");
+    const ok = await oni.confirm(`${draft ? "DISCARD DRAFT" : "WITHDRAW"}  v${versionLabel(v)}  ·  ${title}`,
+      draft ? "The draft and its files go. Nobody saw it." : "Nobody can install this version any more, and servers that have it are told it was withdrawn. The listing keeps its other versions: Forge won't take its last one, so DELETE LISTING for that.",
+      draft ? "DISCARD" : "WITHDRAW");
+    change = ok ? {} : null;
+  } else {
+    const ok = await oni.confirm(`DELETE LISTING  ·  ${title}`, "The whole listing and every version of it come off ReclaimerForge, for good. Servers that installed it are told it was withdrawn. This can't be undone.", "DELETE");
+    change = ok ? {} : null;
+  }
+  if (!change) return;
+  const r: Dict = await invoke("forge_write", { what, lid, vid, change });
+  if (r.error) return oni.notify(r.error.text, `FORGE · ${r.error.short}`, "error", 20);
+  oni.notify({ edit: "Saved.", notes: "Saved.", withdraw: draft ? "Discarded." : "Withdrawn.", delete: `${title} is off ReclaimerForge.` }[what]!, `FORGE · ${title}`);
+  fg.details.delete(lid);
+  if (what === "delete") fg.sel = null;
+  forgeLoad(false, true);
+}
+
 async function forgeKey() {
   const s = oni.forgeStatus;
   const fields: [string, string, string | [string, string][]][] = [["key", "Your ReclaimerForge API key", ""]];
   if (s.can_remember) fields.push(["remember", "Remember it", [["No: for this session only", "no"], [`Yes: save it in ${s.config_name}, readable only by you`, "yes"]]]);
   const f = await oni.form("FORGE API KEY", fields, { verb: "LOAD", required: ["key"], secret: ["key"],
-    note: "Make one in Developer tools on reclaimerforge.net, for oni-rcon alone, with the catalog:read and assets:download scopes and nothing more. oni-rcon only ever sends it to reclaimerforge.net, and never shows it." });
+    note: "Make one in Developer tools on reclaimerforge.net, for oni-rcon alone. catalog:read and assets:download browse and install; add listings:write, files:upload and listings:publish to publish, and listings:delete to withdraw and delete. oni-rcon only ever sends it to reclaimerforge.net, and never shows it." });
   if (!f) return;
   const r: Dict = await invoke("forge_set_key", { key: f.key, remember: f.remember === "yes" });
   f.key = "";
@@ -196,7 +284,7 @@ function NoKey() {
       <span style={{ color: AMBER }}>FORGE UPLINK  //  </span><span style={{ color: RED }}>NO KEY</span><br /><br />
       ReclaimerForge is the community catalog of forged maps, gametypes and playlists. Browsing and installing from it takes your own API key.<br /><br />
       <span style={{ color: AMBER }}>1  </span>Your ReclaimerForge account needs the Developer role (an Owner gives it) and a verified email.<br />
-      <span style={{ color: AMBER }}>2  </span>In Developer tools on reclaimerforge.net, make a key for oni-rcon alone, with the catalog:read and assets:download scopes and nothing more. It's shown when you make it, so save it then.<br />
+      <span style={{ color: AMBER }}>2  </span>In Developer tools on reclaimerforge.net, make a key for oni-rcon alone. catalog:read and assets:download browse and install; to publish your own, add listings:write, files:upload, listings:publish and listings:delete. It's shown when you make it, so save it then.<br />
       <span style={{ color: AMBER }}>3  </span>Press k, or KEY below, to load it for this session. Or set $ONI_RCON_FORGE_KEY, or forge_api_key_env in the config file, and start oni-rcon again.<br />
       {s.error ? <><br /><span style={{ color: RED }}>{s.error}</span></> : null}
     </div>
@@ -240,6 +328,7 @@ function ListingFile({ x }: { x: Dict }) {
   }
   const vmark = (v: Dict): Line => {
     const here = !!have && have.version_id === versionId(v);
+    if (String(pick(v, "status") ?? "") === "draft") return [["✎", AMBER]];
     if (!usable(v)) return [[here ? "⚠" : "✕", RED]];
     return here ? [["◉", GREEN]] : [];
   };
@@ -260,6 +349,13 @@ function ListingFile({ x }: { x: Dict }) {
         <Btn label="KEY  k" title={TIPS["fg-key"]} onClick={() => forgeAction("key")} />
         <Btn label="MORE  n" disabled={!fg.next} title={TIPS["fg-more"]} onClick={() => forgeAction("more")} />
       </div>
+      {fg.sort === "mine" ? <div className="grid3" style={{ margin: "0 0 14px" }}>
+        <Btn label="NEW VERSION  u" variant="primary" title={TIPS["fg-update"]} onClick={() => forgeAction("update")} />
+        <Btn label="EDIT  e" title={TIPS["fg-edit"]} onClick={() => forgeAction("edit")} />
+        <Btn label="NOTES" title={TIPS["fg-notes"]} onClick={() => forgeAction("notes")} />
+        <Btn label="WITHDRAW  x" variant="warning" title={TIPS["fg-withdraw"]} onClick={() => forgeAction("withdraw")} />
+        <Btn label="DELETE LISTING" variant="warning" title={TIPS["fg-delete"]} onClick={() => forgeAction("delete")} />
+      </div> : null}
       <details style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
         <summary style={{ color: DIM, cursor: "pointer" }}>RAW DATA</summary>
         <Json value={redactData(x, false)} />
@@ -289,7 +385,7 @@ export function Forge() {
       rating(x), recent !== undefined ? String(recent) : "—", fit(x)] });
   }
   if (fg.sel && !fg.rows.has(fg.sel)) fg.sel = rows[0]?.id ?? null;
-  const title = fg.sort === "installed" ? `INSTALLED ON ${oni.cur.label.toUpperCase()} · ${rows.length}`
+  const title = fg.sort === "installed" ? `INSTALLED ON ${oni.cur.label.toUpperCase()} · ${rows.length}` : fg.sort === "mine" ? `YOUR LISTINGS · ${rows.length}`
     : `FORGE CATALOG · ${rows.length}${fg.next ? "+" : ""} · ${fg.sort.toUpperCase()}${WINDOWED.has(fg.sort) ? ` ${fg.window}` : ""}`;
   const sub = [SITE, ...(oni.forgeStatus.key && fg.stale ? [`OFFLINE COPY, ${Math.floor(fg.stale / 60)}m OLD`] : []), ...(oni.forgeStatus.quota ? [oni.forgeStatus.quota] : [])].join("  ·  ");
   const x = curListing();
@@ -307,6 +403,7 @@ export function Forge() {
           onChange={(e) => { fg.window = e.target.value; if (fg.opened) forgeLoad(); bump("forge"); }}>
           {WINDOWS.map((w) => <option key={w} value={w}>{w.toUpperCase()}</option>)}
         </select>
+        <Btn label="PUBLISH  p" variant="primary" disabled={!oni.forgeStatus.key} title={TIPS["fg-publish"]} onClick={() => forgeAction("publish")} />
       </div>
       <div className="hsplit grow">
         <Panel title={title} sub={<span style={{ color: DIM }}>{sub}</span>} style={{ flex: 3 }}>
