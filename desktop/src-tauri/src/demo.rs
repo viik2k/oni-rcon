@@ -109,7 +109,7 @@ impl Fake {
                     stack.push(p);
                 } else if p.to_string_lossy().ends_with(suffix) {
                     let stem = p.file_stem().unwrap().to_string_lossy().to_string();
-                    let name: String = stem.split('_').map(|w| {
+                    let name: String = stem.split(['_', '-']).map(|w| {
                         let mut c = w.chars();
                         c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
                     }).collect::<Vec<_>>().join(" ");

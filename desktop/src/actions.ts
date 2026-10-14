@@ -139,7 +139,7 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
     return;
   }
   const scope = await oni.pick(`MAKE ${name} AN ADMIN OF`, [["EVERY SERVER sharing this ban list · at once", "all"],
-    ["THIS SERVER ONLY · written to its dedicated.toml, from the next restart", "one"]]);
+    ["THIS SERVER ONLY · dedicated.toml, after a restart", "one"]]);
   if (scope === "all") oni.send(st, "admin", ["add", target], ["admins", "players"]);
   else if (scope === "one") return saveSetting(st, "admin_add", target, "ADMIN", `${name} as an admin of this server`);
 }
@@ -182,7 +182,8 @@ async function newGameType(st: Station): Promise<void> {
     return oni.notify(String(e), `GAME TYPE NOT SAVED · ${st.label}`, "error", 15);
   }
   if (st.online) await oni.fetchNow(st, ["modes"]);
-  const listed = (st.data.modes?.entries ?? []).some((e: Dict) => String(e.reference ?? "").endsWith(path.split("/").pop()!) || e.name === f.name);
+  const stem = path.split("/").pop()!.replace(/\.json$/, "");
+  const listed = (st.data.modes?.entries ?? []).some((e: Dict) => String(e.reference ?? "").replace(/\.json$/, "").endsWith(stem) || e.name === f.name);
   const how = listed ? "CHANGE MODE plays it, and NEW PLAYLIST can use it." : "The server picks it up when it restarts; then CHANGE MODE plays it.";
   oni.notify(`Saved as ${path}. ${how}`, `GAME TYPE · ${st.label}`, "information", 12);
 }
