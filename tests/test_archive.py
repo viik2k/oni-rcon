@@ -103,7 +103,10 @@ def test_full_plays_the_archive_then_the_clearance_check(tmp_path, monkeypatch):
         monkeypatch.setattr(appmod, "TOTAL", 1.5)
         app = full_app(ports, tmp_path)
         async with app.run_test(size=(160, 48)) as pilot:
-            await pilot.pause(0.5)
+            for _ in range(100):  # a slow runner takes a while to put the first screen up
+                await pilot.pause(0.05)
+                if isinstance(app.screen, Archive) and "FILE 01" in plain(app.screen.query_one("#boot-log")):
+                    break
             assert isinstance(app.screen, Archive)
             assert "FILE 01" in plain(app.screen.query_one("#boot-log")) and app.prefs.intro_seen
             assert json.loads((tmp_path / "prefs.json").read_text())["intro_seen"] is True
