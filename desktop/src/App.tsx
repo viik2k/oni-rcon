@@ -48,6 +48,7 @@ function palette(onSetup: () => void) {
     ["Add a server", "open the setup screen", () => import("./actions").then((a) => a.addServer(onSetup))],
     ["Forge: Load API key", "your own ReclaimerForge key, for F6", () => forgeAction("key")],
     ["Forge: Refresh catalog", "fetch the catalog again", () => forgeLoad(false, true)],
+    ["Forge: Publish files", "your own maps, gametypes and playlists, onto ReclaimerForge  (F6, p)", () => forgeAction("publish")],
     ["Quit", "close the console  (Ctrl+Q)", () => getCurrentWindow().close()],
   ];
   oni.ask("palette", { items });
@@ -93,7 +94,7 @@ function useKeys(onSetup: () => void) {
           const [c, w] = x.split(":");
           return [c, () => bl(w, blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null)];
         })),
-        forge: Object.fromEntries(["i:install", "l:load", "a:ack", "s:sort", "w:window", "n:more", "k:key", "y:copy"].map((x) => {
+        forge: Object.fromEntries(["i:install", "l:load", "a:ack", "s:sort", "w:window", "n:more", "k:key", "y:copy", "p:publish", "u:update", "e:edit", "x:withdraw"].map((x) => {
           const [c, w] = x.split(":");
           return [c, () => forgeAction(w)];
         })),

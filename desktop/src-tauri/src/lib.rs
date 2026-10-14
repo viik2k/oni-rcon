@@ -113,6 +113,7 @@ struct App {
     forced_setup: Mutex<bool>,
     demo: Mutex<bool>,
     hint: Mutex<String>,
+    picked: Mutex<Vec<PathBuf>>, // files the operator chose to publish; the window never names a path itself
 }
 
 fn config_path(a: &Args) -> Option<PathBuf> {
@@ -484,14 +485,99 @@ async fn forge_favourites(fresh: bool, app: State<'_, App>) -> Result<Value, Str
 }
 
 #[tauri::command]
-async fn forge_listing(lid: String, app: State<'_, App>) -> Result<Value, String> {
+async fn forge_listing(lid: String, mine: Option<bool>, app: State<'_, App>) -> Result<Value, String> {
     let h = hub_of(&app)?;
     let f = match h.client() {
         Ok(f) => f,
         Err(e) => return Ok(forge_err(e)),
     };
-    Ok(match f.listing(&lid, false).await {
+    let got = if mine == Some(true) { f.my_listing(&lid).await } else { f.listing(&lid, false).await };
+    Ok(match got {
         Ok(d) => json!({"listing": d}),
+        Err(e) => forge_err(e),
+    })
+}
+
+#[tauri::command]
+async fn forge_mine(app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let f = match h.client() {
+        Ok(f) => f,
+        Err(e) => return Ok(forge_err(e)),
+    };
+    Ok(match f.mine().await {
+        Ok(items) => json!({"items": items, "status": h.forge_status()}),
+        Err(e) => forge_err(e),
+    })
+}
+
+/// The operator picks what to publish in a dialog of the backend's own, so the window can't upload any file it names.
+#[tauri::command]
+async fn forge_pick(handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        handle
+            .dialog()
+            .file()
+            .set_title("Files to publish on ReclaimerForge")
+            .add_filter("Reclaimer maps, gametypes and playlists", &["json", "mvar", "bin"])
+            .add_filter("Any file", &["*"])
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let paths: Vec<PathBuf> = picked.unwrap_or_default().into_iter().filter_map(|p| p.into_path().ok()).collect();
+    let files: Vec<Value> = paths
+        .iter()
+        .map(|p| json!({"name": p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            "size": std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)}))
+        .collect();
+    *app.picked.lock() = paths;
+    Ok(json!({"files": files}))
+}
+
+/// The picked files onto Forge: a new listing (`lid` None) or a new version of `lid`.
+#[tauri::command]
+async fn forge_publish(lid: Option<String>, info: Value, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let f = match h.client() {
+        Ok(f) => f,
+        Err(e) => return Ok(forge_err(e)),
+    };
+    let paths = std::mem::take(&mut *app.picked.lock());
+    if paths.is_empty() {
+        return Ok(json!({"error": {"short": "NOTHING PICKED", "text": "Pick the files to publish first."}}));
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        if size == 0 || size > forge::MAX_UPLOAD {
+            return Ok(json!({"error": {"short": "CAN'T SEND THAT", "text": format!("{name} is {size} bytes. ReclaimerForge takes files of 1 byte to 100 MiB.")}}));
+        }
+        match std::fs::read(p) {
+            Ok(b) => files.push((name, b)),
+            Err(e) => return Ok(json!({"error": {"short": "CAN'T READ IT", "text": format!("{name}: {e}")}})),
+        }
+    }
+    let h2 = h.clone();
+    let say = move |t: String| h2.emit(json!({"kind": "log", "station": "FORGE", "text": t, "color": "white"}));
+    Ok(match f.publish(lid.as_deref(), &info, &files, &say).await {
+        Ok(x) => json!({"listing": x}),
+        Err(e) => forge_err(e),
+    })
+}
+
+/// A change to one of the operator's own listings: "edit", "notes", "withdraw" or "delete".
+#[tauri::command]
+async fn forge_write(what: String, lid: String, vid: Option<String>, change: Option<Value>, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let f = match h.client() {
+        Ok(f) => f,
+        Err(e) => return Ok(forge_err(e)),
+    };
+    Ok(match f.change(&what, &lid, vid.as_deref().unwrap_or(""), &change.unwrap_or(json!({}))).await {
+        Ok(x) => json!({"listing": x}),
         Err(e) => forge_err(e),
     })
 }
@@ -655,6 +741,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(App {
             args,
             arg_error,
@@ -664,6 +751,7 @@ pub fn run() {
             forced_setup: Mutex::new(false),
             demo: Mutex::new(demo),
             hint: Mutex::new(String::new()),
+            picked: Mutex::new(Vec::new()),
         })
         .setup(move |app| {
             if devtools {
@@ -676,7 +764,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {

@@ -3,7 +3,7 @@
 import { pick, num, tidy, type Dict } from "./util";
 
 export const SORTS = ["trending", "rising", "latest", "updated", "downloads", "rated", "unrated", "overlooked"];
-export const VIEWS = [...SORTS, "favourites", "installed"];
+export const VIEWS = [...SORTS, "favourites", "installed", "mine"];
 export const WINDOWS = ["24h", "7d", "30d"];
 export const WINDOWED = new Set(["trending", "rising"]);
 const WINDOW_SECONDS: Record<string, number> = { "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400 };

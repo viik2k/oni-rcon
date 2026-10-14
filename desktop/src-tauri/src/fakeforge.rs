@@ -1,11 +1,13 @@
 //! A pretend ReclaimerForge for the demo: the API exactly as forge.rs reads it, seeded listings, the rate-limit
 //! headers and curated favourites. It never talks to the real site, and its key is no real key. Its files are filler
 //! (.map, .gt, .playlist): the fake servers list what lands in their content folder, so an install can be loaded.
+//! The demo key owns one listing, and can publish, edit, withdraw and delete as a real key with the write scopes.
 use crate::util::{parse_iso, utc_iso, utc_iso_at};
+use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{any, get};
 use axum::Router;
 use chrono::{Duration as Days, Utc};
 use parking_lot::Mutex;
@@ -19,6 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const DEMO_KEY: &str = "rfk_demo_notarealkey00";
+const ME: (&str, &str) = ("usr_demo01", "You");
+const CHUNK: usize = 64 << 10; // small, so even a demo file goes up in a few chunks
 const AUTHORS: &[(&str, &str)] = &[("usr_7a1c03", "Kestrel"), ("usr_2be944", "lowgrav"), ("usr_91d0aa", "Onyx Works"), ("usr_c44e17", "Juno"), ("usr_5f0262", "Halcyon"), ("usr_e810b9", "Mako")];
 const MAPS: &[(&str, &str)] = &[("Guardian Rebuilt", "guardian"), ("Pit Stop", "the_pit"), ("Narrows Siege", "narrows"), ("Valhalla Convoy", "valhalla"),
     ("Sandtrap Outpost", "sandtrap"), ("Foundry Arena", "foundry"), ("Epitaph Echo", "epitaph"), ("Construct Inferno", "construct"),
@@ -53,11 +57,30 @@ pub struct FakeForge {
     hits: VecDeque<Instant>,
     pub fetched: HashSet<String>,
     base: String,
+    uploads: HashMap<String, Up>,
+    made: usize,
+}
+
+struct Up {
+    lid: String,
+    vid: String,
+    name: String,
+    size: usize,
+    data: Vec<u8>,
+    next: u64,
+}
+
+fn owned(x: &Value) -> bool {
+    x["authors"].as_array().is_some_and(|a| a.iter().any(|a| a["user_id"] == ME.0))
+}
+
+fn invalid(m: &str) -> (u16, Value) {
+    (422, json!({"detail": [{"loc": ["body"], "msg": m}]}))
 }
 
 impl FakeForge {
     fn new() -> Self {
-        let mut f = FakeForge { rnd: StdRng::seed_from_u64(7), listings: vec![], manifests: HashMap::new(), blobs: HashMap::new(), changes: vec![], collections: vec![], hits: VecDeque::new(), fetched: HashSet::new(), base: String::new() };
+        let mut f = FakeForge { rnd: StdRng::seed_from_u64(7), listings: vec![], manifests: HashMap::new(), blobs: HashMap::new(), changes: vec![], collections: vec![], hits: VecDeque::new(), fetched: HashSet::new(), base: String::new(), uploads: HashMap::new(), made: 0 };
         let mut n = 0;
         for (t, b) in MAPS {
             n += 1;
@@ -76,6 +99,10 @@ impl FakeForge {
         f.feature("Staff picks", &ids[1..5], t0 - Days::days(1), t0 + Days::days(6));
         f.feature("Next weekend", &ids[6..8], t0 + Days::days(4), t0 + Days::days(6));
         f.feature("Last season", &ids[8..10], t0 - Days::days(30), t0 - Days::days(2));
+        f.add(n + 1, "Proving Grounds", "map", json!({"base_map": "guardian", "visibility": "public", "tags": ["practice"]}));
+        let mine = f.listings.last_mut().unwrap();
+        mine["owner_id"] = json!(ME.0);
+        mine["authors"] = json!([{"user_id": ME.0, "username": ME.1, "avatar_url": format!("/avatars/{}.png", ME.0), "is_owner": true}]);
         f
     }
 
@@ -220,7 +247,7 @@ impl FakeForge {
                 return bad("unknown sort or window");
             }
             let text = q.get("q").map(|s| s.to_lowercase()).unwrap_or_default();
-            let mut items: Vec<Value> = self.listings.iter().filter(|x| x["status"] == "published")
+            let mut items: Vec<Value> = self.listings.iter().filter(|x| x["status"] == "published" && x["visibility"] != "private")
                 .filter(|x| text.is_empty() || x["title"].as_str().unwrap().to_lowercase().contains(&text)
                     || x["authors"].as_array().unwrap().iter().any(|a| a["username"].as_str().unwrap().to_lowercase().contains(&text)))
                 .cloned().collect();
@@ -251,6 +278,15 @@ impl FakeForge {
             let more = start + size < items.len();
             return (200, json!({"as_of": utc_iso_at(upto), "items": page, "next_cursor": if more { json!((start + size).to_string()) } else { Value::Null }}));
         }
+        if path == "/api/listings/mine" {
+            return (200, json!(self.listings.iter().filter(|x| owned(x)).cloned().collect::<Vec<_>>()));
+        }
+        if let Some(lid) = path.strip_prefix("/api/listings/mine/") {
+            return match self.listings.iter().find(|x| x["id"] == lid && owned(x)) {
+                Some(x) => (200, x.clone()),
+                None => (404, json!({"detail": "No such listing of yours."})),
+            };
+        }
         let parts: Vec<&str> = path.trim_start_matches("/api/listings/").split('/').collect();
         if path.starts_with("/api/listings/") && parts.len() == 4 && parts[1] == "versions" && parts[3] == "manifest" {
             let (lid, vid) = (parts[0], parts[2]);
@@ -269,18 +305,172 @@ impl FakeForge {
             return (200, m);
         }
         if path.starts_with("/api/listings/") && parts.len() == 1 {
-            return match self.listings.iter().find(|x| x["id"] == parts[0]) {
-                Some(x) => (200, x.clone()),
+            return match self.listings.iter().find(|x| x["id"] == parts[0] && x["status"] != "draft") {
+                Some(x) => {
+                    let mut x = x.clone();
+                    x["versions"].as_array_mut().unwrap().retain(|v| v["status"] != "draft");
+                    (200, x)
+                }
                 None => (404, json!({"error": "not_found", "message": "No such listing."})),
             };
         }
         (404, json!({"error": "not_found", "message": "No such endpoint."}))
     }
+
+    fn draft(&mut self, i: usize, label: &str, notes: &str) -> String {
+        self.made += 1;
+        let vid = format!("ver_m{:04}", self.made);
+        let v = json!({"id": vid, "version_label": label, "release_notes": notes, "created_at": utc_iso(), "status": "draft"});
+        self.listings[i]["versions"].as_array_mut().unwrap().insert(0, v);
+        vid
+    }
+
+    /// The write side of the API, as the site's own pages use it.
+    fn write(&mut self, method: &Method, path: &str, body: &[u8]) -> (u16, Value) {
+        let b: Value = serde_json::from_slice(body).unwrap_or(json!({}));
+        let text = |k: &str| b[k].as_str().unwrap_or_default().trim().to_string();
+        let parts: Vec<&str> = path.trim_start_matches("/api/").split('/').collect();
+        let gone = (404, json!({"detail": "No such listing of yours."}));
+        let mine = |f: &Self, lid: &str| f.listings.iter().position(|x| x["id"] == lid && owned(x));
+        let version = |f: &Self, i: usize, vid: &str| f.listings[i]["versions"].as_array().unwrap().iter().position(|v| v["id"] == vid);
+        match (method.as_str(), parts.as_slice()) {
+            ("POST", ["listings"]) => {
+                if text("title").is_empty() {
+                    return invalid("title is required");
+                }
+                if text("version_label").is_empty() {
+                    return invalid("version_label is required");
+                }
+                self.made += 1;
+                let x = json!({"id": format!("lst_m{:04}", self.made), "title": text("title"), "kind": "map", "owner_id": ME.0,
+                    "authors": [{"user_id": ME.0, "username": ME.1, "is_owner": true}], "description": text("description"),
+                    "tags": b["tags"].as_array().cloned().unwrap_or_default(), "visibility": b["visibility"].as_str().unwrap_or("public"),
+                    "upvote_count": 0, "downvote_count": 0, "vote_count": 0, "view_count": 0, "downloads": 0, "status": "draft",
+                    "created_at": utc_iso(), "updated_at": utc_iso(), "versions": []});
+                self.listings.push(x);
+                let i = self.listings.len() - 1;
+                self.draft(i, &text("version_label"), &text("release_notes"));
+                (201, self.listings[i].clone())
+            }
+            ("PATCH", ["listings", lid]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                if text("title").is_empty() {
+                    return invalid("title is required");
+                }
+                for k in ["title", "description", "tags", "visibility"] {
+                    self.listings[i][k] = b.get(k).cloned().unwrap_or(Value::Null); // what's left out is reset, as Forge does
+                }
+                self.listings[i]["updated_at"] = json!(utc_iso());
+                (200, self.listings[i].clone())
+            }
+            ("DELETE", ["listings", lid]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                self.listings.remove(i);
+                self.changes.push(json!({"listing_id": lid, "status": "withdrawn", "updated_at": utc_iso()}));
+                (204, Value::Null)
+            }
+            ("POST", ["listings", lid, "versions"]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                if self.listings[i]["versions"].as_array().unwrap().iter().any(|v| v["status"] == "draft") {
+                    return (409, json!({"detail": "This listing already has a draft version. Publish or discard it first."}));
+                }
+                if text("version_label").is_empty() {
+                    return invalid("version_label is required");
+                }
+                self.draft(i, &text("version_label"), &text("release_notes"));
+                (201, self.listings[i].clone())
+            }
+            ("PATCH", ["listings", lid, "versions", vid]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                let Some(j) = version(self, i, vid) else { return gone };
+                for k in ["version_label", "release_notes"] {
+                    if let Some(v) = b.get(k) {
+                        self.listings[i]["versions"][j][k] = v.clone();
+                    }
+                }
+                (200, self.listings[i].clone())
+            }
+            ("DELETE", ["listings", lid, "versions", vid]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                let Some(j) = version(self, i, vid) else { return gone };
+                let x = &mut self.listings[i];
+                let live = x["versions"].as_array().unwrap().iter().filter(|v| v["status"] == "published").count();
+                if x["versions"][j]["status"] == "draft" {
+                    x["versions"].as_array_mut().unwrap().remove(j);
+                } else if live < 2 {
+                    return (409, json!({"detail": "At least one published version must remain. Delete the listing instead."}));
+                } else {
+                    x["versions"][j]["status"] = json!("withdrawn");
+                    let newest = x["versions"].as_array().unwrap().iter().find(|v| v["status"] == "published").cloned().unwrap();
+                    x["latest_version"] = json!({"id": newest["id"], "version_label": newest["version_label"]});
+                    self.changes.push(json!({"listing_id": lid, "withdrawn_version_ids": [vid], "updated_at": utc_iso()}));
+                }
+                (204, Value::Null)
+            }
+            ("POST", ["listings", lid, "versions", vid, "uploads"]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                if !version(self, i, vid).is_some_and(|j| self.listings[i]["versions"][j]["status"] == "draft") {
+                    return (409, json!({"detail": "Files go onto a draft version."}));
+                }
+                let name = text("original_filename");
+                let size = b["file_size"].as_u64().unwrap_or(0) as usize;
+                if !["json", "mvar", "bin"].iter().any(|e| name.to_lowercase().ends_with(&format!(".{e}"))) {
+                    return (415, json!({"detail": "Unsupported file type."}));
+                }
+                if size == 0 || size as u64 > crate::forge::MAX_UPLOAD {
+                    return (413, json!({"detail": "Files must be between 1 byte and 100 MiB."}));
+                }
+                self.made += 1;
+                let id = format!("upl_m{:04}", self.made);
+                self.uploads.insert(id.clone(), Up { lid: lid.to_string(), vid: vid.to_string(), name, size, data: vec![], next: 0 });
+                (201, json!({"id": id, "chunk_size": CHUNK, "received_size": 0, "next_chunk_index": 0}))
+            }
+            ("PUT", ["files", "uploads", id, "chunks", index]) => {
+                let Some(u) = self.uploads.get_mut(*id) else { return (410, json!({"detail": "This upload has expired."})) };
+                if index.parse::<u64>().ok() != Some(u.next) || body.len() > CHUNK || u.data.len() + body.len() > u.size {
+                    return (409, json!({"detail": "That isn't the chunk this upload expects next."}));
+                }
+                u.data.extend_from_slice(body);
+                u.next += 1;
+                (200, json!({"id": id, "received_size": u.data.len(), "next_chunk_index": u.next}))
+            }
+            ("POST", ["listings", "uploads", id, "complete"]) => {
+                let Some(u) = self.uploads.remove(*id) else { return (410, json!({"detail": "This upload has expired."})) };
+                if u.data.len() != u.size {
+                    return (409, json!({"detail": "The upload isn't finished."}));
+                }
+                let Some(i) = mine(self, &u.lid) else { return gone };
+                let sha = hex::encode(Sha256::digest(&u.data));
+                let x = &self.listings[i];
+                let label = x["versions"].as_array().unwrap().iter().find(|v| v["id"] == u.vid).map(|v| v["version_label"].clone()).unwrap_or_default();
+                let man = self.manifests.entry(u.vid.clone()).or_insert_with(|| json!({"listing_id": x["id"], "version_id": u.vid, "version_label": label,
+                    "kind": x["kind"], "reference": slug(x["title"].as_str().unwrap_or_default()), "assets": []}));
+                man["assets"].as_array_mut().unwrap().push(json!({"path": u.name, "size": u.size, "sha256": sha}));
+                self.blobs.insert(sha.clone(), u.data);
+                (200, json!({"id": id, "status": "complete", "sha256": sha}))
+            }
+            ("POST", ["listings", lid, "versions", vid, "publish"]) => {
+                let Some(i) = mine(self, lid) else { return gone };
+                let Some(j) = version(self, i, vid) else { return gone };
+                if !self.manifests.get(*vid).is_some_and(|m| !m["assets"].as_array().unwrap().is_empty()) {
+                    return (409, json!({"detail": "Upload at least one file before publishing."}));
+                }
+                let x = &mut self.listings[i];
+                x["versions"][j]["status"] = json!("published");
+                x["status"] = json!("published");
+                x["latest_version"] = json!({"id": vid, "version_label": x["versions"][j]["version_label"]});
+                x["updated_at"] = json!(utc_iso());
+                self.changes.push(json!({"listing_id": lid, "published_version_ids": [vid], "updated_at": utc_iso()}));
+                (200, self.listings[i].clone())
+            }
+            _ => (405, json!({"detail": "Method not allowed."})),
+        }
+    }
 }
 
 type Shared = Arc<Mutex<FakeForge>>;
 
-async fn api(State(f): State<Shared>, UrlPath(rest): UrlPath<String>, Query(q): Query<HashMap<String, String>>, h: HeaderMap) -> Response {
+async fn api(State(f): State<Shared>, UrlPath(rest): UrlPath<String>, Query(q): Query<HashMap<String, String>>, method: Method, h: HeaderMap, body: Bytes) -> Response {
     let path = format!("/api/{rest}");
     let mut f = f.lock();
     if h.get("Authorization").and_then(|v| v.to_str().ok()) != Some(&format!("Bearer {DEMO_KEY}")) {
@@ -301,7 +491,10 @@ async fn api(State(f): State<Shared>, UrlPath(rest): UrlPath<String>, Query(q): 
     }
     f.hits.push_back(now);
     headers.insert("X-RateLimit-Remaining", HeaderValue::from_str(&(120 - f.hits.len()).to_string()).unwrap());
-    let (status, body) = f.route(&path, &q);
+    let (status, body) = if method == Method::GET { f.route(&path, &q) } else { f.write(&method, &path, &body) };
+    if status == 204 {
+        return (StatusCode::NO_CONTENT, headers).into_response();
+    }
     (StatusCode::from_u16(status).unwrap(), headers, axum::Json(body)).into_response()
 }
 
@@ -319,7 +512,7 @@ pub async fn start(tasks: &mut Vec<tokio::task::JoinHandle<()>>) -> (String, Str
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a local port for the demo Forge");
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     fake.lock().base = base.clone();
-    let app = Router::new().route("/api/{*rest}", get(api)).route("/assets/{sha}", get(asset)).with_state(fake.clone());
+    let app = Router::new().route("/api/{*rest}", any(api)).route("/assets/{sha}", get(asset)).with_state(fake.clone());
     tasks.push(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     }));
@@ -343,4 +536,45 @@ pub async fn start(tasks: &mut Vec<tokio::task::JoinHandle<()>>) -> (String, Str
         }
     }));
     (base, DEMO_KEY.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forge::{listing_id, versions_of, ForgeClient};
+    use crate::util::Secret;
+
+    #[tokio::test]
+    async fn publish_edit_withdraw_delete() {
+        let mut tasks = vec![];
+        let (base, key) = start(&mut tasks).await;
+        let f = ForgeClient::new(Secret::new(&key), &base, None).unwrap();
+        let quiet = |_: String| {};
+        let before = f.mine().await.unwrap().len();
+        let file = vec![7u8; 2 * CHUNK + 5];
+        let info = json!({"title": "Test Map", "version_label": "1.0", "visibility": "public", "tags": ["test"]});
+        let x = f.publish(None, &info, &[("test.mvar".into(), file.clone())], &quiet).await.unwrap();
+        let lid = listing_id(&x);
+        assert_eq!(x["status"], "published");
+        assert_eq!(f.mine().await.unwrap().len(), before + 1);
+        let v1 = versions_of(&x)[0]["id"].as_str().unwrap().to_string();
+        let man = f.get(&format!("/api/listings/{lid}/versions/{v1}/manifest"), &[], 0.0, false, false).await.unwrap();
+        assert_eq!(man["assets"][0]["size"], file.len());
+
+        let y = f.publish(Some(&lid), &json!({"version_label": "1.1", "release_notes": "more"}), &[("b.json".into(), b"{}".to_vec())], &quiet).await.unwrap();
+        let v2 = versions_of(&y)[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(y["latest_version"]["id"], v2.as_str());
+        let e = f.change("edit", &lid, "", &json!({"title": "Renamed"})).await.unwrap();
+        assert_eq!((e["title"].as_str(), e["tags"][0].as_str()), (Some("Renamed"), Some("test"))); // the rest kept, not reset
+        f.change("withdraw", &lid, &v2, &json!({})).await.unwrap();
+        assert_eq!(f.change("withdraw", &lid, &v1, &json!({})).await.unwrap_err().status, 409); // the last one stays
+
+        let bad = f.publish(None, &json!({"title": "Nope", "version_label": "1"}), &[("x.txt".into(), b"hi".to_vec())], &quiet).await.unwrap_err();
+        assert_eq!(bad.status, 415);
+        assert!(bad.text.contains("Nothing was left half-done"));
+        assert_eq!(f.mine().await.unwrap().len(), before + 1);
+        f.change("delete", &lid, "", &json!({})).await.unwrap();
+        assert_eq!(f.mine().await.unwrap().len(), before);
+        tasks.iter().for_each(|t| t.abort());
+    }
 }

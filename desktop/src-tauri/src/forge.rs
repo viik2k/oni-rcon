@@ -1,6 +1,7 @@
 //! ReclaimerForge (www.reclaimerforge.net): the community catalog of forged maps, gametypes and playlists, read with
-//! the operator's own API key. No key ships with oni-rcon, and it asks for nothing past catalog:read and
-//! assets:download. The key lives here, in the backend: the window never sees it.
+//! the operator's own API key, and published to with it when the key has the write scopes (listings:write,
+//! files:upload, listings:publish, listings:delete). No key ships with oni-rcon. The key lives here, in the backend:
+//! the window never sees it, and only files the operator picked in this backend's own file dialog are uploaded.
 //!
 //! A Bearer key over HTTPS; 120 requests per 60 s per key, reported in X-RateLimit-Limit, -Remaining and -Reset (Unix
 //! seconds), and Retry-After on a 429. Field names are read tolerantly, so another spelling of the same thing works.
@@ -8,6 +9,7 @@ use crate::util::{num, parse_iso, pick, pick_str, scrub, utc_iso_at, write_atomi
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use regex::Regex;
+use reqwest::Method;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -23,8 +25,10 @@ const RESERVE: i64 = 20; // of a key's requests each minute, kept back for the o
 const MAX_WAIT: f64 = 60.0;
 const MAX_JSON: usize = 8 << 20;
 pub const MAX_ASSET: i64 = 1 << 30;
+pub const MAX_UPLOAD: u64 = 100 << 20;
 pub const WITHDRAWN: &[&str] = &["withdrawn", "removed", "unlisted", "taken_down", "takedown", "deleted"];
 const UNPUBLISHED: &[&str] = &["draft", "pending", "unpublished"];
+type Body = Option<(&'static str, Vec<u8>)>;
 static UNSAFE: Lazy<Regex> = Lazy::new(|| Regex::new("[\x00-\x08\x0b-\x1f\x7f-\u{9f}\u{202a}-\u{202e}\u{2066}-\u{2069}]").unwrap());
 
 // --- errors, in words ------------------------------------------------------------------------------------------
@@ -42,10 +46,12 @@ impl ForgeError {
         let detail: String = scrub(detail).chars().take(300).collect();
         let (short, words) = match status {
             401 => ("KEY REFUSED", "ReclaimerForge refused your API key: it's mistyped, revoked or expired. Make a new one on reclaimerforge.net and load it again (k on F6)."),
-            403 => ("MISSING SCOPE", "Your key isn't allowed to do that. oni-rcon needs a key with the catalog:read and assets:download scopes, and nothing more. The account behind it also needs the Developer role and a verified email, or its keys stop working."),
+            403 => ("MISSING SCOPE", "Your key isn't allowed to do that. Browsing needs catalog:read and installing assets:download; publishing needs listings:write, files:upload and listings:publish; withdrawing and deleting need listings:delete. The account behind it also needs the Developer role and a verified email, or its keys stop working."),
             404 => ("NOT AVAILABLE", "That listing or version isn't available. It may have been withdrawn or made private."),
             409 => ("CHANGED MEANWHILE", "That listing changed state while you were looking at it. Refresh (Ctrl+R) and try again."),
-            413 => ("TOO LARGE", "ReclaimerForge won't serve something that large."),
+            410 => ("UPLOAD EXPIRED", "That upload took too long and ReclaimerForge let it go. Publish again to start over."),
+            413 => ("TOO LARGE", "ReclaimerForge won't take or serve something that large: a file can be 100 MiB at most."),
+            415 => ("WRONG KIND OF FILE", "ReclaimerForge takes Reclaimer map, gametype and playlist files (.json, .mvar, .bin), and that isn't one."),
             422 => ("NOT ACCEPTED", "ReclaimerForge couldn't accept that request."),
             429 => ("RATE LIMITED", "Your key has used its requests for this minute. Wait a moment and try again."),
             503 => ("FORGE BUSY", "ReclaimerForge is down for a moment. Try again shortly."),
@@ -59,7 +65,7 @@ impl ForgeError {
             if let Some(r) = retry_after.filter(|r| *r > 0.0) {
                 text = format!("Your key has used its requests for this minute. Try again in {}s.", r as i64 + 1);
             }
-        } else if matches!(status, 0 | 409 | 422 | 502) && !detail.is_empty() {
+        } else if matches!(status, 0 | 403 | 409 | 413 | 415 | 422 | 502) && !detail.is_empty() {
             text += &format!(" ({detail})");
         }
         ForgeError { status, detail, retry_after, short, text }
@@ -117,6 +123,18 @@ pub fn id_list(v: Option<&Value>) -> Vec<String> {
         }
     }
     out
+}
+
+fn enc(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// The listing in a reply, whether or not it comes wrapped.
+fn inner(reply: Value) -> Value {
+    match pick(&reply, &["listing", "item", "data"]) {
+        Some(inner @ Value::Object(_)) => inner.clone(),
+        _ => reply,
+    }
 }
 
 pub fn listing_id(x: &Value) -> String {
@@ -487,19 +505,22 @@ impl ForgeClient {
         }
     }
 
-    /// One GET, following up to 5 redirects; the key goes only to Forge's own origin.
-    async fn send(&self, url: &str, accept_json: bool) -> Result<reqwest::Response, ForgeError> {
+    /// One request; a GET follows up to 5 redirects, and the key goes only to Forge's own origin.
+    async fn send(&self, method: &Method, url: &str, accept_json: bool, body: &Body) -> Result<reqwest::Response, ForgeError> {
         let mut u = url.to_string();
         for _ in 0..6 {
-            let mut req = self.client_for(&u).get(&u);
+            let mut req = self.client_for(&u).request(method.clone(), &u);
             if accept_json {
                 req = req.header("Accept", "application/json");
+            }
+            if let Some((kind, bytes)) = body {
+                req = req.header("Content-Type", *kind).body(bytes.clone());
             }
             if self.key.is_set() && origin(&u) == self.origin {
                 req = req.header("Authorization", format!("Bearer {}", self.key.value()));
             }
             let r = req.send().await.map_err(|e| ForgeError::new(0, &e.without_url().to_string(), None))?;
-            if r.status().is_redirection() {
+            if r.status().is_redirection() && method == Method::GET {
                 let loc = r.headers().get("Location").and_then(|v| v.to_str().ok()).unwrap_or_default();
                 let next = url::Url::parse(&u).and_then(|b| b.join(loc)).map_err(|e| ForgeError::new(502, &e.to_string(), None))?;
                 if !secure(next.as_str()) {
@@ -513,7 +534,7 @@ impl ForgeClient {
         Err(ForgeError::new(502, "too many redirects", None))
     }
 
-    async fn get_raw(&self, url: &str, background: bool) -> Result<Value, ForgeError> {
+    async fn exchange(&self, method: Method, url: &str, body: Body, background: bool) -> Result<Value, ForgeError> {
         for attempt in 0..4 {
             let hold = self.quota.lock().wait(background);
             if hold > 0.0 {
@@ -522,7 +543,7 @@ impl ForgeClient {
                 }
                 tokio::time::sleep(Duration::from_secs_f64(hold + crate::util::rnd(0.0, 1.0))).await;
             }
-            let r = self.send(url, true).await?;
+            let r = self.send(&method, url, true, &body).await?;
             self.quota.lock().read(r.headers());
             let status = r.status().as_u16();
             let ra = retry_after(r.headers());
@@ -532,6 +553,8 @@ impl ForgeClient {
                     return Err(ForgeError::new(502, "reply too large", None));
                 }
                 return match serde_json::from_slice::<Value>(&body) {
+                    _ if body.is_empty() => Ok(json!({})), // a 204, as a DELETE may send
+                    Ok(Value::Null) => Ok(json!({})),
                     Ok(Value::Array(a)) => Ok(json!({"items": a})), // an unpaginated array, as /api/favourites sends
                     Ok(v @ Value::Object(_)) => Ok(v),
                     _ => Err(ForgeError::new(502, "not a JSON object", None)),
@@ -539,7 +562,10 @@ impl ForgeClient {
             }
             let detail = serde_json::from_slice::<Value>(&body)
                 .ok()
-                .map(|d| pick_str(&d, &["message", "detail", "error", "title"]))
+                .map(|d| match d.get("detail") {
+                    Some(Value::Array(a)) => a.first().map(|e| pick_str(e, &["msg", "message"])).unwrap_or_default(), // a validation list
+                    _ => pick_str(&d, &["message", "detail", "error", "title"]),
+                })
                 .unwrap_or_default();
             let err = ForgeError::new(status, &detail, ra);
             if !(status == 429 || status == 503) || attempt == 3 {
@@ -567,7 +593,7 @@ impl ForgeClient {
                 return Ok(hit);
             }
         }
-        match self.get_raw(&url, background).await {
+        match self.exchange(Method::GET, &url, None, background).await {
             Ok(body) => {
                 self.cache.put(&url, &body);
                 Ok(body)
@@ -605,7 +631,7 @@ impl ForgeClient {
     }
 
     fn listing_path(lid: &str) -> String {
-        format!("/api/listings/{}", url::form_urlencoded::byte_serialize(lid.as_bytes()).collect::<String>())
+        format!("/api/listings/{}", enc(lid))
     }
 
     pub fn forget(&self, lid: &str) {
@@ -614,10 +640,7 @@ impl ForgeClient {
 
     pub async fn listing(&self, lid: &str, background: bool) -> Result<Value, ForgeError> {
         let reply = self.get(&Self::listing_path(lid), &[], if background { 0.0 } else { 60.0 }, background, !background).await?;
-        Ok(match pick(&reply, &["listing", "item", "data"]) {
-            Some(inner @ Value::Object(_)) => inner.clone(),
-            _ => reply,
-        })
+        Ok(inner(reply))
     }
 
     pub async fn manifest(&self, lid: &str, vid: &str) -> Result<Value, ForgeError> {
@@ -648,6 +671,116 @@ impl ForgeClient {
             out.extend(items_of(&reply));
         }
         Ok((out, as_of))
+    }
+
+    // --- publishing -------------------------------------------------------------------------------------------
+    /// One write: a JSON body (or none) in, the reply out. Never cached, never served stale.
+    pub async fn write(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value, ForgeError> {
+        if !self.key.is_set() {
+            return Err(ForgeError::new(401, "no key loaded", None));
+        }
+        self.exchange(method, &self.url(path, &[]), body.map(|b| ("application/json", b.to_string().into_bytes())), false).await
+    }
+
+    /// The listings this key's account owns or is an author of, drafts included.
+    pub async fn mine(&self) -> Result<Vec<Value>, ForgeError> {
+        Ok(items_of(&self.get("/api/listings/mine", &[], 0.0, false, false).await?))
+    }
+
+    pub async fn my_listing(&self, lid: &str) -> Result<Value, ForgeError> {
+        Ok(inner(self.get(&format!("/api/listings/mine/{}", enc(lid)), &[], 0.0, false, false).await?))
+    }
+
+    /// One file onto a draft version, in the chunks Forge asks for, picking up wherever it says it got to.
+    async fn upload(&self, lid: &str, vid: &str, name: &str, bytes: &[u8]) -> Result<Value, ForgeError> {
+        let start = self
+            .write(Method::POST, &format!("{}/versions/{}/uploads", Self::listing_path(lid), enc(vid)),
+                Some(json!({"original_filename": name, "file_size": bytes.len(), "file_type": "auto"})))
+            .await?;
+        let id = pick_str(&start, &["id", "upload_id"]);
+        if id.is_empty() {
+            return Err(ForgeError::new(502, "the upload was given no id", None));
+        }
+        let chunk = num(start.get("chunk_size")).filter(|c| *c >= 1.0).unwrap_or(8.0 * 1048576.0) as usize;
+        let mut at = num(start.get("received_size")).unwrap_or(0.0) as usize;
+        let mut index = num(start.get("next_chunk_index")).unwrap_or(0.0) as u64;
+        while at < bytes.len() {
+            let end = (at + chunk).min(bytes.len());
+            let url = self.url(&format!("/api/files/uploads/{}/chunks/{index}", enc(&id)), &[]);
+            let r = self.exchange(Method::PUT, &url, Some(("application/octet-stream", bytes[at..end].to_vec())), false).await?;
+            let got = num(r.get("received_size")).map(|n| n as usize).unwrap_or(end);
+            if got <= at {
+                return Err(ForgeError::new(502, "the upload stopped moving forward", None));
+            }
+            at = got;
+            index = num(r.get("next_chunk_index")).map(|n| n as u64).unwrap_or(index + 1);
+        }
+        self.write(Method::POST, &format!("/api/listings/uploads/{}/complete", enc(&id)), None).await
+    }
+
+    /// Files onto Forge in one go: a new listing (`lid` None, `info` its fields) or a new version of `lid` (`info`
+    /// its version_label and release_notes), every file uploaded, then published. A draft it made but couldn't
+    /// publish is taken down again, so nothing half-done is left behind.
+    pub async fn publish(&self, lid: Option<&str>, info: &Value, files: &[(String, Vec<u8>)], say: &(dyn Fn(String) + Send + Sync)) -> Result<Value, ForgeError> {
+        let x = inner(match lid {
+            None => self.write(Method::POST, "/api/listings", Some(info.clone())).await?,
+            Some(l) => {
+                let notes = json!({"version_label": info["version_label"], "release_notes": info["release_notes"]});
+                self.write(Method::POST, &format!("{}/versions", Self::listing_path(l)), Some(notes)).await?
+            }
+        });
+        let made = listing_id(&x);
+        let vid = versions_of(&x).iter().find(|v| pick_str(v, &["status"]) == "draft").map(version_id).unwrap_or_default();
+        if made.is_empty() || vid.is_empty() {
+            return Err(ForgeError::new(502, "it made no draft version to upload to", None));
+        }
+        let done = async {
+            for (name, bytes) in files {
+                say(format!("  uploading {name}  ({} bytes)", bytes.len()));
+                self.upload(&made, &vid, name, bytes).await?;
+            }
+            self.write(Method::POST, &format!("{}/versions/{}/publish", Self::listing_path(&made), enc(&vid)), None).await
+        }
+        .await;
+        match done {
+            Ok(x) => {
+                self.forget(&made);
+                Ok(inner(x))
+            }
+            Err(mut e) => {
+                // ponytail: best effort; a key without listings:delete leaves the draft, which MINE shows
+                let path = if lid.is_none() { Self::listing_path(&made) } else { format!("{}/versions/{}", Self::listing_path(&made), enc(&vid)) };
+                if self.write(Method::DELETE, &path, None).await.is_ok() {
+                    e.text += " Nothing was left half-done on ReclaimerForge.";
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// A change to something this key's account owns: "edit" a listing's details, "notes" for a version, "withdraw"
+    /// a version, or "delete" the whole listing.
+    pub async fn change(&self, what: &str, lid: &str, vid: &str, change: &Value) -> Result<Value, ForgeError> {
+        let version = format!("{}/versions/{}", Self::listing_path(lid), enc(vid));
+        let r = match what {
+            "edit" => {
+                // Forge resets what a PATCH leaves out, so everything the listing has now goes back with the change
+                let x = self.my_listing(lid).await?;
+                let mut body = serde_json::Map::new();
+                for k in ["title", "description", "tags", "visibility", "is_modded_map", "workshop_urls", "min_players", "max_players"] {
+                    if let Some(v) = change.get(k).or(x.get(k)).filter(|v| !v.is_null()) {
+                        body.insert(k.into(), v.clone());
+                    }
+                }
+                self.write(Method::PATCH, &Self::listing_path(lid), Some(Value::Object(body))).await?
+            }
+            "notes" => self.write(Method::PATCH, &version, Some(change.clone())).await?,
+            "withdraw" => self.write(Method::DELETE, &version, None).await?,
+            "delete" => self.write(Method::DELETE, &Self::listing_path(lid), None).await?,
+            _ => return Err(ForgeError::new(422, what, None)),
+        };
+        self.forget(lid);
+        Ok(inner(r))
     }
 
     /// The asset, fetched once into the cache and checked against the manifest's size and SHA-256 before anything can
@@ -691,7 +824,7 @@ impl ForgeClient {
         }
         let part = path.with_file_name(format!("{}.{}.{}.part", path.file_name().unwrap().to_string_lossy(), std::process::id(), crate::util::rnd(0.0, 4e9) as u32));
         let result = async {
-            let r = self.send(url, false).await.map_err(Ok)?;
+            let r = self.send(&Method::GET, url, false, &None).await.map_err(Ok)?;
             if origin(url) == self.origin {
                 self.quota.lock().read(r.headers());
             }

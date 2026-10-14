@@ -144,6 +144,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Install", "i puts the selected version on this server. Every file is checked against Forge's manifest before it's copied into the server's content_dir and again once it's there, and replacing anything asks first. ◉ marks what's installed here; ▲ means a newer version is out."],
     ["Load now", "l loads an installed map or gametype, once the server lists it. Installing never loads anything by itself."],
     ["Updates", "Every few minutes oni-rcon asks Forge what changed among what you've installed. A new version gets a toast and ▲. A withdrawn listing, or the very version you installed, is flagged ⚠ in the F3 rotation and on F6, and turns the CONDITION amber until you acknowledge it: s to INSTALLED HERE, pick it, then a."],
+    ["Publish", "p puts your own files on Forge: pick them, fill in one form, and they're uploaded and published, or nothing is left behind. MINE (s) lists what's yours: u publishes a new version, e edits the listing, x withdraws the selected version, and DELETE LISTING takes it all down. It needs the write scopes on your key and a verified email."],
     ["Your key", "Forge takes your own API key: k loads one. It's only ever sent to reclaimerforge.net, and it never reaches the window."],
     ["Thanks", CREDIT],
   ]],

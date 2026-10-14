@@ -29,6 +29,9 @@ seven tabs, the dialogs, the field manual, the Halo ASCII Archive boot and the S
   colour pulse is a recolour). It's been run against 80 servers sending about 16 events a second.
 - **The Forge key never reaches the window.** It lives in the backend, goes only to reclaimerforge.net, and anything
   shaped like a key is blanked in whatever the backend sends to the window.
+- **It publishes to Forge.** With a key that has the write scopes, `p` on F6 uploads your own maps, gametypes and
+  playlists and publishes them, and MINE lists your listings to update, edit, withdraw or delete. The files are picked
+  in the backend's own dialog, so the window can't name a file to upload.
 - **Updates install themselves, once you say yes.** At start it checks GitHub for a newer desktop release and asks;
   the download is verified against the signing key built into the app, installed, and the console restarts
   (`ONI_RCON_NO_UPDATE=1` turns that off). The Linux `.deb`/`.rpm` can't update in place, so they get a link instead.
