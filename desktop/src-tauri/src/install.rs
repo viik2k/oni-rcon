@@ -164,6 +164,17 @@ impl Target {
         }
     }
 
+    /// The names in a folder near the content; none when it isn't there.
+    pub async fn list(&self, rel: &str) -> Result<Vec<String>, String> {
+        match self {
+            Target::Local(root) => Ok(std::fs::read_dir(root.join(rel)).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()),
+            Target::Ssh { dest, root } => {
+                let out = crate::health::run(&format!("ls -1A -- {} 2>/dev/null; true", rpath(root, rel)), dest, 30.0).await?;
+                Ok(out.lines().map(str::to_string).collect())
+            }
+        }
+    }
+
     pub async fn existing(&self, paths: &[String]) -> Result<Vec<String>, String> {
         match self {
             Target::Local(root) => Ok(paths.iter().filter(|p| root.join(p).exists()).cloned().collect()),

@@ -15,9 +15,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "reconnect", "restart"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "reconnect", "restart"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -42,6 +42,7 @@ export const TIPS: Record<string, string> = {
   "op-maxping": "Stop players with a high ping from joining.",
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
   "op-reconnect": "Drop this connection and sign in again.",
+  "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
@@ -127,6 +128,17 @@ export async function player(what: string, p: Dict | undefined) {
   }
 }
 
+/** A dedicated.toml setting saved, then the restart it needs offered. */
+async function saveSetting(st: Station, key: string, value: unknown, what: string, saved: string): Promise<void> {
+  try {
+    await invoke("server_setting", { index: st.index, key, value });
+  } catch (e) {
+    return oni.notify(String(e), `${what} NOT SAVED · ${st.label}`, "error", 15);
+  }
+  if (st.canRestart) return op("restart");
+  return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
+}
+
 export async function op(name: string) {
   const st = oni.cur, s = st.data.status ?? {};
   if (name === "broadcast") return broadcast();
@@ -150,14 +162,23 @@ export async function op(name: string) {
   if (name === "capacity") {
     const f = await oni.form("PLAYER CAPACITY", [["n", "Most players at once (1 to 63)", String(s.max_players ?? "")]], { verb: "SAVE", required: ["n"],
       note: "Saved in the server's dedicated.toml: it takes effect when the server restarts." });
-    if (!f) return;
+    if (f) return saveSetting(st, "max_players", Number(f.n), "CAPACITY", `${f.n} players`);
+    return;
+  }
+  if (name === "playlist") {
+    let files: string[];
     try {
-      await invoke("server_setting", { index: st.index, key: "max_players", value: Number(f.n) });
+      files = await invoke<string[]>("playlists", { index: st.index });
     } catch (e) {
-      return oni.notify(String(e), `CAPACITY NOT SAVED · ${st.label}`, "error", 15);
+      return oni.notify(String(e), `PLAYLISTS · ${st.label}`, "error", 15);
     }
-    if (st.canRestart) return op("restart");
-    return oni.notify(`Saved: ${f.n} players once the server restarts.`, `CAPACITY · ${st.label}`);
+    // ponytail: Forge installs into the content folder, taken as dedicated.toml's default "content"
+    for (const e of Object.values<Dict>(oni.forgeState.servers?.[st.where] ?? {}))
+      if (e.kind === "playlist" && e.files?.[0]?.path) files.push(`content/${e.files[0].path}`);
+    if (!files.length) return oni.notify("No playlists in the server's playlists folder yet: install one from F6.", `PLAYLISTS · ${st.label}`, "warning");
+    const got = await oni.pick("SWITCH PLAYLIST", files.map((f) => [f, f]));
+    if (got) return saveSetting(st, "playlist", got, "PLAYLIST", got);
+    return;
   }
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
   if (["load", "map", "mode", "nextmap"].includes(name)) {

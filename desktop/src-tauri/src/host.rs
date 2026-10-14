@@ -238,6 +238,11 @@ pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value
         .iter_mut()
         .find(|t| port(t, "rcon_port").or(port(t, "port")) == Some(i64::from(rcon_port)))
         .ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    if key == "playlist" {
+        for other in ["map", "game", "base_map", "variant", "campaign"] {
+            t.remove(other); // a server plays from one source
+        }
+    }
     t[key] = Item::Value(v);
     Ok(doc.to_string())
 }
@@ -831,6 +836,11 @@ mod tests {
         assert!(text.contains("# set one to turn on the remote console"), "comments kept");
         assert!(set_server_key(&text, 49176, "max_players", 4.into()).unwrap().contains("max_players = 4"));
         assert!(set_server_key(TOML, 1234, "max_players", 4.into()).is_err());
+        let text = set_server_key(&text.replace("rcon_port = 50177", "rcon_port = 50177
+map = \"Valhalla\"
+game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][1].get("map"), t["server"][1]["playlist"].as_str()), (None, Some("playlists/a.playlist.json")), "a playlist replaces map + game");
     }
 
     #[test]

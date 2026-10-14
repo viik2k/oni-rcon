@@ -448,6 +448,16 @@ async fn restart_server(index: usize, app: State<'_, App>) -> Result<(), String>
     health::run(&s.restart_cmd, &s.ssh, 180.0).await.map(|_| ())
 }
 
+/// The playlists in the server folder's playlists/, as dedicated.toml names them.
+#[tauri::command]
+async fn playlists(index: usize, app: State<'_, App>) -> Result<Vec<String>, String> {
+    let h = hub_of(&app)?;
+    let t = install::target_for(&h.stations.get(index).ok_or("no such server")?.server)?;
+    let mut out: Vec<String> = t.list("../playlists").await?.into_iter().filter(|n| n.ends_with(".json")).map(|n| format!("playlists/{n}")).collect();
+    out.sort();
+    Ok(out)
+}
+
 /// A setting in the server's own dedicated.toml, the one beside its content_dir: it takes effect at the next start.
 #[tauri::command]
 async fn server_setting(index: usize, key: String, value: Value, app: State<'_, App>) -> Result<(), String> {
@@ -455,6 +465,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
     let v: toml_edit::Value = match (key.as_str(), value.as_i64()) {
         ("max_players", Some(n)) if (1..=63).contains(&n) => n.into(),
         ("max_players", _) => return Err("A server holds 1 to 63 players.".into()),
+        ("playlist", _) => install::safe_path(value.as_str().unwrap_or_default()).map_err(|_| format!("Not a playlist in the server folder: {value}"))?.into(),
         _ => return Err(format!("{key} can't be set from here")),
     };
     if let Some(d) = h.hsetup.demo.clone() {
@@ -709,7 +720,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
         ])
