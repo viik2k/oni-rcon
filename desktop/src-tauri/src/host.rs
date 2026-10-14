@@ -26,7 +26,7 @@ const NO_DOCKER: &str = "Docker isn't installed. On Ubuntu: sudo apt install doc
 fn open_ports_note(ports: &[u16], master: u16, upnp: bool) -> String {
     let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(",");
     let how = if cfg!(windows) {
-        format!("In PowerShell as administrator: New-NetFirewallRule -DisplayName \"Reclaimer games\" -Direction Inbound -Protocol UDP -LocalPort {list} -Action Allow; New-NetFirewallRule -DisplayName \"Reclaimer browser\" -Direction Inbound -Protocol TCP -LocalPort {master} -Action Allow")
+        format!("Paste this into any PowerShell (it asks for administrator, which the rules need): Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','New-NetFirewallRule -DisplayName ''Reclaimer games'' -Direction Inbound -Protocol UDP -LocalPort {list} -Action Allow; New-NetFirewallRule -DisplayName ''Reclaimer browser'' -Direction Inbound -Protocol TCP -LocalPort {master} -Action Allow'")
     } else {
         format!("sudo ufw allow {}/udp && sudo ufw allow {master}/tcp", list.replace(',', "/udp && sudo ufw allow "))
     };
