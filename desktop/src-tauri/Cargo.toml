@@ -3,7 +3,7 @@ name = "oni-rcon"
 version = "1.5.0"
 description = "An ONI-themed admin console for Project Reclaimer Halo 3 dedicated servers, over RCON."
 authors = ["Arche Labs"]
-license = "MIT"
+license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.82"
 

@@ -499,4 +499,4 @@ contains no game files.
 
 ## Licence
 
-[MIT](LICENSE) © 2026 Arche Labs
+[GPL-3.0-or-later](LICENSE) © 2026 Arche Labs, with portions © 2026 ibigs, LLC (RifleJock). Releases up to v0.9.0 and desktop-v1.4.1 remain available under MIT; see [NOTICE](NOTICE).
