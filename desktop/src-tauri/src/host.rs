@@ -641,9 +641,11 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
 fn windows_restart(exe: &Path, folder: &Path) -> String {
     let q = |p: &Path| p.display().to_string().replace('\'', "''");
     format!(
-        "taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
+        "cd /d \"{f}\" && \"{e}\" dedicated check >nul 2>&1 || ( echo NOT RESTARTED: dedicated check found problems in the server folder, fix them in dedicated.toml and the playlists: & \"{e}\" dedicated check 2>&1 & exit /b 1 ) & taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
         q(exe),
-        q(folder)
+        q(folder),
+        e = exe.display(),
+        f = folder.display(),
     )
 }
 
@@ -1134,7 +1136,7 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
         std::fs::write(dir.path().join("dedicated.toml"), "[[server]]\nport = 49176\n").unwrap();
         let mut s = Server::new("127.0.0.1", 49176);
         s.content_dir = dir.path().join("content").display().to_string();
-        assert!(default_restart(&s).contains("taskkill"));
+        assert!(default_restart(&s).contains("taskkill") && default_restart(&s).contains("dedicated check")); // a bad toml must not take the running servers down
         s.port = 49177; // not one the folder runs
         assert!(default_restart(&s).is_empty());
         s.port = 49176;

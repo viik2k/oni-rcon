@@ -461,7 +461,11 @@ async fn restart_server(index: usize, app: State<'_, App>) -> Result<(), String>
     if s.restart_cmd.is_empty() {
         return Err("no restart_cmd for this server in the config".into());
     }
-    health::run(&s.restart_cmd, &s.ssh, 180.0).await.map(|_| ())
+    let out = health::run(&s.restart_cmd, &s.ssh, 180.0).await?;
+    match out.trim().strip_prefix("NOT RESTARTED") {
+        Some(_) => Err(out.trim().to_string()), // the servers are still up on their old settings
+        None => Ok(()),
+    }
 }
 
 /// The playlists in the server folder's playlists/, as dedicated.toml names them.
