@@ -3,6 +3,7 @@
 // subscribe to the counters in `useV`; nothing is copied into React state, so a busy fleet repaints only what changed.
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import chime from "./art/superintendent.mp3";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "./art/palette";
@@ -476,18 +477,10 @@ class Oni {
     }, timeout * 1000);
   }
 
-  private audio: AudioContext | null = null;
+  private chime = new Audio(chime);
   bell() {
-    try {
-      this.audio ??= new AudioContext();
-      const o = this.audio.createOscillator(), g = this.audio.createGain();
-      o.frequency.value = 880;
-      g.gain.setValueAtTime(0.07, this.audio.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.0001, this.audio.currentTime + 0.18);
-      o.connect(g).connect(this.audio.destination);
-      o.start();
-      o.stop(this.audio.currentTime + 0.2);
-    } catch { /* no sound to be had */ }
+    this.chime.currentTime = 0;
+    this.chime.play().catch(() => { /* no sound to be had */ });
   }
 
   /** Beep, pulse the station's card, and raise the condition. Unseen unless the operator is looking at that station

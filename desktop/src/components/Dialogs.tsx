@@ -131,7 +131,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["The feed", "Chat, kills, joins, kicks and bans from every server, newest at the bottom. Scroll up to read back; it holds still until you press End."],
     ["Talk back", "Type in the box at the bottom to chat as [Server]. Start with @all to reach every server: they go out a few at a time, and the command log tallies how it went."],
     ["Medals", "Kills carry their Halo 3 medals as they happen: double kill and up, sprees, killjoys."],
-    ["Alerts", "Chat asking for an admin, or naming a cheat, pops up, beeps and turns the CONDITION at the top red. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
+    ["Alerts", "Chat asking for an admin, or naming a cheat, pops up, plays the Superintendent chime and turns the CONDITION at the top red. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
   ]],
   ["F3  OPERATIONS  ·  running the match", [
     ["Buttons", "Change map or mode, queue what plays next, end the round, shuffle teams, run votes, broadcast, and server settings. Anything that ends a game asks first."],
@@ -157,7 +157,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Crashes", "Each server's last crashes, read from its log: SIGNATURE is the known crash (an exception with its code and RVA), BARE is the engine probe failing with no exception, OOM-KILL is a container killed for memory, and CONTAINER-RESTART is one that started again. PLAYERS is how many were on. DROPPED means the RCON connection fell at the same moment."],
     ["Host", "Free memory (amber under twice health_min_free_mb, red under it), swap, the kernel's oom_kill counter, and each container's start time and OOMKilled flag."],
     ["Workaround", "Whether the named systemd service is running, when it last moved a tag, and any warning that the build isn't the pinned one. Hidden without health_service."],
-    ["Alerts", "A new crash, or memory falling under the limit, flashes a banner over every tab (click it away), goes in the F2 feed and beeps."],
+    ["Alerts", "A new crash, or memory falling under the limit, flashes a banner over every tab (click it away), goes in the F2 feed and plays the Superintendent chime."],
     ["Turning it on", "Set health_cmd in the config: this tab says how when it's off. Ctrl+R reads everything now."],
   ]],
   ["SAFETY", [
