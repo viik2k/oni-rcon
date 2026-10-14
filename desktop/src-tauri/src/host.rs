@@ -582,14 +582,32 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         let mut child = c.spawn().map_err(|e| format!("couldn't start the servers: {e}"))?;
         wait_for(&found, say, 180, || matches!(child.try_wait(), Ok(None))).await?;
     }
-    // ponytail: one process runs every server in the folder, so restarting one restarts them all
+    Ok((found_servers(&found, &pw, &folder.join("content"), &windows_restart(&exe, folder)), vec![join_note(&new, &found)]))
+}
+
+// ponytail: one process runs every server in the folder, so restarting one restarts them all
+fn windows_restart(exe: &Path, folder: &Path) -> String {
     let q = |p: &Path| p.display().to_string().replace('\'', "''");
-    let restart = format!(
+    format!(
         "taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
-        q(&exe),
+        q(exe),
         q(folder)
-    );
-    Ok((found_servers(&found, &pw, &folder.join("content"), &restart), vec![join_note(&new, &found)]))
+    )
+}
+
+/// The restart for a server hosted on this computer whose config has no restart_cmd: one added by hand, or before
+/// HOST ONE HERE wrote it. Found only when the server's folder lists that port; empty otherwise.
+pub fn default_restart(s: &Server) -> String {
+    if !cfg!(windows) || !s.ssh.is_empty() || !s.url.is_empty() || !["127.0.0.1", "localhost", "::1"].contains(&s.host.as_str()) {
+        return String::new();
+    }
+    let folder = match Path::new(&s.content_dir).parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(p) => p.to_path_buf(),
+        None => host_folder(find_game().as_deref()),
+    };
+    let exe = folder.join("project-reclaimer.exe");
+    let listed = std::fs::read_to_string(folder.join("dedicated.toml")).is_ok_and(|t| servers_of(&t).iter().any(|f| f.port == s.port));
+    if listed && exe.is_file() { windows_restart(&exe, &folder) } else { String::new() }
 }
 
 fn read_env(text: &str, key: &str) -> String {
@@ -1026,6 +1044,22 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
         assert!(got[0].ping_log.contains("case 50177 in") && got[0].health_cmd.contains("--since {since}"));
         assert!(save_found(&p, vec![s], &[("ping_log".into(), "\"mine\"".into())], "", true).unwrap().is_empty());
         assert!(config::load_config(&p).unwrap().1[0].ping_log.contains("reclaimer-server-2-1"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_local_server_without_restart_cmd_gets_one_from_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("project-reclaimer.exe"), "").unwrap();
+        std::fs::write(dir.path().join("dedicated.toml"), "[[server]]\nport = 49176\n").unwrap();
+        let mut s = Server::new("127.0.0.1", 49176);
+        s.content_dir = dir.path().join("content").display().to_string();
+        assert!(default_restart(&s).contains("taskkill"));
+        s.port = 49177; // not one the folder runs
+        assert!(default_restart(&s).is_empty());
+        s.port = 49176;
+        s.ssh = "me@box".into(); // not on this computer
+        assert!(default_restart(&s).is_empty());
     }
 
     #[test]

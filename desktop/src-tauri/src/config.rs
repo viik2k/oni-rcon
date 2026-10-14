@@ -215,6 +215,9 @@ pub fn load_config(path: &Path) -> Result<(String, Vec<Server>), String> {
             s.health_cmd = if s.url.is_empty() { t.replace("{port}", &s.port.to_string()) } else { String::new() };
         }
     }
+    for s in servers.iter_mut().filter(|s| s.restart_cmd.is_empty()) {
+        s.restart_cmd = crate::host::default_restart(s); // RESTART SERVER stays greyed out without one
+    }
     let by = data.get("by").and_then(Value::as_str).unwrap_or_default().to_string();
     Ok((by, servers))
 }
