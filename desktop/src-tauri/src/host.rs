@@ -434,7 +434,7 @@ async fn stream(mut c: tokio::process::Command, say: Say<'_>, what: &str) -> Res
         if let Some(l) = line.map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()) {
             say(&l);
             tail.push(l);
-            if tail.len() > 6 {
+            if tail.len() > 25 { // `dedicated check` lists every problem at once, so keep room for them all
                 tail.remove(0);
             }
         }
@@ -650,7 +650,9 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         say("Checking the game files, settings and ports (dedicated check)…");
         let mut c = command(&exe.display().to_string());
         c.args(["dedicated", "check"]).current_dir(folder);
-        stream(c, say, "dedicated check").await?;
+        stream(c, say, "dedicated check").await.map_err(|e| {
+            format!("{e}\nYour settings are saved. Fix what it names (a map or game type the server doesn't have goes in the server's content folder; F6 in the console installs them), then press START IT.")
+        })?;
         say("Starting the servers in a window of their own: Ctrl+C there stops them. If Windows asks, allow Project Reclaimer through the firewall.");
         let mut c = std::process::Command::new(&exe);
         c.arg("dedicated").current_dir(folder);
