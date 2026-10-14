@@ -260,7 +260,7 @@ fn slug(name: &str) -> Result<String, String> {
 }
 
 const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "games"];
-const GAME_KEYS: &[&str] = &["map", "game", "name", "weight", "options", "world", "rules"];
+const GAME_KEYS: &[&str] = &["map", "game", "name", "weight", "options", "world", "rules", "anti_cheat", "voice_team_only"];
 
 /// A playlist in the shape the dedicated server reads (version 2), or why it can't be saved. Unknown keys are refused,
 /// the way the server's own import refuses them; a weight of 1 and empty values are left out. Whether each map and game
