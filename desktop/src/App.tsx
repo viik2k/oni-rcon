@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
-import { oni, TABS, useV, type Tab } from "./engine";
+import { bump, oni, TABS, useV, type Tab } from "./engine";
 import { OPS, BAN_OPS, TAB_TIPS, askPassword, bl, broadcast, goto, op, player } from "./actions";
 import { Sidebar } from "./components/Sidebar";
 import { Banner, Footer, Masthead, Toasts } from "./components/Chrome";
@@ -28,9 +28,20 @@ export function setTab(t: Tab) {
   });
 }
 
+/** Search every server's players; open the one picked, on their server, selected. */
+async function findPlayer() {
+  const r = await oni.ask("find", {});
+  if (!r) return;
+  assetsUi.want = r.key;
+  oni.select(r.index);
+  setTab("assets");
+  bump("roster");
+}
+
 function palette(onSetup: () => void) {
   const items: [string, string, () => void][] = [
     ["Go to station", "every station, the busiest first  (g)", goto],
+    ["Find a player", "on any station, by name, tag, clan, team, ID or address  (Ctrl+F)", findPlayer],
     ...oni.stations.map((s, i) => [`Station ${i + 1}: ${s.label}`, s.where, () => oni.select(i)] as [string, string, () => void]),
     ...OPS.map(([o, label]) => [o === "broadcast" ? "Broadcast to stations" : `Ops: ${label.replace(/\b\w+/g, (w) => w[0] + w.slice(1).toLowerCase())}`,
       o === "broadcast" ? "say on this or every station" : `${o} on the selected station`, () => op(o)] as [string, string, () => void]),
@@ -75,7 +86,7 @@ function useKeys(onSetup: () => void) {
       if (ctrl) {
         const k = e.key.toLowerCase();
         const m: Record<string, () => void> = { b: broadcast, r: () => { oni.refresh(); if (oni.tab === "forge") { fg.details.clear(); fg.want = null; forgeLoad(false, true); } },
-          p: () => palette(onSetup) };
+          p: () => palette(onSetup), f: findPlayer };
         if (m[k]) {
           e.preventDefault();
           m[k]();

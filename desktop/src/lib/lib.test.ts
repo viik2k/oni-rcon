@@ -7,6 +7,7 @@ import { BASE, face, faceClass } from "../art/archive";
 import { smooth, tones } from "../art/pixels";
 import { decrypt, noise } from "../art/palette";
 import { advice, level, scaleTop } from "./perf";
+import { filterTerms, nameDistance, rankedPlayers, type Found } from "./search";
 
 describe("console lines", () => {
   it("keeps a message whole for say, tell, kick and rename", () => {
@@ -142,5 +143,28 @@ describe("frame rate", () => {
     expect(advice({ behind: false, slow_minutes: 0 }, hist)[1]).toBe("Nothing to do.");
     expect(advice({ behind: true, fps: 29.4, slow_minutes: 2 }, hist)[0]).toMatch(/29 of 60 .* as few as 64 players/);
     expect(advice({ behind: false, slow_minutes: 1, worst: 41 }, hist)[0]).toMatch(/dipped to 41/);
+  });
+});
+
+describe("player search", () => {
+  const P = (name: string, o: Partial<Found> = {}): Found => ({ index: 0, key: name, name, tag: "", clan: "", team: "red", id: "1", server: "Alpha", node: "10.0.0.1", port: "2302", ...o });
+  const all = [P("Mantis", { tag: "MNT", clan: "ONI", id: "7" }), P("Mantas", { id: "8", server: "Bravo", team: "blue" }), P("Zed", { id: "9" })];
+  const names = (q: string) => rankedPlayers(all, q).map((r) => r.player.name);
+  it("keeps quoted phrases whole and survives an unclosed quote", () => {
+    expect(filterTerms('"Big Dog" clan:oni')).toEqual(["big dog", "clan:oni"]);
+    expect(filterTerms('"Big Dog')).toEqual(["big", "dog"]);
+  });
+  it("finds a near miss of 4+ letters, after the exact one", () => {
+    expect(nameDistance("mantiz", "mantis")).toBe(1);
+    expect(nameDistance("man", "mat")).toBeNull();
+    expect(names("mantis")).toEqual(["Mantis", "Mantas"]);
+    expect(rankedPlayers(all, "mantis").map((r) => r.score)).toEqual([0, 1]);
+  });
+  it("needs every term to match one player; tags and IDs are never fuzzy", () => {
+    expect(names("mantis server:bravo")).toEqual(["Mantas"]);
+    expect(names("@mnt")).toEqual(["Mantis"]);
+    expect(names("@mn")).toEqual([]);
+    expect(names("id:7 clan:oni")).toEqual(["Mantis"]);
+    expect(names("nothing:here")).toEqual([]);
   });
 });

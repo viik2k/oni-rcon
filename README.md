@@ -75,6 +75,9 @@ Also:
   goes in the command log on one line, and a tally closes it ("79 stations · 77 ok · 2 no reply yet"). A command that
   gets no reply in 10 seconds is never resent, and if its reply comes later the log shows it.
 - **Command palette.** `Ctrl+P`.
+- **Find a player.** `Ctrl+F` searches every server's players at once: a name (a typo of four letters or more still finds
+  them), `@tag`, `clan:`, `team:`, `id:`, `server:`, `node:` or `port:`, all of which must match the same player.
+  Enter opens their server with them selected. (From ibigs/oni-rcon, by RifleJock.)
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.
@@ -449,6 +452,7 @@ download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` else
 | `F1`–`F7` | Assets · Intercepts · Operations · Blacklist · Console · Forge · Health |
 | `1`–`9` | select server |
 | `g` | go to any server: the list puts the busiest first and filters as you type |
+| `Ctrl+F` | find a player on any server |
 | `Ctrl+B` | broadcast |
 | `Ctrl+R` | refresh now (on F7, read every health report now) |
 | `Ctrl+P` | command palette |

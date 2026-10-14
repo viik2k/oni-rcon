@@ -1,12 +1,13 @@
 // Dialogs: a confirm whose safe choice is the default, a form, a filterable pick list, the field manual and the
 // command palette. Titles and bodies are plain text: player names and server text never become markup.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AMBER, CYAN, DIM, WHITE } from "../art/palette";
+import { AMBER, CYAN, DIM, TEAM_COLOR, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
 import { oni, useV, type Dialog } from "../engine";
 import { CREDIT } from "../lib/forge";
-import { plain, type Dict, type Line } from "../lib/util";
-import { L, Pixel } from "./ui";
+import { everyone, rankedPlayers, type Found } from "../lib/search";
+import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
+import { L, Pixel, Table, type Row } from "./ui";
 
 const Keys = ({ hints }: { hints: string[] }) => <div className="keys">{hints.join("   ·   ")}</div>;
 
@@ -112,10 +113,54 @@ function Pick({ d }: { d: Dialog }) {
   );
 }
 
+/** Find a player on any server by name (a near miss still finds them), tag, clan, team, ID, server, node or port. */
+function Find({ d }: { d: Dialog }) {
+  useV((s) => s.cards + s.roster);
+  const [text, setText] = useState("");
+  const [sel, setSel] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const refresh = () => oni.stations.forEach((s) => oni.fetch(s, "players"));
+  useEffect(() => { input.current?.focus(); refresh(); }, []);
+  const hits = rankedPlayers(everyone(oni.stations, targetOf), text);
+  const byId = new Map<string, Found>(), seen = new Map<string, number>();
+  const rows: Row[] = hits.slice(0, 200).map(({ player: p, score }) => {
+    const base = `${p.index}|${p.key}`, n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    const id = n ? `${base}~${n}` : base;
+    byId.set(id, p);
+    const color = TEAM_COLOR[p.team] ?? WHITE;
+    return { id, cells: [[[p.name, color]], p.tag, p.clan, [[p.team.toUpperCase() || "—", color]], p.server, redactAddr(p.node, oni.redact), p.port, p.id,
+      [[score ? "Approximate name" : "Exact / substring", score ? AMBER : DIM]]] as Row["cells"] };
+  });
+  const approx = hits.filter((h) => h.score).length, offline = oni.stations.filter((s) => !s.online).length;
+  const checked = oni.stations.filter((s) => s.online && "players" in s.data).length;
+  const open = (id: string | null) => { const p = id ? byId.get(id) : undefined; if (p) d.resolve({ index: p.index, key: p.key }); };
+  return (
+    <div className="dialog wide" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") { e.preventDefault(); e.stopPropagation(); refresh(); } }}>
+      <div className="dt">FIND PLAYER</div>
+      <input ref={input} className="input" placeholder='name, @tag, clan:x, team:red, id:…, server:…, node:…, port:…   ("quotes" keep a phrase)' value={text} spellCheck={false}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); document.getElementById("find-results")?.focus(); }
+          else if (e.key === "Enter") open(sel ?? rows[0]?.id ?? null);
+        }} />
+      <div style={{ color: DIM, margin: "6px 0" }}>
+        {`${hits.length} matching player${hits.length === 1 ? "" : "s"} · ${checked}/${oni.stations.length} servers checked`}
+        {offline ? ` · ${offline} offline` : ""}{approx ? ` · ${approx} approximate name match${approx === 1 ? "" : "es"}` : ""}{hits.length > rows.length ? ` · first ${rows.length} shown` : ""}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Table id="find-results" cols={["PLAYER", "TAG", "CLAN", "TEAM", "SERVER", "NODE", "PORT", "PLAYER ID", "MATCH"]} rows={rows} selected={sel} onSelect={setSel} onEnter={open} />
+      </div>
+      <Keys hints={["Esc close", "↓ results", "Enter open the server", "Ctrl+R refresh"]} />
+    </div>
+  );
+}
+
 const GUIDE: [string, [string, string][]][] = [
   ["GETTING AROUND", [
     ["Servers", "Your servers are on the left. Click one, or press 1 to 9. A green ◉ is connected; a red ○ says why it isn't, and retries by itself."],
     ["Go to", "g lists every server, the busiest first: type part of a name and press Enter."],
+    ["Find a player", "Ctrl+F searches every server's players at once. Type a name (a typo of 4+ letters still finds them), or narrow it: @tag, clan:x, team:red, id:…, server:…, node:…, port:… All the words must match the same player; \"quotes\" keep a phrase together. Enter opens their server with them selected."],
     ["Tabs", "F1 to F7, or click the names along the top."],
     ["Anything", "Ctrl+P opens a searchable list of every action. Rest the mouse on a button to see what it does."],
     ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels."],
@@ -200,7 +245,7 @@ function Palette({ d }: { d: Dialog }) {
   return <Pick d={{ ...d, props: { title: "COMMAND PALETTE", options }, resolve: (v: string | null) => { d.resolve(null); if (v !== null) items[Number(v)][2](); } }} />;
 }
 
-const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette };
+const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find };
 
 export function Dialogs() {
   useV((s) => s.dialog);
