@@ -122,7 +122,7 @@ export function Operations() {
 export const blUi = { ban: null as string | null, vpn: null as string | null, admin: null as string | null,
   bans: new Map<string, string>(), vpns: new Map<string, string>(), admins: new Map<string, string>(), fixed: new Set<string>() };
 /** The bl() arguments for what's selected on F4. */
-export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null, blUi.admin ? blUi.admins.get(blUi.admin) : null] as const;
+export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null, blUi.admin ? blUi.admins.get(blUi.admin) : null, !!blUi.admin && blUi.fixed.has(blUi.admin)] as const;
 
 export function Blacklist() {
   useV((s) => s.bans);
@@ -167,7 +167,7 @@ export function Blacklist() {
   }
   const sel = (k: "ban" | "vpn" | "admin") => (id: string) => { blUi[k] = id; force((x) => x + 1); };
   const disabled = (o: string) => !st.online || (o === "unban" && !blUi.bans.size) || (o === "vpnrevoke" && !blUi.vpns.size)
-    || (o === "adminremove" && (!blUi.admins.size || (!!blUi.admin && blUi.fixed.has(blUi.admin))));
+    || (o === "adminremove" && (!blUi.admins.size || (!!blUi.admin && blUi.fixed.has(blUi.admin) && !st.contentDir)));
   return (
     <div className="vsplit grow">
       <Panel title={`BLACKLIST · ${rows.length}`} className="grow" style={{ flex: 2 }}>

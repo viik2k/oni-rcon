@@ -493,6 +493,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
         ("max_players", Some(n)) if (1..=63).contains(&n) => n.into(),
         ("max_players", _) => return Err("A server holds 1 to 63 players.".into()),
         ("playlist", _) => install::safe_path(value.as_str().unwrap_or_default()).map_err(|_| format!("Not a playlist in the server folder: {value}"))?.into(),
+        ("admin_add" | "admin_remove", _) => value.as_str().ok_or("That's not a player ID.")?.into(),
         _ => return Err(format!("{key} can't be set from here")),
     };
     if let Some(d) = h.hsetup.demo.clone() {
@@ -503,7 +504,11 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
     // ponytail: found beside content_dir, as every setup lays it out; a dedicated_toml key when a server doesn't
     let t = install::target_for(s)?;
     let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
-    t.write_text("../dedicated.toml", &host::set_server_key(&text, s.port, &key, v)?).await
+    let text = match key.as_str() {
+        "admin_add" | "admin_remove" => host::set_server_admin(&text, s.port, v.as_str().unwrap_or_default(), key == "admin_add")?,
+        _ => host::set_server_key(&text, s.port, &key, v)?,
+    };
+    t.write_text("../dedicated.toml", &text).await
 }
 
 #[tauri::command]

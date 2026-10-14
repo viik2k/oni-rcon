@@ -51,7 +51,7 @@ export const TIPS: Record<string, string> = {
   "bl-vpnallow": "Let a player or address join through a VPN.  Key: a",
   "bl-vpnrevoke": "Take back the selected VPN allowance.  Key: r",
   "bl-vpncheck": "Check whether an address looks like a VPN.",
-  "bl-adminadd": "Make a player an admin on every server sharing this ban list, at once.  Key: p",
+  "bl-adminadd": "Make a player an admin on every server sharing this ban list at once, or of this server only through its dedicated.toml.  Key: p",
   "bl-adminremove": "Take admin away from the selected one. Admins written in dedicated.toml are changed there.  Key: d",
   "pl-tell": "Send a private message only they can see.  Key: t",
   "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
@@ -59,7 +59,7 @@ export const TIPS: Record<string, string> = {
   "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
   "pl-team": "Move them to another team.  Key: j",
   "pl-vpnallow": "Let them join through a VPN.  Key: v",
-  "pl-admin": "Make them an admin (or take it away) on every server sharing the ban list, at once.  Key: p",
+  "pl-admin": "Make them an admin (or take it away): on every server sharing the ban list at once, or of this server only.  Key: p",
   "pl-copy": "Copy their player ID, for a ban list or a report.  Key: y",
   "add-server": "Add another server with the setup screen.",
   "super": "The Superintendent watches every server's feed and reacts: it welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute.",
@@ -122,12 +122,26 @@ export async function player(what: string, p: Dict | undefined) {
     if (team) oni.send(st, "team", [t, team], ["players"]);
   } else if (what === "admin") {
     const sub = p.admin ? "remove" : "add";
+    if (sub === "add") return makeAdmin(st, t, name);
     if (await oni.confirm(`${p.admin ? "REMOVE ADMIN" : "MAKE ADMIN"} · ${name}`, ADMIN_NOTE[sub], p.admin ? "REMOVE" : "MAKE ADMIN", !!p.admin))
       oni.send(st, "admin", [sub, t], ["players", "admins"]);
   } else if (what === "vpnallow") {
     const f = await oni.form(`VPN ALLOW · ${name}`, [["note", "Note (why)", ""]], { verb: "ALLOW", note: "Lets them join through a VPN on every server sharing the ban list." });
     if (f) oni.send(st, "vpnallow", [t, ...opt(f.note)], ["vpn"]);
   }
+}
+
+/** An admin of every server sharing the ban list at once, or (with the server folder in reach) of this one only through
+ *  its dedicated.toml. `asked`: they've already said yes once. */
+async function makeAdmin(st: Station, target: string, name: string, asked = false): Promise<void> {
+  if (!st.contentDir) {
+    if (asked || (await oni.confirm(`MAKE ADMIN · ${name}`, ADMIN_NOTE.add, "MAKE ADMIN", false))) oni.send(st, "admin", ["add", target], ["admins", "players"]);
+    return;
+  }
+  const scope = await oni.pick(`MAKE ${name} AN ADMIN OF`, [["EVERY SERVER sharing this ban list · at once", "all"],
+    ["THIS SERVER ONLY · written to its dedicated.toml, from the next restart", "one"]]);
+  if (scope === "all") oni.send(st, "admin", ["add", target], ["admins", "players"]);
+  else if (scope === "one") return saveSetting(st, "admin_add", target, "ADMIN", `${name} as an admin of this server`);
 }
 
 /** A dedicated.toml setting saved, then the restart it needs offered. */
@@ -311,7 +325,7 @@ const ADMIN_NOTE = {
   remove: "Applies at once on every server sharing this ban list. An admin written in dedicated.toml can't be removed from here.",
 };
 
-export async function bl(name: string, ban?: string | null, vpn?: string | null, admin?: string | null) {
+export async function bl(name: string, ban?: string | null, vpn?: string | null, admin?: string | null, fixed?: boolean) {
   const st = oni.cur;
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
   if (name === "newban") {
@@ -330,15 +344,16 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null,
     const choices: [Line | string, string][] = st.players.filter((p) => !p.admin).map((p) => [String(pick(p, "name") ?? "?"), targetOf(p)]);
     const who = await oni.pick("MAKE ADMIN", [...choices, [[["Someone not on: type their player ID…", DIM]], "?"]]);
     if (!who) return;
-    let target = who;
-    if (who === "?") {
-      const f = await oni.form("MAKE ADMIN", [["id", "Player ID", ""]], { verb: "MAKE ADMIN", required: ["id"], note: ADMIN_NOTE.add });
-      if (!f) return;
-      target = f.id.trim();
-    } else if (!(await oni.confirm("MAKE ADMIN", ADMIN_NOTE.add, "MAKE ADMIN", false))) return;
-    oni.send(st, "admin", ["add", target], ["admins", "players"]);
+    if (who !== "?") return makeAdmin(st, who, String(choices.find((c) => c[1] === who)?.[0] ?? who));
+    const f = await oni.form("MAKE ADMIN", [["id", "Player ID", ""]], { verb: "MAKE ADMIN", required: ["id"], note: ADMIN_NOTE.add });
+    if (f) return makeAdmin(st, f.id.trim(), f.id.trim(), true);
   } else if (name === "adminremove") {
     if (!admin) return oni.notify("Select an admin first.", "", "warning");
+    if (fixed) {
+      if (await oni.confirm(`REMOVE ADMIN  ${admin}`, "Written in dedicated.toml: taken out of this server's admins there, from the next restart.", "REMOVE"))
+        return saveSetting(st, "admin_remove", admin, "ADMIN", `${admin} no longer an admin of this server`);
+      return;
+    }
     if (await oni.confirm(`REMOVE ADMIN  ${admin}`, ADMIN_NOTE.remove, "REMOVE"))
       oni.send(st, "admin", ["remove", admin], ["admins", "players"]);
   } else if (name === "vpncheck") {

@@ -289,6 +289,36 @@ pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options:
 }
 
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
+    edit_server(text, rcon_port, |t| {
+        if key == "playlist" {
+            for other in ["map", "game", "base_map", "variant", "campaign"] {
+                t.remove(other); // a server plays from one source
+            }
+        }
+        t[key] = toml_edit::Item::Value(v);
+        Ok(())
+    })
+}
+
+/// `id` added to, or taken off, the admins of the [[server]] on `rcon_port` only: Reclaimer has no other tiers.
+pub fn set_server_admin(text: &str, rcon_port: u16, id: &str, add: bool) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() || id.starts_with('#') || id.chars().any(char::is_control) {
+        return Err("That's not a player ID.".into());
+    }
+    edit_server(text, rcon_port, |t| {
+        let a = t.entry("admins").or_insert(toml_edit::value(toml_edit::Array::new())).as_array_mut().ok_or("admins in dedicated.toml isn't a list")?;
+        let at = a.iter().position(|v| v.as_str() == Some(id));
+        match (add, at) {
+            (true, Some(_)) => Err(format!("{id} is already an admin of this server.")),
+            (true, None) => Ok(a.push(id)),
+            (false, Some(i)) => Ok(a.remove(i)).map(drop),
+            (false, None) => Err(format!("{id} isn't in this server's admins: it may be in the top-level admins of dedicated.toml, for every server.")),
+        }
+    })
+}
+
+fn edit_server(text: &str, rcon_port: u16, edit: impl FnOnce(&mut toml_edit::Table) -> Result<(), String>) -> Result<String, String> {
     use toml_edit::{DocumentMut, Item, Table};
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
     let list = doc.get_mut("server").and_then(Item::as_array_of_tables_mut).ok_or("dedicated.toml has no [[server]]")?;
@@ -297,12 +327,7 @@ pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value
         .iter_mut()
         .find(|t| port(t, "rcon_port").or(port(t, "port")) == Some(i64::from(rcon_port)))
         .ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
-    if key == "playlist" {
-        for other in ["map", "game", "base_map", "variant", "campaign"] {
-            t.remove(other); // a server plays from one source
-        }
-    }
-    t[key] = Item::Value(v);
+    edit(t)?;
     Ok(doc.to_string())
 }
 
@@ -924,6 +949,19 @@ map = \"Valhalla\"
 game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwrap();
         let t: toml::Table = text.parse().unwrap();
         assert_eq!((t["server"][1].get("map"), t["server"][1]["playlist"].as_str()), (None, Some("playlists/a.playlist.json")), "a playlist replaces map + game");
+    }
+
+    #[test]
+    fn an_admin_of_one_server() {
+        let text = set_server_admin(TOML, 50177, "abc123", true).unwrap();
+        let text = set_server_admin(&text, 50177, "def456", true).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][0].get("admins"), t["server"][1]["admins"].as_array().unwrap().len()), (None, 2));
+        assert!(set_server_admin(&text, 50177, "abc123", true).is_err(), "not twice");
+        let text = set_server_admin(&text, 50177, "abc123", false).unwrap();
+        assert!(!text.contains("abc123") && text.contains("def456"));
+        assert!(set_server_admin(&text, 50177, "abc123", false).is_err());
+        assert!(set_server_admin(TOML, 50177, "#3", true).is_err(), "a slot number isn't an ID");
     }
 
     #[test]

@@ -574,7 +574,15 @@ impl FakeHost {
     /// A dedicated.toml setting: the demo's servers take it at once.
     pub fn set(&self, i: usize, key: &str, v: Value) {
         if let Some((_, f)) = self.fakes.get(i) {
-            f.lock().status[key] = v;
+            let mut f = f.lock();
+            match key {
+                "admin_add" => {
+                    let name = f.players.iter().find(|p| p["player_id"] == v).map_or(json!(""), |p| p["name"].clone());
+                    f.admins.push(json!({"player_id": v, "name": name, "source": "dedicated.toml"}));
+                }
+                "admin_remove" => f.admins.retain(|a| a["player_id"] != v),
+                _ => f.status[key] = v,
+            }
         }
     }
 

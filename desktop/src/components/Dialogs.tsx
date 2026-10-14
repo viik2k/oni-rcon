@@ -143,7 +143,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Restart", "RESTART SERVER runs the server's restart_cmd from the config (setup writes it): everyone is dropped and the console reconnects once it's back."],
   ]],
   ["F4  BLACKLIST  ·  bans", [["Lists", "Every ban by player, address and device, who may join through a VPN, and the admins. Pick a row, then UNBAN, REVOKE or REMOVE ADMIN."],
-    ["Admins", "ADD ADMIN (p) makes a player an admin and REMOVE ADMIN (d) takes it away, at once, on every server sharing the ban list: no restart. Admins can kick, ban and move players in game and can't be vote-kicked. The ones written in dedicated.toml are changed there. Needs server 0.9.16 or later."]]],
+    ["Admins", "ADD ADMIN (p) makes a player an admin and REMOVE ADMIN (d) takes it away, at once, on every server sharing the ban list: no restart. ADD ADMIN can instead make them an admin of this server only, written to its dedicated.toml from the next restart; REMOVE ADMIN takes one out of there the same way. Admins can kick, ban and move players in game and can't be vote-kicked. Reclaimer has one kind of admin: no roles. Needs server 0.9.16 or later."]]],
   ["F5  CONSOLE  ·  typing commands", [["Commands", "For anything without a button. Type help for the server's list; ↑ ↓ bring back earlier ones."]]],
   ["F6  FORGE  ·  community content", [
     ["The catalog", "Maps, gametypes and playlists from ReclaimerForge. s changes the order, w the time window trending and rising count over, and / searches. Pick one for its file and its versions; n fetches more. RATING is thumbs up and down. FAVOURITES is what ReclaimerForge is featuring now."],
