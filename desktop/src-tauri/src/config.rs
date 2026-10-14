@@ -404,9 +404,33 @@ pub fn add_servers(path: &Path, servers: &[Server], by: &str, remember: bool) ->
     Ok(())
 }
 
+/// Take the `index`th [[server]] out of the config, the rest of the file as it was: how many are left.
+pub fn remove_server(path: &Path, index: usize) -> Result<usize, String> {
+    let at = |e: String| format!("{}: {e}", path.display());
+    let mut doc = std::fs::read_to_string(path).map_err(|e| at(e.to_string()))?.parse::<toml_edit::DocumentMut>().map_err(|e| at(e.to_string()))?;
+    let list = doc.get_mut("server").and_then(toml_edit::Item::as_array_of_tables_mut).filter(|l| index < l.len()).ok_or("no such server in the config")?;
+    list.remove(index);
+    let left = list.len();
+    write_atomic(path, &doc.to_string(), true).map_err(|e| at(e.to_string()))?;
+    Ok(left)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_server_leaves_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        std::fs::write(&p, "# mine\nby = \"op\"\n[defaults]\nssh = \"box\"\n\n[[server]]\nport = 1\n[[server]]\nport = 2\n").unwrap();
+        assert_eq!(remove_server(&p, 0), Ok(1));
+        let (_, got) = load_config(&p).unwrap();
+        assert_eq!((got.len(), got[0].port), (1, 2));
+        assert!(std::fs::read_to_string(&p).unwrap().contains("# mine"));
+        assert!(remove_server(&p, 1).is_err()); // no second one
+        assert_eq!(remove_server(&p, 0), Ok(0));
+    }
 
     #[test]
     fn targets() {

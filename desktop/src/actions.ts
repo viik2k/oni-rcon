@@ -15,9 +15,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "newgametype", "reconnect", "restart"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -46,6 +46,7 @@ export const TIPS: Record<string, string> = {
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
+  "op-remove": "Take this server out of your list (the config file). The server itself isn't touched.",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
   "bl-vpnallow": "Let a player or address join through a VPN.  Key: a",
@@ -251,6 +252,15 @@ export async function op(name: string) {
     oni.notify("Restarting… the console reconnects by itself.", `RESTART · ${st.label}`, "warning");
     return invoke("restart_server", { index: st.index }).then(() => oni.notify("Restarted.", `RESTART · ${st.label}`),
       (e) => oni.notify(String(e), `RESTART FAILED · ${st.label}`, "error", 15));
+  }
+  if (name === "remove") {
+    if (!(await oni.confirm(`REMOVE  ${st.label}`, "Takes it out of your config file, so the console stops managing it. The server itself keeps running, and ADD SERVER puts it back.", "REMOVE", true))) return;
+    try {
+      await invoke("remove_server", { index: st.index });
+    } catch (e) {
+      return oni.notify(String(e), `REMOVE FAILED · ${st.label}`, "error", 15);
+    }
+    return location.reload(); // the console is rebuilt from the config, or the setup screen opens when none are left
   }
   if (name === "capacity") {
     const f = await oni.form("PLAYER CAPACITY", [["n", "Most players at once (1 to 63)", String(s.max_players ?? "")]], { verb: "SAVE", required: ["n"],

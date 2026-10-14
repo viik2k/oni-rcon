@@ -303,6 +303,20 @@ fn setup_open(app: State<'_, App>) {
     *app.forced_setup.lock() = true;
 }
 
+/// REMOVE SERVER: taken out of the config file (the server itself is untouched); the console is rebuilt after, or the
+/// setup screen opens when none are left.
+#[tauri::command]
+fn remove_server(index: usize, app: State<'_, App>) -> Result<(), String> {
+    if *app.demo.lock() || !app.args.targets.is_empty() {
+        return Err("These servers aren't from a config file: there's nothing to remove them from.".into());
+    }
+    let path = config_path(&app.args).ok_or("No config file.")?;
+    if config::remove_server(&path, index)? == 0 {
+        setup_open(app);
+    }
+    Ok(())
+}
+
 /// Build the console: the demo, the command line's targets, or the config file's servers.
 #[tauri::command]
 async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
@@ -840,7 +854,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists, save_playlist, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install
         ])
