@@ -214,7 +214,8 @@ port = 49177
 ### Restarting a server
 
 RESTART SERVER on F3 (desktop app) runs the server's `restart_cmd` where the server is: on its `ssh` host, or on
-this machine without one. The setup screen writes it for the servers it finds or hosts; for others, add it to the
+this machine without one. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
+machine that its server folder lists gets one without any config; for others, add it to the
 `[[server]]` block (or `[defaults]`; `{port}` is the server's RCON port):
 
 ```toml
