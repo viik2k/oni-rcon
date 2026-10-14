@@ -1,12 +1,16 @@
 // Dialogs: a confirm whose safe choice is the default, a form, a filterable pick list, the field manual and the
 // command palette. Titles and bodies are plain text: player names and server text never become markup.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AMBER, CYAN, DIM, WHITE } from "../art/palette";
+import { AMBER, CYAN, DIM, TEAM_COLOR, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
 import { oni, useV, type Dialog } from "../engine";
 import { CREDIT } from "../lib/forge";
-import { plain, type Dict, type Line } from "../lib/util";
-import { L, Pixel } from "./ui";
+import { everyone, rankedPlayers, type Found } from "../lib/search";
+import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
+import { AutomationHub } from "./Automation";
+import { ContentBrowser, PlaylistEditor, PlaylistLibrary } from "./Content";
+import { FindingsView } from "./Findings";
+import { L, Pixel, Table, type Row } from "./ui";
 
 const Keys = ({ hints }: { hints: string[] }) => <div className="keys">{hints.join("   ·   ")}</div>;
 
@@ -112,13 +116,58 @@ function Pick({ d }: { d: Dialog }) {
   );
 }
 
+/** Find a player on any server by name (a near miss still finds them), tag, clan, team, ID, server, node or port. */
+function Find({ d }: { d: Dialog }) {
+  useV((s) => s.cards + s.roster);
+  const [text, setText] = useState("");
+  const [sel, setSel] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const refresh = () => oni.stations.forEach((s) => oni.fetch(s, "players"));
+  useEffect(() => { input.current?.focus(); refresh(); }, []);
+  const hits = rankedPlayers(everyone(oni.stations, targetOf), text);
+  const byId = new Map<string, Found>(), seen = new Map<string, number>();
+  const rows: Row[] = hits.slice(0, 200).map(({ player: p, score }) => {
+    const base = `${p.index}|${p.key}`, n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    const id = n ? `${base}~${n}` : base;
+    byId.set(id, p);
+    const color = TEAM_COLOR[p.team] ?? WHITE;
+    return { id, cells: [[[p.name, color]], p.tag, p.clan, [[p.team.toUpperCase() || "—", color]], p.server, redactAddr(p.node, oni.redact), p.port, p.id,
+      [[score ? "Approximate name" : "Exact / substring", score ? AMBER : DIM]]] as Row["cells"] };
+  });
+  const approx = hits.filter((h) => h.score).length, offline = oni.stations.filter((s) => !s.online).length;
+  const checked = oni.stations.filter((s) => s.online && "players" in s.data).length;
+  const open = (id: string | null) => { const p = id ? byId.get(id) : undefined; if (p) d.resolve({ index: p.index, key: p.key }); };
+  return (
+    <div className="dialog wide" onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") { e.preventDefault(); e.stopPropagation(); refresh(); } }}>
+      <div className="dt">FIND PLAYER</div>
+      <input ref={input} className="input" placeholder='name, @tag, clan:x, team:red, id:…, server:…, node:…, port:…   ("quotes" keep a phrase)' value={text} spellCheck={false}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); document.getElementById("find-results")?.focus(); }
+          else if (e.key === "Enter") open(sel ?? rows[0]?.id ?? null);
+        }} />
+      <div style={{ color: DIM, margin: "6px 0" }}>
+        {`${hits.length} matching player${hits.length === 1 ? "" : "s"} · ${checked}/${oni.stations.length} servers checked`}
+        {offline ? ` · ${offline} offline` : ""}{approx ? ` · ${approx} approximate name match${approx === 1 ? "" : "es"}` : ""}{hits.length > rows.length ? ` · first ${rows.length} shown` : ""}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Table id="find-results" cols={["PLAYER", "TAG", "CLAN", "TEAM", "SERVER", "NODE", "PORT", "PLAYER ID", "MATCH"]} rows={rows} selected={sel} onSelect={setSel} onEnter={open} />
+      </div>
+      <Keys hints={["Esc close", "↓ results", "Enter open the server", "Ctrl+R refresh"]} />
+    </div>
+  );
+}
+
 const GUIDE: [string, [string, string][]][] = [
   ["GETTING AROUND", [
     ["Servers", "Your servers are on the left. Click one, or press 1 to 9. A green ◉ is connected; a red ○ says why it isn't, and retries by itself."],
     ["Go to", "g lists every server, the busiest first: type part of a name and press Enter."],
+    ["Find a player", "Ctrl+F searches every server's players at once. Type a name (a typo of 4+ letters still finds them), or narrow it: @tag, clan:x, team:red, id:…, server:…, node:…, port:… All the words must match the same player; \"quotes\" keep a phrase together. Enter opens their server with them selected."],
     ["Tabs", "F1 to F7, or click the names along the top."],
     ["Anything", "Ctrl+P opens a searchable list of every action. Rest the mouse on a button to see what it does."],
-    ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels."],
+    ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels. Click it, or press F8, for what it has noticed."],
+    ["Findings", "F8 lists what the Superintendent noticed in the last hour, with the evidence behind each: a repeated vote, a vote fight, a kill burst, an unusual kill rate, a cheat flag, a request for an admin or a report of another player. They are observations to review, never grounds for action by themselves, and nothing is moderated for you. CLEAR ALL acknowledges them. Chat from 2 minutes either side is kept with a request."],
   ]],
   ["F1  ASSETS  ·  the players", [
     ["Pick a player", "Click a row, or move with ↑ ↓. Their file opens on the right, with buttons to tell, kick, ban, mute, move, allow them through a VPN or make them an admin."],
@@ -131,14 +180,16 @@ const GUIDE: [string, [string, string][]][] = [
     ["The feed", "Chat, kills, joins, kicks and bans from every server, newest at the bottom. Scroll up to read back; it holds still until you press End."],
     ["Talk back", "Type in the box at the bottom to chat as [Server]. Start with @all to reach every server: they go out a few at a time, and the command log tallies how it went."],
     ["Medals", "Kills carry their Halo 3 medals as they happen: double kill and up, sprees, killjoys."],
-    ["Alerts", "Chat asking for an admin, or naming a cheat, pops up, plays the Superintendent chime and turns the CONDITION at the top red. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
+    ["Alerts", "A finding that needs review (chat asking for an admin or reporting a player, a repeated vote, a vote fight, a kill burst, a cheat flag) pops up, plays the Superintendent chime and turns the CONDITION at the top red; F8 shows the evidence. Servers you aren't looking at show a ⚑ count until you open them or this feed."],
   ]],
   ["F3  OPERATIONS  ·  running the match", [
     ["Buttons", "Change map or mode, queue what plays next, end the round, shuffle teams, run votes, broadcast, and server settings. Anything that ends a game asks first."],
     ["Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and whoever made it."],
     ["Capacity", "PLAYER CAPACITY saves how many players the server takes in its dedicated.toml (the one beside content_dir), then offers to restart it so it applies."],
     ["Playlist", "SWITCH PLAYLIST sets which playlist the server plays (one in the server folder's playlists/, or one installed from F6) in its dedicated.toml, in place of a fixed map and game, then offers to restart it."],
-    ["New playlist", "NEW PLAYLIST names a playlist and the seconds players get to vote, then takes its games a map and a mode at a time from the server's own lists (three at least, each once; Esc on the map asks before throwing them away), saves it in the server's playlists/ and offers to switch to it."],
+    ["Content browser", "CHANGE MAP, CHANGE MODE, LOAD and QUEUE NEXT list what the server can load in groups. Type to filter, order by name, install date, downloads or rating (click again to turn it round); a ● marks what is playing. With a ReclaimerForge key, the last group offers ones the server doesn't have yet: choosing one installs it."],
+    ["Automation", "F9 (or Ctrl+P, Automation rules) lists rules of WHEN something happens, ONLY IF it holds, THEN DO these: say in chat, message a player or the admins, cancel a vote, shuffle the teams, post to Discord, wait. NEW builds one step by step, TEMPLATE starts from a ready-made one, TEST shows what a rule would do (and can really do it), ROLES says who counts as an ADMIN, VIP or MOD, DISCORD adds the webhooks (their URLs are kept by the app and shown hidden). Every rule is limited by a cooldown and a per-hour count, chat is held to 20 lines a minute per server, and each run is written to the command log as AUTO. Rules run while this console is open. docs/AUTOMATION.md has the long version."],
+    ["Playlists", "PLAYLISTS lists the server folder's playlists and the ones installed from F6: NEW and EDIT open the editor (name, vote seconds, games with weights; three at least, each map and game type once, Ctrl+S saves), USE ON THIS SERVER puts the server on one. NEW PLAYLIST goes straight to an empty editor and offers to switch to it once saved. A playlist this console didn't make is edited as a copy."],
     ["New game type", "NEW GAME TYPE builds one on a base mode (Slayer, Capture the Flag, Oddball, King of the Hill, VIP, Juggernaut, Territories, Assault, Infection, Escalation Slayer) with its score, teams, time limit, rounds, lives, respawn delay and shields; blank fields keep the mode's own. It's saved in the server's content folder, Game Modes, and played with CHANGE MODE once the server lists it."],
     ["Restart", "RESTART SERVER runs the server's restart_cmd from the config (setup writes it): everyone is dropped and the console reconnects once it's back."],
     ["Remove", "REMOVE SERVER takes the selected server out of the config file, offline or not; the server itself is untouched. The console reloads without it, and ADD SERVER brings it back."],
@@ -159,6 +210,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Crashes", "Each server's last crashes, read from its log: SIGNATURE is the known crash (an exception with its code and RVA), BARE is the engine probe failing with no exception, OOM-KILL is a container killed for memory, and CONTAINER-RESTART is one that started again. PLAYERS is how many were on. DROPPED means the RCON connection fell at the same moment."],
     ["Host", "Free memory (amber under twice health_min_free_mb, red under it), swap, the kernel's oom_kill counter, and each container's start time and OOMKilled flag."],
     ["Workaround", "Whether the named systemd service is running, when it last moved a tag, and any warning that the build isn't the pinned one. Hidden without health_service."],
+    ["Frame rate", "The server logs each minute it spent under 54 frames a second; a minute without that line counts as 60. FRAME RATE gives each server's rate now (FPS), over 5 minutes, its worst, its longest frame and how many players were on; pick one for FRAME TIME, the last 30 minutes with WHAT'S HAPPENING and WHAT TO DO in plain words. A lagging server's card shows its rate and the feed says once when it drops under 40. Needs health_cmd to print the server's log. docs/SERVER-PERFORMANCE.md has the long version."],
     ["Alerts", "A new crash, or memory falling under the limit, flashes a banner over every tab (click it away), goes in the F2 feed and plays the Superintendent chime."],
     ["Turning it on", "Set health_cmd in the config: this tab says how when it's off. Ctrl+R reads everything now."],
   ]],
@@ -200,7 +252,8 @@ function Palette({ d }: { d: Dialog }) {
   return <Pick d={{ ...d, props: { title: "COMMAND PALETTE", options }, resolve: (v: string | null) => { d.resolve(null); if (v !== null) items[Number(v)][2](); } }} />;
 }
 
-const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette };
+const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find, findings: FindingsView,
+  content: ContentBrowser, playlists: PlaylistLibrary, playlist: PlaylistEditor, automation: AutomationHub };
 
 export function Dialogs() {
   useV((s) => s.dialog);

@@ -3,12 +3,12 @@
 // asks it, every frame, what face to wear (look). Plain functions and one small state machine, so it's testable.
 import { AMBER, CYAN, GREEN, GREY, RED, noise } from "./palette";
 import { BASE, type Expr } from "./archive";
+import { chatRequest } from "../lib/findings";
 
 const EASE = 0.28; // seconds an expression takes to settle after an event
 const DEBOUNCE = 1.2; // seconds a reaction holds against another of the same weight: a busy fleet doesn't make it flicker
 const BLINK_FOR = 0.22;
 const BLINK_EVERY = 5.5;
-export const CALL = /\b(admins?|mods?|hack\w*|cheat\w*|aimbot|wallhack)\b/i;
 
 export interface Reaction {
   name: string;
@@ -22,6 +22,7 @@ export interface Reaction {
 }
 
 export const REACTIONS: Record<string, Reaction> = {
+  review: { name: "review", mood: "REVIEW NEEDED", color: AMBER, expr: { size: 1.18, ex: 0 }, hold: 8.0, prio: 3 },
   welcome: { name: "welcome", mood: "WELCOMING", color: GREEN, expr: { happy: true }, hold: 4.0, prio: 1 },
   call: { name: "call", mood: "ALARMED", color: RED, expr: { size: 1.28, ey: -1.5, ex: 0 }, hold: 6.0, prio: 3, alert: true },
   cheat: { name: "cheat", mood: "HOSTILE", color: RED, expr: { tilt: 0.6, lid: 0.1 }, hold: 6.0, prio: 3, alert: true },
@@ -32,14 +33,16 @@ export const REACTIONS: Record<string, Reaction> = {
 };
 export const IDLE: Reaction = { name: "idle", mood: "WATCHING", color: CYAN, expr: {}, hold: 0, prio: 0 };
 
-/** Which reaction an event earns, or null for the many that earn none. */
+/** Which reaction an event earns, or null for the many that earn none. A chat line the findings have already judged
+ *  carries `_review_alert`; a kill in a mode where streaks mean little carries `_quiet_kills`. */
 export function classify(ev: Record<string, unknown>): string | null {
   const kind = ev.event;
   if (kind === "chat") {
     if (ev.channel === "server") return "cheer";
-    return CALL.test(String(ev.text ?? "")) ? "call" : null;
+    if ("_review_alert" in ev) return ev._review_alert ? "review" : null;
+    return chatRequest(ev.text) ? "call" : null;
   }
-  if (kind === "kill") return (ev._medals as unknown[] | undefined)?.length ? "medal" : null;
+  if (kind === "kill") return (ev._medals as unknown[] | undefined)?.length && !ev._quiet_kills ? "medal" : null;
   return ({ join: "welcome", cheat: "cheat", kick: "satisfied", ban: "satisfied", mute: "unimpressed" } as Record<string, string>)[String(kind)] ?? null;
 }
 
@@ -67,6 +70,21 @@ export class Superintendent {
     this.since = t;
     this.last = subject || this.last;
     return next;
+  }
+
+  /** A finding: the face wears REVIEW NEEDED for a review, IMPRESSED for a highlight. */
+  report(subject: string, level: string) {
+    const t = this.now();
+    this.before = this.lookAt(t)[0];
+    this.current = REACTIONS[level === "review" ? "review" : "medal"];
+    this.since = t;
+    this.last = subject;
+  }
+
+  clear() {
+    this.current = this.before = IDLE;
+    this.since = -Infinity;
+    this.last = "";
   }
 
   held(t: number) {

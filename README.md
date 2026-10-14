@@ -75,6 +75,33 @@ Also:
   goes in the command log on one line, and a tally closes it ("79 stations · 77 ok · 2 no reply yet"). A command that
   gets no reply in 10 seconds is never resent, and if its reply comes later the log shows it.
 - **Command palette.** `Ctrl+P`.
+- **Find a player.** `Ctrl+F` searches every server's players at once: a name (a typo of four letters or more still finds
+  them), `@tag`, `clan:`, `team:`, `id:`, `server:`, `node:` or `port:`, all of which must match the same player.
+  Enter opens their server with them selected. (From ibigs/oni-rcon, by RifleJock.)
+- **Superintendent findings.** `F8`, or a click on the Superintendent, lists what it noticed in the last hour, with the
+  evidence behind each: chat asking for an admin or reporting a player (with up to 20 messages either side, two minutes
+  before and after), repeated or back-and-forth kick votes, a kill burst, an unusual kill rate, a cheat flag the server
+  reported and an explicit Perfection medal. They are observations for you to review, never grounds for moderation by
+  themselves: nothing is kicked, banned or muted for you, and kill heuristics stand down in Infection and SWAT-style
+  modes. A finding that needs review turns the CONDITION red, pops up and chimes; CLEAR ALL acknowledges them. The
+  chat is matched by explicit requests ("need an admin", "please kick Red", "Red is cheating"), not by words like "mod"
+  or "cheat" alone. (From ibigs/oni-rcon, by RifleJock.)
+- **Content browser.** CHANGE MAP, CHANGE MODE, LOAD and QUEUE NEXT list what the server can load in groups (stock maps and
+  game types, mods, ReclaimerForge downloads, your own content folder, the Halo 3 and Matchmaking variants, saved and
+  Workshop variants) instead of one long list. Type to filter (every word has to match a name, author, folder or file),
+  order by name, install date, downloads or rating (click a button again to turn it round), and a ● marks what is
+  playing now. With a ReclaimerForge key loaded, a last group offers maps and game types the server doesn't have yet:
+  choosing one asks, then installs it. (From ibigs/oni-rcon, by RifleJock.)
+- **Playlists.** PLAYLISTS (F3, desktop) lists the server folder's `playlists`, the ones made here and any other, with
+  the playlists installed from F6. NEW and EDIT open an editor: a name, the seconds players get to vote (5 to 120) and
+  its games, a map and a game type each, with a weight for how often it comes up. Three games at least, each map and game
+  type once, no more than 128, in the shape the dedicated server reads. A playlist this console made is saved over; any
+  other is opened as a copy. USE ON THIS SERVER sets `playlist` in `dedicated.toml`. (From ibigs/oni-rcon, by RifleJock.)
+- **Automation rules.** AUTOMATION (F9, desktop) holds rules of WHEN something happens, ONLY IF it holds, THEN DO these: say in
+  chat, message a player, the admins or a role, cancel a vote, shuffle the teams, post to Discord. Build one step by step,
+  start from a template, TEST it, and set who counts as an ADMIN, VIP or MOD. Chat from rules is held to 20 lines a minute
+  per server, Discord webhook URLs stay in the app and show hidden, and every run is written to the command log. Rules run
+  while the console is open. See [docs/AUTOMATION.md](docs/AUTOMATION.md). (From ibigs/oni-rcon, by RifleJock.)
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.
@@ -225,7 +252,7 @@ restart_cmd = "docker restart my-server-{port}"
 Everyone on it is dropped and the console reconnects once it's back. PLAYER CAPACITY (F3, desktop) saves
 `max_players` in that server's `dedicated.toml`, found beside its `content_dir`, then offers this restart so it applies. SWITCH PLAYLIST does the same with `playlist`, picked from the
 `playlists` folder beside `dedicated.toml` or from the playlists installed from F6, and takes out the server's `map`,
-`game`, `variant` or `campaign` (a server plays from one). NEW PLAYLIST makes one there from the server's own maps
+`game`, `variant` or `campaign` (a server plays from one). NEW PLAYLIST (and PLAYLISTS, which also edits them) makes one there from the server's own maps
 and modes, three games at least, and offers to switch to it. NEW GAME TYPE saves a game type in the content folder's
 `Game Modes`, built on one of Reclaimer's ten base modes with the score, teams, time limit, rounds, lives, respawn
 delay and shields you give it (blank keeps the mode's own); once the server lists it, CHANGE MODE plays it. Servers sharing a container (or, on Windows, the
@@ -293,6 +320,11 @@ but don't alert.
 **Memory.** Red under `health_min_free_mb` (that's the alert, and it turns the masthead's CONDITION amber), amber under
 twice that. Swap is amber from a quarter used and red from half. `oom_kill` shows how far it has risen since you opened
 oni-rcon.
+
+**Frame rate.** The same report carries the server's log, and a server logs every minute it spent under 54 frames a
+second. F7's FRAME RATE table and 30-minute FRAME TIME chart, the `38fps` on a lagging server's card and F3's SERVER FPS
+are read from those lines, so `health_cmd` has to print the log. [docs/SERVER-PERFORMANCE.md](docs/SERVER-PERFORMANCE.md)
+is a plain guide to reading them. (From [ibigsnet/oni-rcon](https://github.com/ibigsnet/oni-rcon), by RifleJock.)
 
 **WORKAROUND** runs `systemctl is-active` and `journalctl` for the named unit (read-only) and shows whether it's active,
 the time of its last `moved tag` line and any `NOT the pinned build` line. It needs the ssh user to be allowed to read that
@@ -444,6 +476,8 @@ download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` else
 | `F1`–`F7` | Assets · Intercepts · Operations · Blacklist · Console · Forge · Health |
 | `1`–`9` | select server |
 | `g` | go to any server: the list puts the busiest first and filters as you type |
+| `Ctrl+F` | find a player on any server |
+| `F8` | the Superintendent's findings (the desktop app) |
 | `Ctrl+B` | broadcast |
 | `Ctrl+R` | refresh now (on F7, read every health report now) |
 | `Ctrl+P` | command palette |

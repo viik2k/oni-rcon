@@ -3,6 +3,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { oni, type Station } from "./engine";
+import { newPlaylist, type Playlist } from "./lib/content";
+import { latestOf } from "./lib/forge";
+import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TEMPLATE_HELP, block, describe, describeBlock, plan, sample, stepWords, validate, type Field, type Part } from "./lib/rules";
 import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
@@ -15,9 +18,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -43,6 +46,7 @@ export const TIPS: Record<string, string> = {
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
+  "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
@@ -195,42 +199,94 @@ async function newGameType(st: Station): Promise<void> {
   oni.notify(`Saved as ${path}. ${how}`, `GAME TYPE · ${st.label}`, "information", 12);
 }
 
-/** NEW PLAYLIST: a name, then a map and a mode a game at a time from the server's own lists. */
-async function newPlaylist(st: Station): Promise<void> {
-  const maps = entries(st, "maps"), modes = entries(st, "modes");
-  if (!maps.length || !modes.length) return oni.notify("Map and mode lists not loaded yet.", "", "warning");
-  const f = await oni.form("NEW PLAYLIST", [["name", "Name (shown in the lobby)", ""], ["vote", "Seconds players get to vote (5 to 120)", "20"]],
-    { verb: "PICK GAMES", required: ["name", "vote"], note: "Then its games, a map and a mode each: three at least, each once." });
-  if (!f) return;
-  const games: [string, string][] = [];
+/** Pick a map or a game type in the content browser. A ReclaimerForge one that isn't installed yet is installed instead
+ *  (after a confirm), and null comes back: open the browser again once that has finished. */
+async function browse(st: Station, what: "maps" | "modes", title: string, keep = false): Promise<string | null> {
+  const got = await oni.ask<string | { listing: Dict } | null>("content", { title, what, index: st.index, keep });
+  if (got === null || typeof got === "string") return got;
+  const plan = await invoke<Dict>("forge_plan", { index: st.index, listing: got.listing, version: latestOf(got.listing) ?? {} });
+  if (plan.error) oni.notify(plan.error.text, plan.error.short, "error", 15);
+  else if (await oni.confirm(plan.title, plan.body, plan.replacing ? "REPLACE" : "INSTALL", plan.replacing)) {
+    await invoke("forge_put", { plan: plan.plan });
+    oni.notify("It is installing: open this again once it has finished.", `FORGE · ${st.label}`);
+  }
+  return null;
+}
+
+/** A game for the playlist: a map, then a game type, from the server's own lists (typed in when it hasn't sent them). */
+async function pickGame(st: Station, n: number): Promise<[string, string] | null> {
+  if (!st.data.maps?.entries?.length || !st.data.modes?.entries?.length) {
+    const f = await oni.form("ADD GAME", [["map", "Map (as the server names it)", ""], ["game", "Game type", ""]], { verb: "ADD", required: ["map", "game"],
+      note: `${st.label} hasn't listed its maps, so type the names. The server checks them before the playlist is used.` });
+    return f ? [f.map, f.game] : null;
+  }
+  const mp = await browse(st, "maps", `GAME ${n} · SELECT MAP`);
+  const md = mp ? await browse(st, "modes", `GAME ${n} · SELECT GAME TYPE`) : null;
+  return mp && md ? [mp, md] : null;
+}
+
+/** The playlist editor until it is saved (the file's path) or dropped (null), with ADD GAME going out to the browser and
+ *  back. `path`: a playlist this console made, to save over; null saves a new one in playlists/. */
+async function editPlaylist(st: Station, p: Playlist, path: string | null, note = ""): Promise<string | null> {
+  const start = JSON.stringify(p), sink: { p?: Playlist } = {};
+  let sel: string | undefined;
   for (;;) {
-    const n = games.length + 1, done: [Line, string][] = games.length >= 3 ? [[[[`✓ DONE: save these ${games.length} games`, AMBER]], ""]] : [];
-    // ponytail: the server's own map and mode references, taken as what its playlists name them by
-    const mp = await oni.pick(`GAME ${n} · SELECT MAP`, [...done, ...maps]);
-    if (mp === "") break;
-    if (mp === null) {
-      if (!games.length || (await oni.confirm("DISCARD PLAYLIST", `Its ${games.length} game${games.length > 1 ? "s" : ""} so far are thrown away.`, "DISCARD"))) return;
-      continue;
+    const r = await oni.ask<{ do: string; p: Playlist } | null>("playlist", { index: st.index, p, path, note, sel, sink });
+    p = r?.p ?? sink.p ?? p; // outside the dialog counts as closing it
+    if (!r || r.do === "close") {
+      if (JSON.stringify(p) === start || (await oni.confirm("DISCARD CHANGES", `${p.name || "This playlist"} hasn't been saved.`, "DISCARD", true))) return null;
+    } else if (r.do === "add") {
+      const game = await pickGame(st, p.games.length + 1);
+      if (!game) continue;
+      if (p.games.some((g) => g.map === game[0] && g.game === game[1])) oni.notify(`${game[1]} on ${game[0]} is in it already: give it a higher weight instead.`, "", "warning");
+      else p = { ...p, games: [...p.games, { map: game[0], game: game[1] }] };
+      sel = String(p.games.length - 1);
+    } else {
+      const args = { index: st.index, playlist: p, path };
+      try {
+        let saved = await invoke<Dict>("save_playlist", { ...args, replace: false });
+        if (saved.exists) {
+          if (!(await oni.confirm("REPLACE PLAYLIST", `${saved.path} is there already.`, "REPLACE", true))) continue;
+          saved = await invoke<Dict>("save_playlist", { ...args, replace: true });
+        }
+        return saved.path;
+      } catch (e) {
+        oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
+      }
     }
-    const md = await oni.pick(`GAME ${n} · ${mp} · SELECT MODE`, modes);
-    if (!md) continue;
-    if (games.some(([a, b]) => a === mp && b === md)) oni.notify(`${mp} / ${md} is in it already.`, "", "warning");
-    else games.push([mp, md]);
   }
-  const args = { index: st.index, name: f.name, voteSeconds: Number(f.vote), games };
-  let path: string;
-  try {
-    let r = await invoke<Dict>("save_playlist", { ...args, replace: false });
-    if (r.exists) {
-      if (!(await oni.confirm("REPLACE PLAYLIST", `${r.path} is there already.`, "REPLACE"))) return;
-      r = await invoke<Dict>("save_playlist", { ...args, replace: true });
+}
+
+/** A new playlist, or `path` opened to edit: one this console made is rewritten, any other (a hand-made file, or one
+ *  installed from Forge) is the start of a new one. Returns where it was saved. */
+async function playlistEdit(st: Station, path: string | null): Promise<string | null> {
+  let p = newPlaylist(), mine = path, note = "";
+  if (path) {
+    try {
+      const raw = await invoke<Dict>("playlist_read", { index: st.index, path });
+      p = { version: 2, name: String(raw.name ?? ""), vote_seconds: raw.vote_seconds ?? 20, games: Array.isArray(raw.games) ? raw.games : [] };
+    } catch (e) {
+      oni.notify(String(e), `PLAYLIST · ${st.label}`, "error", 15);
+      return null;
     }
-    path = r.path;
-  } catch (e) {
-    return oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
+    if (!/^playlists\/[^/]+\.playlist\.json$/.test(path)) {
+      mine = null;
+      note = `A copy of ${path}: SAVE puts it in the server folder's playlists/ as its own playlist; the original stays as it is.`;
+    }
   }
-  if (await oni.confirm(`SWITCH TO  ${f.name}`, `Saved as ${path}. Put the server on it now?`, "SWITCH", false)) return saveSetting(st, "playlist", path, "PLAYLIST", path);
-  oni.notify(`Saved as ${path}: SWITCH PLAYLIST puts the server on it.`, `PLAYLIST · ${st.label}`);
+  return editPlaylist(st, p, mine, note);
+}
+
+/** PLAYLISTS: the library, with NEW and EDIT going into the editor and back, until one is used or it is closed. */
+async function playlistsManager(st: Station): Promise<void> {
+  let sel: string | undefined;
+  for (;;) {
+    const r = await oni.ask<{ do: string; path?: string } | null>("playlists", { index: st.index, sel });
+    if (!r) return;
+    sel = r.path;
+    if (r.do === "use") return saveSetting(st, "playlist", r.path, "PLAYLIST", r.path!);
+    sel = (await playlistEdit(st, r.do === "edit" ? r.path! : null)) ?? sel;
+  }
 }
 
 export async function op(name: string) {
@@ -269,6 +325,13 @@ export async function op(name: string) {
     return;
   }
   if (name === "newgametype") return newGameType(st);
+  if (name === "playlists") return playlistsManager(st);
+  if (name === "newplaylist") {
+    const path = await playlistEdit(st, null);
+    if (path && (await oni.confirm("SWITCH PLAYLIST", `Saved as ${path}. Put the server on it now?`, "SWITCH", false))) return saveSetting(st, "playlist", path, "PLAYLIST", path);
+    if (path) oni.notify(`Saved as ${path}: SWITCH PLAYLIST puts the server on it.`, `PLAYLIST · ${st.label}`);
+    return;
+  }
   if (name === "playlist") {
     let files: string[];
     try {
@@ -285,20 +348,16 @@ export async function op(name: string) {
     return;
   }
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
-  if (name === "newplaylist") return newPlaylist(st);
   if (["load", "map", "mode", "nextmap"].includes(name)) {
     let mp = "", md = "";
     if (name !== "mode") {
-      const maps = entries(st, "maps");
-      if (!maps.length) return oni.notify("Map list not loaded yet.", "", "warning");
-      const got = await oni.pick("SELECT MAP", maps);
+      if (!entries(st, "maps").length) return oni.notify("Map list not loaded yet.", "", "warning");
+      const got = await browse(st, "maps", "SELECT MAP");
       if (!got) return;
       mp = got;
     }
     if (name !== "map") {
-      let modes = entries(st, "modes");
-      if (name === "nextmap") modes = [[[["(keep the current rules)", DIM]], ""], ...modes];
-      const got = await oni.pick("SELECT MODE", modes);
+      const got = await browse(st, "modes", "SELECT MODE", name === "nextmap");
       if (got === null || (name !== "nextmap" && !got)) return;
       md = got;
     }
@@ -422,4 +481,242 @@ export function sayText(text: string) {
   text = text.replace(/^@all /, "").trim();
   if (text && targets.length) oni.fanout(targets, "say", [text]);
   if (text && !targets.length) oni.notify("Not connected: nothing was sent.", "", "warning");
+}
+
+// --- automation --------------------------------------------------------------------------------------------------
+const serverName = (k: string) => oni.stations.find((x) => x.where === k)?.label ?? k;
+const DONE = "\0done";
+
+/** A pick list you can tick several of; Done returns the ticked values. */
+async function toggles(title: string, options: [string, string][], on: string[]): Promise<string[] | null> {
+  const set = new Set(on);
+  for (;;) {
+    const got = await oni.pick(title, [...options.map(([l, v]) => [`${set.has(v) ? "✓" : "  "} ${l}`, v] as [string, string]), ["Done", DONE]]);
+    if (got === null) return null;
+    if (got === DONE) return [...set];
+    if (!set.delete(got)) set.add(got);
+  }
+}
+
+/** The form row for one catalog field: the current value first in a select, so it is what Enter keeps. */
+function fieldRow(f: Field, now: unknown): [string, string, string | [string, string][]] | null {
+  const cur = String(now ?? f.default ?? "");
+  const first = (opts: [string, string][]): [string, string][] => [...opts.filter(([, v]) => v === cur), ...opts.filter(([, v]) => v !== cur)];
+  if (f.kind === "choice") return [f.key, f.label, first(f.options!.map((o) => [o, o]))];
+  if (f.kind === "server") return [f.key, f.label, first(oni.stations.map((x) => [x.label, x.where]))];
+  if (f.kind === "webhook") {
+    const names = Object.keys(oni.runner.webhooks);
+    return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.webhooks[n]}`, n]))] : null;
+  }
+  return [f.key, f.label, cur];
+}
+
+/** One WHEN, IF or THEN block of the given type, asked field by field and checked; `init` holds the values to start from. */
+async function askBlock(part: Part, type: string, init: Dict = {}): Promise<Dict | null> {
+  const { label, hint, fields } = CATALOG[part][type];
+  if (!fields.length) return block(part, { type });
+  let cur: Dict = { ...init }, note = hint + (fields.some((f) => f.kind === "message") ? `\nIn a message: ${TEMPLATE_HELP}` : "");
+  for (;;) {
+    const rows = fields.map((f) => fieldRow(f, cur[f.key]));
+    if (rows.includes(null)) {
+      oni.notify("Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
+      return null;
+    }
+    const v = await oni.form(label.toUpperCase(), rows as [string, string, string | [string, string][]][], { verb: "OK", note });
+    if (!v) return null;
+    cur = v;
+    try {
+      return block(part, { type, ...v });
+    } catch (e) {
+      note = `${(e as Error).message}\n${hint}`;
+    }
+  }
+}
+
+const pickType = (part: Part) => oni.pick({ when: "WHEN", if: "ONLY IF", then: "THEN DO" }[part], Object.entries(CATALOG[part]).map(([k, e]) => [e.label, k] as [string, string]));
+
+/** The IF or THEN list: add, edit, move and remove blocks until Done. */
+async function blocks(part: "if" | "then", list: Dict[]): Promise<Dict[] | null> {
+  const lo = part === "then" ? 1 : 0;
+  for (;;) {
+    const got = await oni.pick(part === "if" ? "ONLY IF · all of these must hold" : "THEN DO · in this order", [
+      ...list.map((b, i) => [`${i + 1}. ${describeBlock(part, b)}`, `b${i}`] as [string, string]),
+      ...(list.length < 8 ? [[part === "if" ? "+ Add a condition" : "+ Add an action", "add"] as [string, string]] : []),
+      [list.length >= lo ? "Done" : "Done (a rule needs at least one action)", DONE],
+    ]);
+    if (got === null) return null;
+    if (got === DONE) {
+      if (list.length >= lo) return list;
+      oni.notify("A rule needs something to do.", "AUTOMATION", "warning");
+    } else if (got === "add") {
+      const type = await pickType(part);
+      const b = type && (await askBlock(part, type));
+      if (b) list = [...list, b];
+    } else {
+      const i = Number(got.slice(1)), act = await oni.pick(describeBlock(part, list[i]), [["Edit", "edit"], ["Move up", "up"], ["Remove", "rm"]]);
+      if (act === "edit") {
+        const b = await askBlock(part, list[i].type, list[i]);
+        if (b) list = list.map((x, j) => (j === i ? b : x));
+      } else if (act === "up" && i > 0) list = list.map((x, j) => (j === i - 1 ? list[i] : j === i ? list[i - 1] : x));
+      else if (act === "rm") list = list.filter((_, j) => j !== i);
+    }
+  }
+}
+
+/** Build a rule (or change `base`) a step at a time: name, servers, WHEN, IF, THEN, limits, then a read-back. Null: dropped. */
+async function ruleFlow(base: Dict | null): Promise<Dict | null> {
+  const stations = oni.stations;
+  const some = !!base && base.servers !== "all";
+  const f = await oni.form(base?.id ? "EDIT RULE" : "NEW RULE", [["name", "Name", base?.name ?? ""],
+    ...(stations.length > 1 ? [["scope", "Runs on", some ? [["Chosen servers", "some"], ["Every server", "all"]] : [["Every server", "all"], ["Chosen servers", "some"]]] as [string, string, [string, string][]]] : [])],
+  { verb: "NEXT", required: ["name"] });
+  if (!f) return null;
+  let servers: "all" | string[] = "all";
+  if (f.scope === "some") {
+    const got = await toggles("RUNS ON · tick the servers", stations.map((x) => [x.label, x.where] as [string, string]), some ? base!.servers : []);
+    if (!got) return null;
+    if (got.length) servers = got;
+    else oni.notify("None ticked, so it runs on every server.", "AUTOMATION");
+  }
+  const type = await pickType("when");
+  if (!type) return null;
+  const when = await askBlock("when", type, base?.when?.type === type ? base.when : {});
+  const conds = when && (await blocks("if", base?.if ?? []));
+  const acts = conds && (await blocks("then", base?.then ?? []));
+  if (!when || !conds || !acts) return null;
+  const draft = validate({ name: f.name.trim(), servers, when, if: conds, then: acts });
+  let limits: Dict | null = { cooldown: String(base?.cooldown ?? draft.cooldown), per_hour: String(base?.per_hour ?? draft.per_hour) };
+  let note = "Cooldown: seconds before it can fire again for the same server and player. Per hour: the most times it may fire.";
+  for (;;) {
+    limits = await oni.form("LIMITS", [["cooldown", "Cooldown (seconds)", limits!.cooldown], ["per_hour", "Most times an hour (1–600)", limits!.per_hour]], { verb: "NEXT", note });
+    if (!limits) return null;
+    try {
+      const rule = validate({ ...draft, id: base?.id, enabled: base?.enabled ?? true, cooldown: Number(limits.cooldown), per_hour: Number(limits.per_hour) });
+      return (await oni.confirm("SAVE THIS RULE", describe(rule, serverName), "SAVE", false)) ? rule : null;
+    } catch (e) {
+      note = (e as Error).message;
+    }
+  }
+}
+
+/** TEST: what the rule would do if it fired right now on a server, with the option of really doing it. */
+async function testRule(rule: Dict) {
+  const up = oni.stations.filter((x) => x.online);
+  if (!up.length) return oni.notify("No server is connected to test on.", "AUTOMATION", "warning");
+  const where = up.length === 1 ? up[0].where : await oni.pick("TEST ON WHICH SERVER", up.map((x) => [x.label, x.where] as [string, string]));
+  if (!where) return;
+  const fire = sample(oni.runner.engine, rule, where), steps = plan(oni.runner.engine, fire);
+  const body = steps.length ? steps.map((x) => `• ${stepWords(oni.runner.engine, x)}`).join("\n") : "Nothing: there is nobody it would tell.";
+  const text = `If this fired now on ${serverName(where)} (its conditions and limits aside) it would:\n${body}`;
+  if (!steps.length) return void (await oni.confirm(`TEST · ${rule.name}`, text, "OK", false));
+  if (await oni.confirm(`TEST · ${rule.name}`, `${text}\n\nSEND FOR REAL does these now; ABORT only showed them.`, "SEND FOR REAL", false)) await oni.runner.steps(fire, steps);
+}
+
+/** Who has which role. ADMIN here is for rules only (who counts as an admin); the server's own admin list is under F4. */
+async function rolesFlow() {
+  const roles = { ...oni.roles };
+  const id = (p: Dict) => String(pick(p, "player_id", "id") ?? "");
+  for (;;) {
+    const got = await oni.pick("ROLES · who rules treat as ADMIN, VIP or MOD", [
+      ...Object.entries(roles).map(([k, p]) => [`${p.name || k.slice(0, 12)}  ${p.roles.join(", ").toUpperCase()}`, k] as [string, string]),
+      ["+ Add a player", "add"], ["Done", DONE]]);
+    if (got === null) return;
+    if (got === DONE) return void (await oni.saveAutomation(oni.rules, roles).catch((e) => oni.notify(String(e), "AUTOMATION", "error", 10)));
+    let who = got, name = roles[got]?.name ?? "";
+    if (got === "add") {
+      const seen = new Map<string, [string, string]>();
+      for (const x of oni.stations) for (const p of x.players) if (id(p)) seen.set(id(p), [String(pick(p, "name") ?? id(p)), x.label]);
+      const chosen = await oni.pick("WHICH PLAYER", [...[...seen].map(([k, [n, at]]) => [`${n}  (${at})`, k] as [string, string]), ["Type a player ID…", "type"]]);
+      if (!chosen) continue;
+      if (chosen === "type") {
+        const t = await oni.form("PLAYER ID", [["id", "Player ID (64 characters)", ""], ["name", "Name (to recognise them by)", ""]], { verb: "OK", required: ["id"] });
+        if (!t) continue;
+        [who, name] = [t.id.trim(), t.name.trim()];
+      } else [who, name] = [chosen, seen.get(chosen)![0]];
+    } else {
+      const act = await oni.pick(name || who, [["Change roles", "edit"], ["Remove", "rm"]]);
+      if (act === "rm") delete roles[who];
+      if (act !== "edit") continue;
+    }
+    const picked = await toggles(`ROLES · ${name || who.slice(0, 12)}`, ROLES.map((r) => [r.toUpperCase(), r] as [string, string]), roles[who]?.roles ?? []);
+    if (!picked) continue;
+    if (picked.length) roles[who] = { name, roles: picked, servers: roles[who]?.servers ?? "all" };
+    else delete roles[who];
+  }
+}
+
+/** Discord webhooks: add, send a test, remove. The URLs stay in the app's own storage; this window sees them hidden. */
+async function discordFlow() {
+  for (;;) {
+    const got = await oni.pick("DISCORD WEBHOOKS", [...Object.entries(oni.runner.webhooks).map(([n, u]) => [`${n}  ${u}`, n] as [string, string]),
+      ["+ Add a webhook", "add"], ["How do I get a webhook URL?", "help"], ["Done", DONE]]);
+    if (got === null || got === DONE) return;
+    try {
+      if (got === "help") await oni.confirm("A DISCORD WEBHOOK", DISCORD_STEPS, "OK", false);
+      else if (got === "add") {
+        const f = await oni.form("ADD A WEBHOOK", [["name", "Name (letters, numbers, - _), like alerts", ""], ["url", "Webhook URL", ""]], { verb: "ADD", required: ["name", "url"], secret: ["url"] });
+        if (f) {
+          await invoke("discord_add", { name: f.name, url: f.url });
+          await oni.loadAutomation();
+          oni.notify("Added: pick it and SEND A TEST to see it arrive.", "DISCORD");
+        }
+      } else {
+        const act = await oni.pick(got, [["Send a test message", "test"], ["Remove", "rm"]]);
+        if (act === "test") {
+          const code = await invoke<number>("discord_post", { name: got, text: "Test message from ONI RCON: this webhook works." });
+          const ok = code >= 200 && code < 300;
+          oni.notify(ok ? "Sent: check the channel." : `Discord answered ${code}.`, "DISCORD", ok ? "information" : "error");
+        } else if (act === "rm" && (await oni.confirm("REMOVE WEBHOOK", `${got} will stop working in every rule that posts to it.`, "REMOVE", true))) {
+          await invoke("discord_remove", { name: got });
+          await oni.loadAutomation();
+        }
+      }
+    } catch (e) {
+      oni.notify(String(e), "DISCORD", "error", 12);
+    }
+  }
+}
+
+/** AUTOMATION: the rules list, with each button going out to its flow and back until it is closed. */
+export async function automation() {
+  let sel: string | undefined;
+  for (;;) {
+    const r = await oni.ask<{ do: string; id?: string } | null>("automation", { sel });
+    if (!r) return;
+    sel = r.id ?? sel;
+    const rule = oni.rules.find((x) => x.id === r.id);
+    const save = (rules: Dict[]) => oni.saveAutomation(rules);
+    try {
+      if (r.do === "new" || r.do === "template" || (r.do === "edit" && rule)) {
+        if (r.do !== "edit" && oni.rules.length >= MAX_RULES) {
+          oni.notify(`${MAX_RULES} rules is the limit.`, "AUTOMATION", "warning");
+          continue;
+        }
+        let base: Dict | null = r.do === "edit" ? rule! : null;
+        if (r.do === "template") {
+          const name = await oni.pick("TEMPLATE · a starting point to change", STARTERS.map((t) => [`${t.name}  ·  ${CATALOG.when[t.when.type].label}`, t.name] as [string, string]));
+          const t = STARTERS.find((x) => x.name === name);
+          if (!t) continue;
+          const hook = Object.keys(oni.runner.webhooks)[0];
+          if (t.then.some((a: Dict) => a.type === "discord") && !hook) {
+            oni.notify("This one posts to Discord: add a webhook first (DISCORD).", "AUTOMATION", "warning", 10);
+            continue;
+          }
+          base = { ...t, then: t.then.map((a: Dict) => (a.type === "discord" ? { ...a, webhook: hook } : a)) };
+        }
+        const made = await ruleFlow(base);
+        if (made) {
+          await save(rule && r.do === "edit" ? oni.rules.map((x) => (x.id === rule.id ? made : x)) : [...oni.rules, made]);
+          sel = made.id;
+        }
+      } else if (rule && r.do === "toggle") await save(oni.rules.map((x) => (x === rule ? { ...x, enabled: !x.enabled } : x)));
+      else if (rule && r.do === "delete") {
+        if (await oni.confirm("DELETE RULE", `${rule.name} is removed for good.`, "DELETE", true)) await save(oni.rules.filter((x) => x !== rule));
+      } else if (rule && r.do === "test") await testRule(rule);
+      else if (r.do === "roles") await rolesFlow();
+      else if (r.do === "discord") await discordFlow();
+    } catch (e) {
+      oni.notify(String(e), "AUTOMATION", "error", 12);
+    }
+  }
 }

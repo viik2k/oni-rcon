@@ -8,7 +8,7 @@ import { PLAYER_OPS, TIPS, player } from "../actions";
 import { bar, num, pick, pingCell, redactAddr, redactData, sides, splitBar, targetOf, teamOf, type Dict, type Line } from "../lib/util";
 import { Btn, Json, L, Panel, Pixel, Table, type Row } from "./ui";
 
-export const assetsUi = { selected: null as string | null, rows: new Map<string, Dict>() };
+export const assetsUi = { selected: null as string | null, want: null as string | null, rows: new Map<string, Dict>() };
 
 function teamStrip(): Line | null {
   const teams = sides(oni.cur.players);
@@ -121,8 +121,11 @@ function Dossier({ p }: { p: Dict | undefined }) {
 
 export function Assets() {
   useV((s) => s.roster);
-  const [sel, setSel] = useState<string | null>(assetsUi.selected);
+  const [sel, setSel] = useState<string | null>(assetsUi.want ?? assetsUi.selected);
   const rows = playerRows();
+  useEffect(() => { // a player picked from FIND PLAYER, once their server's roster is showing
+    if (assetsUi.want && rows.some((r) => r.id === assetsUi.want)) { setSel(assetsUi.want); assetsUi.want = null; }
+  });
   const st = oni.cur;
   assetsUi.selected = rows.some((r) => r.id === sel) ? sel : rows[0]?.id ?? null;
   const mx = st.data.players?.max_players ?? st.data.status?.max_players;

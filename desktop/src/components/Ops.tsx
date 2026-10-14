@@ -4,6 +4,7 @@ import { AMBER, CYAN, DIM, GOLD, GREEN, RED, TEAM_COLOR, WHITE } from "../art/pa
 import { oni, SPREE, useV } from "../engine";
 import { BAN_OPS, OPS, OP_GROUPS, TIPS, bl, op } from "../actions";
 import { norm, refsOf } from "../lib/forge";
+import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
 import { num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Line } from "../lib/util";
 import { Btn, L, Panel, Table, useSize, type Row } from "./ui";
 
@@ -63,6 +64,7 @@ export function Operations() {
   const [tref, { w: tw }] = useSize<HTMLDivElement>();
   const st = oni.cur, s: Dict = st.data.status ?? {}, vote: Dict = st.data.vote ?? {}, info = st.info ?? {};
   const credit = playing(st.where, s.map, s.mode);
+  const fr: Dict | undefined = oni.health.frames?.[String(st.index)];
   const rows: [string, Line | string][] = [
     ["STATION", [[String(s.name || info.server || st.label), AMBER]]],
     ["UPLINK", `${st.where}   v${info.version ?? "?"}`],
@@ -72,13 +74,14 @@ export function Operations() {
     ...credit.map((e) => ["FORGE", [[String(e.title || e.listing_id), GOLD], [e.author ? `  by ${e.author}` : "", WHITE], [e.version ? `  v${e.version}` : "", DIM]]] as [string, Line]),
     ["NEXT", String(s.next || "playlist")],
     ["PLAYERS", `${s.players ?? "—"} / ${s.max_players ?? "—"}`],
+    ["SERVER FPS", fr ? [[`${Math.round(fr.fps)} of ${TARGET}`, LEVEL_COLOR[level(fr.fps)]], [fr.slow_minutes ? `   ${fr.slow_minutes} slow minute${fr.slow_minutes > 1 ? "s" : ""} in the last 5` : "", DIM]] : [["—", DIM]]],
     ["JOIN PASSWORD", yesNo(s.password_required, "SET", "OPEN")],
     ["PING LIMIT", s.max_ping ? `${s.max_ping} ms` : "off"],
     ["ANTI-CHEAT", `${s.anti_cheat ?? "—"}${s.anti_cheat_active ? "  (active)" : ""}`],
     ["VPN BLOCK", yesNo(s.block_vpn)], ["TEXT CHAT", yesNo(s.text_chat)], ["VOICE", yesNo(s.voice)], ["HIDDEN", yesNo(s.hidden, "YES", "NO")],
   ];
   const voting = "vote" in st.data ? !!vote.vote : null;
-  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "playlist", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
+  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
   const ops = Object.fromEntries(OPS.map(([o, l, v]) => [o, [l, v]]));
   const here = norm(s.map);
   const pulledRefs = new Set<string>();

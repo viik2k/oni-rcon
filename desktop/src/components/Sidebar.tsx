@@ -5,10 +5,13 @@ import { emblem, faceCached } from "../art/archive";
 import { paint } from "../art/pixels";
 import { oni, useV, type Station } from "../engine";
 import { STATE, TIPS, addServer } from "../actions";
+import { LEVEL_COLOR, level } from "../lib/perf";
 import { gauge, num, spark, type Line } from "../lib/util";
 import { L, Pixel, useSize } from "./ui";
 
 const QUIET = new Set(["", "unknown", "none"]);
+/** The server's frame rate when it is falling behind, so the card says so; undefined while it keeps up. */
+const slowFps = (st: Station) => { const r = oni.health.frames?.[String(st.index)]; return r?.behind ? Math.round(r.fps) : undefined; };
 
 function cardLines(st: Station, cols: number): [Line, Line, Line[]] {
   const s = st.data.status ?? {};
@@ -16,7 +19,9 @@ function cardLines(st: Station, cols: number): [Line, Line, Line[]] {
   const glyph: [string, string] = [st.state === "connecting" ? "◐" : g0, c0];
   const n = num(s.players), mx = num(s.max_players);
   const count: Line = st.online && n !== undefined ? [[`${n}/${mx}`, n ? AMBER : DIM]] : [];
-  const right: Line = st.alerts ? [[`⚑ ${st.alerts}  `, RED], ...count] : count;
+  const fr = st.online ? slowFps(st) : undefined;
+  const lag: Line = fr ? [[`${fr}fps  `, LEVEL_COLOR[level(fr)]]] : [];
+  const right: Line = st.alerts ? [[`⚑ ${st.alerts}  `, RED], ...lag, ...count] : [...lag, ...count];
   const top: Line = [[glyph[0] + " ", glyph[1]], [`${st.index + 1}  ${st.label.toUpperCase()}`, WHITE]];
   if (!st.online) {
     const left = st.retryAt - performance.now();
@@ -62,7 +67,7 @@ function cardKey(st: Station, cols: number) {
   const s = st.data.status ?? {};
   const left = st.retryAt > performance.now() ? Math.ceil((st.retryAt - performance.now()) / 1000) : 0;
   const trace = st.online ? st.rate(oni.fleet ? 10 : Math.max(4, cols - 13), 5000, oni.fleet).join(",") : "";
-  return [st.state, st.label, st.tag, st.alerts, s.players, s.max_players, s.map, s.mode, s.phase, left, trace, st.flash > performance.now(), oni.why(st)].join("|");
+  return [st.state, st.label, st.tag, st.alerts, s.players, s.max_players, s.map, s.mode, s.phase, left, trace, slowFps(st), st.flash > performance.now(), oni.why(st)].join("|");
 }
 
 export function Stations({ cols }: { cols: number }) {
@@ -108,7 +113,7 @@ export function Super({ size, width }: { size: number; width: number }) {
   const [mood, color, last] = words;
   const alarm = mood === "ALARMED" || mood === "HOSTILE";
   return (
-    <div className={`super ${below ? "below" : ""}`} title={TIPS.super}>
+    <div className={`super ${below ? "below" : ""}`} title={`${TIPS.super} Click, or press F8, for its findings.`} onClick={() => oni.onFindings?.()} style={{ cursor: "pointer" }}>
       <canvas ref={canvas} className="px" style={{ width: size, height: size, flex: "none", borderRadius: "50%", boxShadow: alarm ? `0 0 10px ${blend(RED, INK, 0.6)}` : undefined }} />
       <div className="words">
         <div style={{ color: DIM }}>SUPERINTENDENT</div>

@@ -9,8 +9,11 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "./art/palette";
 import { Superintendent, classify } from "./art/superintendent";
 import { Medals } from "./lib/medals";
+import { Engine, type Roles } from "./lib/rules";
+import { Runner, type Note } from "./lib/runner";
+import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
-  ALERT, CATS, ID_LIKE, KIND, cmdLine, commonPrefix, describe, explain, idForms, num, pick, playerIds, plain, reactionWords,
+  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
   redactData, redactText, resolve, splitTag, stripEnds, who, type Dict, type Line,
 } from "./lib/util";
 
@@ -23,8 +26,8 @@ export const TABS: Tab[] = ["assets", "intercepts", "operations", "blacklist", "
 
 // --- what the window repaints, by counter ----------------------------------------------------------------------
 type Counters = { cards: number; roster: number; ops: number; bans: number; feed: number; log: number; forge: number;
-  health: number; mast: number; ui: number; toasts: number; dialog: number };
-export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0 }));
+  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number };
+export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0 }));
 const pending = new Set<keyof Counters>();
 let flushQueued = false;
 // the feed and the log repaint at most this often: a fleet's events arrive as a stream, and a repaint per event
@@ -162,6 +165,20 @@ class Oni {
   dialogs: Dialog[] = [];
   alertAt = -Infinity;
   sup = new Superintendent();
+  findings = new Findings();
+  /** Automation rules: they run while this console is open, and act through the same calls as the buttons do. */
+  rules: Dict[] = [];
+  roles: Roles = {};
+  runner = new Runner({
+    call: (where, command, args) => {
+      const st = this.stations.find((s) => s.where === where);
+      return st?.online ? this.call(st, command, args) : Promise.resolve(null);
+    },
+    discord: (name, text) => invoke<number>("discord_post", { name, text }),
+    changed: () => bump("auto"),
+    noted: (n) => this.noteAutomation(n),
+  });
+  private rosters = new WeakMap<object, Who[]>();
   labelWidth = 14;
   banner: { text: string; warn: boolean; until: number } | null = null;
   health: Dict = { on: false, crashes: [], hosts: {}, boxes: {}, services: {}, errors: [], service_err: {}, watched: [] };
@@ -174,6 +191,7 @@ class Oni {
   private unlisten: (() => void) | null = null;
   onInstalled: ((e: Dict) => void) | null = null;
   onForgeRefresh: ((lid: string) => void) | null = null;
+  onFindings: (() => void) | null = null;
 
   get cur() { return this.stations[this.sel]; }
 
@@ -195,6 +213,11 @@ class Oni {
     this.sel = 0;
     this.feed = [];
     this.log = [];
+    this.findings.clear();
+    this.runner.history = [];
+    this.runner.engine = new Engine();
+    this.loadAutomation();
+    this.sup.clear();
     this.measureLabels();
     this.logLine([["ONI remote console. Commands go to the selected station; `@all` prefixes run on every station; `help` asks the server; `clear` clears this log.", DIM]]);
     this.unlisten = await listen<Dict[]>("oni", (e) => this.batch(e.payload));
@@ -204,6 +227,28 @@ class Oni {
     every(1000, () => this.pollSlow());
     for (const st of this.stations) if (st.online) this.fetch(st, "status");
     bump("cards", "roster", "ops", "bans", "feed", "log", "forge", "health", "mast", "ui");
+  }
+
+  async loadAutomation() {
+    try {
+      const f = await invoke<Dict>("automation_load");
+      [this.rules, this.roles, this.runner.webhooks] = [f.rules, f.roles, f.webhooks];
+      this.runner.load(this.rules, this.roles);
+    } catch (e) {
+      this.notify(String(e), "AUTOMATION", "error", 10);
+    }
+  }
+
+  /** Save the rules and roles (the Rust side keeps the file), then run on them. */
+  async saveAutomation(rules = this.rules, roles = this.roles) {
+    await invoke("automation_save", { rules, roles });
+    [this.rules, this.roles] = [rules, roles];
+    this.runner.load(rules, roles);
+  }
+
+  /** What a rule did goes in the command log, the audit trail beside everything typed by hand. */
+  private noteAutomation(n: Note) {
+    this.logLine([[new Date().toTimeString().slice(0, 9), DIM], ["AUTO ", CYAN], [`${n.name || n.rule}${n.server ? ` · ${n.server}` : ""}  `, WHITE], [n.result, DIM]]);
   }
 
   stop() {
@@ -241,7 +286,11 @@ class Oni {
         if (st === this.cur) bump("roster");
         return;
       }
-      case "health": this.health = m.view; return bump("health", "mast");
+      case "health": {
+        this.health = m.view;
+        if (this.runner.wantsFps) for (const st of this.stations) this.runner.fps(st.where, m.view.frames?.[String(st.index)]?.fps);
+        return bump("health", "mast", "cards", "ops");
+      }
       case "health-notice": return this.healthNotice(m);
       case "toast": return this.notify(m.explain ? explain(m.text) : m.text, m.title, m.severity, m.timeout);
       case "log": {
@@ -257,9 +306,11 @@ class Oni {
 
   private onLink(st: Station, m: Dict) {
     const { state, detail } = m;
+    this.findings.reset(String(st.index)); // whatever happened while the link was down is unknown
     st.state = state;
     st.detail = detail;
     st.info = m.info ?? st.info;
+    if (state !== "connecting") this.runner.connection(st.where, state === "online", st.label);
     if (state === "online") {
       st.medals.newGame(); // what happened while we were away is unknown
       this.relabel();
@@ -282,13 +333,19 @@ class Oni {
   private onEvent(st: Station, raw: Dict) {
     if (this.rawEvents) this.logLine([[`${st.label} ◂ `, CYAN], [JSON.stringify(redactData(raw, this.redact)), DIM]]);
     const names = st.names;
+    const context = this.findingContext(st);
+    const found = this.findings.ingest(String(st.index), raw, (id) => this.nameOf(st, names, id), context, this.roster(st));
+    for (const f of found) this.reportFinding(f, st);
+    this.runner.event(st.where, raw);
     if (raw.event === "join") {
       for (const f of idForms(pick(raw, "id", "player_id"))) if (f.length >= 8) st.past.set(f, String(pick(raw, "name", "player") ?? "?"));
     }
     const rawIds = [raw.killer, raw.victim];
     const ev = resolve(raw, names, st.ident);
-    const kind = ev.event, text = String(ev.text ?? "");
+    const kind = ev.event;
+    if (kind === "chat") ev._review_alert = found.some((f) => f.level === "review");
     if (kind === "kill") {
+      ev._quiet_kills = quietKillMode(context);
       const aliases = new Set(st.aliases.values());
       if (aliases.has(ev.killer) || aliases.has(ev.victim)) {
         this.fetch(st, "players"); // someone the roster hasn't caught up with: ask again
@@ -300,18 +357,54 @@ class Oni {
     st.activity.push(performance.now());
     this.logEvent(st, ev);
     this.sup.react(ev, classify(ev) ? reactionWords(ev, this.redact) : "");
-    if (kind === "chat" && ev.channel !== "server" && ALERT.test(text)) {
-      this.notify(redactText(`${who(pick(ev, "name", "player"), names)}: ${text}`, this.redact), `CALL FOR ADMIN · ${st.label}`, "warning", 12);
-      this.alert(st);
-    } else if (kind === "cheat") {
-      this.notify(plain(describe(ev, this.redact)), `ANTI-CHEAT · ${st.label}`, "error", 12);
-      this.alert(st);
-    }
     if (["join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"].includes(kind)) this.fetch(st, "players", "status");
     if (kind === "ban" || kind === "unban") this.fetch(st, "bans");
     if (kind === "admin") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
+  }
+
+  // --- findings ----------------------------------------------------------------------------------------------------
+  private findingContext(st: Station): Dict {
+    const status = st.data.status ?? {};
+    return { ...status, name: [status.name, st.name, st.label].filter(Boolean).join(" ") };
+  }
+
+  /** The roster as a finding may carry it, rebuilt only when the roster is. */
+  private roster(st: Station): Who[] {
+    const players = st.data.players?.players;
+    if (!Array.isArray(players)) return [];
+    let r = this.rosters.get(players);
+    if (!r) this.rosters.set(players, (r = publicRoster(players)));
+    return r;
+  }
+
+  /** The callsign an ID or slot belongs to, as far as this station has learned. */
+  private nameOf(st: Station, names: Map<unknown, string>, id: string): string | undefined {
+    if (/^\d+$/.test(id) && names.has(Number(id))) return names.get(Number(id));
+    for (const f of idForms(id)) {
+      const n = st.here.get(f) ?? st.past.get(f);
+      if (n !== undefined) return n;
+    }
+    return undefined;
+  }
+
+  private reportFinding(f: Finding, st: Station) {
+    this.sup.report(redactText(`${st.label}: ${f.title}`, this.redact), f.level);
+    if (f.level !== "review") return;
+    this.notify(redactText(`${f.title}\nF8 for the evidence`, this.redact), `REVIEW NEEDED · ${st.label}`, "warning", 12);
+    this.alert(st);
+  }
+
+  /** Acknowledge everything: the alerts, the banner, the toasts, the face. */
+  acknowledgeFindings() {
+    this.findings.acknowledge();
+    this.sup.clear();
+    this.alertAt = -Infinity;
+    this.banner = null;
+    this.toasts = [];
+    for (const s of this.stations) [s.alerts, s.flash] = [0, 0];
+    bump("mast", "cards", "ui", "toasts");
   }
 
   private unmatchedIds(st: Station, ids: unknown[]) {
@@ -324,6 +417,7 @@ class Oni {
   private healthNotice(m: Dict) {
     const st = m.index === null ? null : this.stations[m.index];
     this.logEvent(st, { event: "health", text: m.text, level: m.level });
+    if (m.quiet) return; // the feed only: frame rate is news, not an alarm
     this.banner = { text: ` ⚠ ${st ? st.label : "HOST"}  ${m.text}      click to dismiss`, warn: m.level !== "crit", until: performance.now() + 30_000 };
     this.alert(st);
     bump("ui");
@@ -352,7 +446,11 @@ class Oni {
       if (r.ok && w === "admins" && Array.isArray(r.data)) st.data[w] = { admins: r.data };
       else if (r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
         if (w === "status" && r.data.phase !== st.data.status?.phase) st.medals.newGame();
-        if (w === "players") st.learn(r.data.players ?? []);
+        if (w === "players") {
+          st.learn(r.data.players ?? []);
+          this.runner.players(st.where, r.data.players ?? []);
+        }
+        if (w === "status") this.runner.status(st.where, r.data);
         st.data[w] = r.data;
       }
     });
@@ -506,7 +604,11 @@ class Oni {
   }
 
   private tick() {
+    this.runner.tick();
     if (this.banner && performance.now() > this.banner.until) this.banner = null;
+    const latest = this.findings.recent().find((r) => r.at > this.findings.acknowledgedAt);
+    if (latest && Date.now() / 1000 - latest.at <= 300) this.sup.last = redactText(`${this.stations[Number(latest.server)]?.label ?? latest.server}: ${latest.title} · F8`, this.redact);
+    else if (this.sup.last.endsWith(" · F8")) this.sup.last = "";
     bump("mast", "cards", "ui");
   }
 
@@ -535,6 +637,7 @@ class Oni {
     for (const st of this.stations) seen.set(st.label, (seen.get(st.label) ?? 0) + 1);
     for (const st of this.stations) if (st.tag && (seen.get(st.label) ?? 0) > 1) [st.label, st.tag] = [`${st.tag} · ${st.label}`, ""];
     this.measureLabels();
+    for (const st of this.stations) this.runner.engine.lobby(st.where, st.label);
     invoke("set_labels", { labels: this.stations.map((s) => s.label) }).catch(() => {});
     bump("cards", "feed", "ui");
   }

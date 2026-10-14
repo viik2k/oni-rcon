@@ -88,7 +88,7 @@ export function votesOf(x: Dict): [number | undefined, number | undefined, numbe
   return [up, down, total];
 }
 
-const metricsOf = (x: Dict): Dict => (x?.metrics && typeof x.metrics === "object" ? x.metrics : {});
+export const metricsOf = (x: Dict): Dict => (x?.metrics && typeof x.metrics === "object" ? x.metrics : {});
 
 export function recentOf(x: Dict, window = ""): number | undefined {
   for (const src of [x, metricsOf(x)]) {

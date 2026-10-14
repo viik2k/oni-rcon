@@ -261,11 +261,140 @@ pub fn crashes_in(lines: &[String], at: &dyn Fn(i64, i64, i64) -> f64) -> Vec<Cr
     out
 }
 
+// --- frame rate (from ibigs/oni-rcon's perf.py, by RifleJock) ---------------------------------------------------
+// The server aims at 60 frames a second and logs each minute it spent under 54:
+//   04:13:33 Server falling behind: under 54 frames a second for 58 of the last 58 seconds (29 on average, longest
+//   frame 125 ms) with 85 players. ...
+// A minute without that line held 54 or more every second, so a minute's rate is its slow seconds at their average
+// and the rest at 60: a slight overestimate, never an invented slowdown. RCON and status.json carry no frame rate.
+static LAG: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)Server falling behind: under \d+ frames a second for (\d+) of the last (\d+) seconds \((\d+) on average, longest frame (\d+) ms\) with (\d+) players?").unwrap()
+});
+static BODY_CLOCK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d\d):(\d\d):(\d\d)\s").unwrap());
+/// Logged every minute by a server whatever its frame rate: a report with it is the raw log, so no lag line means 60.
+const EVERY_MINUTE: &str = "Network upload over the last";
+pub const TARGET: f64 = 60.0;
+pub const SLOW: f64 = 54.0; // what the server calls falling behind
+pub const BAD: f64 = 40.0; // under this play is visibly choppy, and the feed says so
+const WINDOW: f64 = 300.0; // what the averages cover
+const FRESH: f64 = 150.0; // a minute's report is "now" for this long
+const KEEP: usize = 30;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Minute {
+    pub ts: f64,
+    pub slow: i64, // seconds under SLOW
+    pub span: i64,
+    pub avg: i64, // average fps over the slow seconds
+    pub frame_ms: i64,
+    pub players: i64,
+}
+
+impl Minute {
+    pub fn fps(&self) -> f64 {
+        ((self.slow * self.avg) as f64 + (self.span - self.slow) as f64 * TARGET) / self.span as f64
+    }
+}
+
+pub fn minutes_in(lines: &[String], at: &dyn Fn(i64, i64, i64) -> f64) -> Vec<Minute> {
+    let mut out = vec![];
+    for line in lines.iter().filter(|l| l.contains("falling behind")) {
+        let (stamp, body) = split_stamp(line);
+        let Some(m) = LAG.captures(body) else { continue };
+        let ts = stamp.or_else(|| BODY_CLOCK.captures(body).map(|c| at(c[1].parse().unwrap_or(0), c[2].parse().unwrap_or(0), c[3].parse().unwrap_or(0))));
+        let n = |i: usize| m[i].parse::<i64>().unwrap_or(-1);
+        let (slow, span) = (n(1), n(2));
+        if let Some(ts) = ts.filter(|_| 0 < span && span <= 3600 && (0..=span).contains(&slow)) {
+            out.push(Minute { ts, slow, span, avg: n(3).clamp(0, TARGET as i64), frame_ms: n(4).max(0), players: n(5).max(0) });
+        }
+    }
+    out
+}
+
+/// What one server's frame rate looks like now.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Reading {
+    pub fps: f64,                // the latest minute, TARGET without a recent report
+    pub avg: f64,                // over WINDOW
+    pub worst: Option<i64>,      // the slowest minute's slow-second average in WINDOW
+    pub frame_ms: Option<i64>,   // the longest frame in WINDOW
+    pub players: Option<i64>,    // as of the latest report
+    pub slow_minutes: usize,     // reports in WINDOW
+    pub since: Option<f64>,      // when the latest report came
+    pub behind: bool,
+    pub history: Vec<Bucket>,    // the last KEEP minutes, oldest first
+}
+
+/// One minute of the chart: None where it is not known.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Bucket {
+    pub fps: Option<f64>,
+    pub longest: Option<i64>,
+    pub players: Option<i64>,
+}
+
+#[derive(Default)]
+pub struct Perf {
+    minutes: VecDeque<Minute>,
+    read_at: Option<f64>, // the last report, with lag lines or without
+    first_read: Option<f64>, // the first: its log goes back DAY, so every minute since is known
+    choppy: bool, // the feed has said it's under BAD and hasn't said it recovered
+}
+
+impl Perf {
+    fn add(&mut self, m: Minute) {
+        if self.minutes.iter().any(|o| (o.ts - m.ts).abs() < 2.0 && o.span == m.span && o.avg == m.avg) {
+            return; // the same line read again
+        }
+        self.minutes.push_back(m);
+        self.minutes.make_contiguous().sort_by(|a, b| a.ts.total_cmp(&b.ts));
+        while self.minutes.len() > KEEP {
+            self.minutes.pop_front();
+        }
+    }
+
+    pub fn reading(&self, now: f64) -> Option<Reading> {
+        self.read_at?;
+        let recent: Vec<&Minute> = self.minutes.iter().filter(|m| now - WINDOW < m.ts && m.ts <= now + 60.0).collect();
+        let last = self.minutes.back();
+        let live = last.filter(|m| (0.0..=FRESH).contains(&(now - m.ts)));
+        let slow_s: i64 = recent.iter().map(|m| m.slow).sum();
+        let avg = (recent.iter().map(|m| (m.slow * m.avg) as f64).sum::<f64>() + (WINDOW - slow_s as f64).max(0.0) * TARGET) / WINDOW.max(slow_s as f64);
+        let fps = live.map_or(TARGET, Minute::fps);
+        Some(Reading {
+            fps,
+            avg,
+            worst: recent.iter().map(|m| m.avg).min(),
+            frame_ms: recent.iter().map(|m| m.frame_ms).max(),
+            players: last.map(|m| m.players),
+            slow_minutes: recent.len(),
+            since: last.map(|m| m.ts),
+            behind: fps < SLOW,
+            history: self.per_minute(now),
+        })
+    }
+
+    /// The last KEEP minutes, oldest first: a minute with a lag report is what it says, one without it (read after the
+    /// first report, whose log goes back a day) kept up at 60, and one not read yet is unknown.
+    fn per_minute(&self, now: f64) -> Vec<Bucket> {
+        let (first, read) = (self.first_read.unwrap_or(now) - DAY, self.read_at.unwrap_or(now));
+        (0..KEEP).rev().map(|i| {
+            let (hi, lo) = (now - i as f64 * 60.0, now - i as f64 * 60.0 - 60.0);
+            match self.minutes.iter().rev().find(|m| lo < m.ts && m.ts <= hi) {
+                Some(m) => Bucket { fps: Some(m.fps()), longest: Some(m.frame_ms), players: Some(m.players) },
+                None if lo >= first && lo <= read => Bucket { fps: Some(TARGET), ..Bucket::default() },
+                None => Bucket::default(),
+            }
+        }).collect()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Notice {
     pub level: &'static str,
     pub key: String,
     pub text: String,
+    pub quiet: bool, // the feed only: no banner, no chime
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -297,6 +426,7 @@ pub struct Monitor {
     pub boxes: HashMap<String, BoxState>,
     pub services: HashMap<String, Service>,
     pub seen: HashSet<String>,
+    pub perf: HashMap<String, Perf>,
     low: HashMap<String, bool>,
     counts: HashMap<String, VecDeque<(f64, i64)>>,
     drops: HashMap<String, VecDeque<f64>>,
@@ -304,7 +434,7 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn new(min_free: i64, started: f64) -> Self {
-        Monitor { min_free, started, events: vec![], hosts: HashMap::new(), boxes: HashMap::new(), services: HashMap::new(), seen: HashSet::new(), low: HashMap::new(), counts: HashMap::new(), drops: HashMap::new() }
+        Monitor { min_free, started, events: vec![], hosts: HashMap::new(), boxes: HashMap::new(), services: HashMap::new(), seen: HashSet::new(), perf: HashMap::new(), low: HashMap::new(), counts: HashMap::new(), drops: HashMap::new() }
     }
 
     pub fn sample(&mut self, key: &str, players: Option<i64>, now: f64) {
@@ -357,6 +487,10 @@ impl Monitor {
         let mut notes = if rep.host.is_empty() { vec![] } else { self.host_in(host, &rep, now) };
         let at = clock_for(&rep, now);
         let mut found = crashes_in(&rep.lines, &at);
+        let lags = minutes_in(&rep.lines, &at);
+        if !lags.is_empty() || rep.lines.iter().any(|l| l.contains(EVERY_MINUTE)) {
+            notes.extend(self.frames(key, &lags, now));
+        }
         if let Some(b) = &rep.boxed {
             found.extend(self.box_in(key, b, now));
             self.boxes.insert(key.into(), b.clone());
@@ -381,6 +515,30 @@ impl Monitor {
             self.events.drain(..self.events.len() - 500);
         }
         notes
+    }
+
+    /// Fold in a server's lag reports. The feed hears once when it gets choppy (a minute under BAD) and once when it's
+    /// kept up again for 3 minutes.
+    fn frames(&mut self, key: &str, lags: &[Minute], now: f64) -> Option<Notice> {
+        let p = self.perf.entry(key.into()).or_default();
+        lags.iter().for_each(|m| p.add(*m));
+        p.read_at = Some(now);
+        p.first_read.get_or_insert(now);
+        let r = p.reading(now)?;
+        let text = if r.fps < BAD && !p.choppy {
+            p.choppy = true;
+            format!("FALLING BEHIND  {:.0} fps with {} players, longest frame {} ms (the target is {TARGET})", r.fps, r.players.unwrap_or(0), r.frame_ms.unwrap_or(0))
+        } else if p.choppy && r.since.is_some_and(|t| now - t > 180.0) {
+            p.choppy = false;
+            format!("KEEPING UP  {TARGET} fps again for 3 minutes")
+        } else {
+            return None;
+        };
+        Some(Notice { level: "warn", key: key.into(), text, quiet: true })
+    }
+
+    pub fn frame_rates(&self, now: f64) -> HashMap<String, Reading> {
+        self.perf.iter().filter_map(|(k, p)| Some((k.clone(), p.reading(now)?))).collect()
     }
 
     fn box_in(&self, key: &str, b: &BoxState, now: f64) -> Vec<Crash> {
@@ -423,6 +581,7 @@ impl Monitor {
                     level: "crit",
                     key: String::new(),
                     text: format!("LOW MEMORY  {avail} MB available, under the {} MB limit{at}", self.min_free),
+                    quiet: false,
                 });
             }
             self.low.insert(host.into(), low || (was && (avail as f64) < self.min_free as f64 * 1.1));
@@ -491,7 +650,7 @@ impl Monitor {
             Some(p) if p > 0 => format!("  ·  {p} player{} dropped", if p != 1 { "s" } else { "" }),
             _ => String::new(),
         };
-        Notice { level: if ev.cls == RESTART { "warn" } else { "crit" }, key: ev.key.clone(), text: what + &drop }
+        Notice { level: if ev.cls == RESTART { "warn" } else { "crit" }, key: ev.key.clone(), text: what + &drop, quiet: false }
     }
 
     /// The latest crashes, newest first, at most per_server for each server.
@@ -639,6 +798,45 @@ mod tests {
         let n = m.ingest("0", "", "container started=2026-01-01T00:00:00Z oom_killed=true exit_code=137", 25.0);
         assert!(n.is_empty());
         assert!(m.events.iter().all(|e| !e.key.is_empty()));
+    }
+
+    #[test]
+    fn frame_rate_from_the_log() {
+        let lag = |clock: &str, avg: i64| format!("{clock} Server falling behind: under 54 frames a second for 58 of the last 58 seconds ({avg} on average, longest frame 125 ms) with 85 players. Each player gets one update a frame");
+        let rep = parse_report(&format!("host now=1000000 clock=10:00:00
+{}
+{}
+09:59:30 not a lag line", lag("09:58:00", 35), lag("09:59:00", 29)));
+        let mins = minutes_in(&rep.lines, &clock_for(&rep, 0.0));
+        assert_eq!(mins.len(), 2);
+        assert_eq!((mins[1].ts, mins[1].players, mins[1].frame_ms), (999940.0, 85, 125));
+        assert_eq!(mins[1].fps(), 29.0);
+
+        let mut m = Monitor::new(1024, 0.0);
+        // a filtered report with no lag line and no every-minute line says nothing about frame rate
+        m.ingest("0", "", "host now=999000", 999000.0);
+        assert!(m.frame_rates(999000.0).is_empty());
+        // the raw log with no lag line: keeping up
+        m.ingest("0", "", "09:00:00 Network upload over the last minute: 1 MB", 999000.0);
+        assert_eq!(m.frame_rates(999000.0)["0"].fps, TARGET);
+        // choppy: said once
+        let text = format!("host now=1000000 clock=10:00:00
+{}
+{}", lag("09:58:00", 35), lag("09:59:00", 29));
+        let n = m.ingest("0", "", &text, 1000000.0);
+        assert_eq!(n.len(), 1);
+        assert!(n[0].quiet && n[0].text.starts_with("FALLING BEHIND  29 fps"));
+        let r = &m.frame_rates(1000000.0)["0"];
+        assert!(r.behind && r.worst == Some(29) && r.slow_minutes == 2);
+        assert!(m.ingest("0", "", &text, 1000010.0).is_empty());
+        let h = &r.history;
+        assert_eq!((h.len(), h[27].fps, h[28].fps, h[28].longest, h[29].fps), (30, Some(35.0), Some(29.0), Some(125), Some(TARGET)));
+        assert_eq!(m.frame_rates(1000120.0)["0"].history[29].fps, None); // a minute not read yet
+        // recovered after 3 minutes without a lag line
+        let n = m.ingest("0", "", "host now=1000200
+10:03:00 Network upload over the last minute: 1 MB", 1000200.0);
+        assert!(n[0].text.starts_with("KEEPING UP"));
+        assert!(!m.frame_rates(1000200.0)["0"].behind);
     }
 
     #[test]
