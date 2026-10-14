@@ -229,6 +229,27 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
 }
 
 /// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
+/// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
+pub fn new_playlist(name: &str, vote_seconds: u32, games: &[(String, String)]) -> Result<(String, String), String> {
+    let slug = name.trim().to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
+    if slug.is_empty() {
+        return Err("Name it with a letter or number in it.".into());
+    }
+    if !(5..=120).contains(&vote_seconds) {
+        return Err("The vote lasts 5 to 120 seconds.".into());
+    }
+    if !(3..=128).contains(&games.len()) {
+        return Err("A playlist holds 3 to 128 games.".into());
+    }
+    if games.iter().enumerate().any(|(i, g)| games[..i].contains(g)) {
+        return Err("A game is in it twice.".into());
+    }
+    let games: Vec<_> = games.iter().map(|(map, game)| serde_json::json!({"map": map, "game": game})).collect();
+    let json = serde_json::json!({"version": 2, "name": name.trim(), "vote_seconds": vote_seconds, "games": games});
+    Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&json).unwrap() + "
+"))
+}
+
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
     use toml_edit::{DocumentMut, Item, Table};
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
@@ -827,6 +848,17 @@ mod tests {
 
     // dedicated init's file, cut down: what the guide shows
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
+
+    #[test]
+    fn a_new_playlist_keeps_the_rules() {
+        let g = |m: &str| (m.to_string(), "Slayer".to_string());
+        let (path, json) = new_playlist(" Friday Night! ", 25, &[g("Guardian"), g("Valhalla"), g("The Pit")]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!((path.as_str(), &v["name"], &v["games"][2]["map"]), ("playlists/friday-night.playlist.json", &"Friday Night!".into(), &"The Pit".into()));
+        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla")]).is_err(), "three at least");
+        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla"), g("Guardian")]).is_err(), "no game twice");
+        assert!(new_playlist("!!", 25, &[g("a"), g("b"), g("c")]).is_err());
+    }
 
     #[test]
     fn a_setting_lands_on_its_own_server() {

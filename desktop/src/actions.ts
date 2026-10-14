@@ -15,9 +15,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "reconnect", "restart"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "reconnect", "restart"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -43,6 +43,7 @@ export const TIPS: Record<string, string> = {
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
+  "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
@@ -139,6 +140,44 @@ async function saveSetting(st: Station, key: string, value: unknown, what: strin
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
 }
 
+/** NEW PLAYLIST: a name, then a map and a mode a game at a time from the server's own lists. */
+async function newPlaylist(st: Station): Promise<void> {
+  const maps = entries(st, "maps"), modes = entries(st, "modes");
+  if (!maps.length || !modes.length) return oni.notify("Map and mode lists not loaded yet.", "", "warning");
+  const f = await oni.form("NEW PLAYLIST", [["name", "Name (shown in the lobby)", ""], ["vote", "Seconds players get to vote (5 to 120)", "20"]],
+    { verb: "PICK GAMES", required: ["name", "vote"], note: "Then its games, a map and a mode each: three at least, each once." });
+  if (!f) return;
+  const games: [string, string][] = [];
+  for (;;) {
+    const n = games.length + 1, done: [Line, string][] = games.length >= 3 ? [[[[`✓ DONE: save these ${games.length} games`, AMBER]], ""]] : [];
+    // ponytail: the server's own map and mode references, taken as what its playlists name them by
+    const mp = await oni.pick(`GAME ${n} · SELECT MAP`, [...done, ...maps]);
+    if (mp === "") break;
+    if (mp === null) {
+      if (!games.length || (await oni.confirm("DISCARD PLAYLIST", `Its ${games.length} game${games.length > 1 ? "s" : ""} so far are thrown away.`, "DISCARD"))) return;
+      continue;
+    }
+    const md = await oni.pick(`GAME ${n} · ${mp} · SELECT MODE`, modes);
+    if (!md) continue;
+    if (games.some(([a, b]) => a === mp && b === md)) oni.notify(`${mp} / ${md} is in it already.`, "", "warning");
+    else games.push([mp, md]);
+  }
+  const args = { index: st.index, name: f.name, voteSeconds: Number(f.vote), games };
+  let path: string;
+  try {
+    let r = await invoke<Dict>("save_playlist", { ...args, replace: false });
+    if (r.exists) {
+      if (!(await oni.confirm("REPLACE PLAYLIST", `${r.path} is there already.`, "REPLACE"))) return;
+      r = await invoke<Dict>("save_playlist", { ...args, replace: true });
+    }
+    path = r.path;
+  } catch (e) {
+    return oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
+  }
+  if (await oni.confirm(`SWITCH TO  ${f.name}`, `Saved as ${path}. Put the server on it now?`, "SWITCH", false)) return saveSetting(st, "playlist", path, "PLAYLIST", path);
+  oni.notify(`Saved as ${path}: SWITCH PLAYLIST puts the server on it.`, `PLAYLIST · ${st.label}`);
+}
+
 export async function op(name: string) {
   const st = oni.cur, s = st.data.status ?? {};
   if (name === "broadcast") return broadcast();
@@ -175,12 +214,13 @@ export async function op(name: string) {
     // ponytail: Forge installs into the content folder, taken as dedicated.toml's default "content"
     for (const e of Object.values<Dict>(oni.forgeState.servers?.[st.where] ?? {}))
       if (e.kind === "playlist" && e.files?.[0]?.path) files.push(`content/${e.files[0].path}`);
-    if (!files.length) return oni.notify("No playlists in the server's playlists folder yet: install one from F6.", `PLAYLISTS · ${st.label}`, "warning");
+    if (!files.length) return oni.notify("No playlists in the server's playlists folder yet: NEW PLAYLIST makes one, or install one from F6.", `PLAYLISTS · ${st.label}`, "warning");
     const got = await oni.pick("SWITCH PLAYLIST", files.map((f) => [f, f]));
     if (got) return saveSetting(st, "playlist", got, "PLAYLIST", got);
     return;
   }
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
+  if (name === "newplaylist") return newPlaylist(st);
   if (["load", "map", "mode", "nextmap"].includes(name)) {
     let mp = "", md = "";
     if (name !== "mode") {

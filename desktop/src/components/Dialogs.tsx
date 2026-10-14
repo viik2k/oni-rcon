@@ -138,6 +138,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and whoever made it."],
     ["Capacity", "PLAYER CAPACITY saves how many players the server takes in its dedicated.toml (the one beside content_dir), then offers to restart it so it applies."],
     ["Playlist", "SWITCH PLAYLIST sets which playlist the server plays (one in the server folder's playlists/, or one installed from F6) in its dedicated.toml, in place of a fixed map and game, then offers to restart it."],
+    ["New playlist", "NEW PLAYLIST names a playlist and the seconds players get to vote, then takes its games a map and a mode at a time from the server's own lists (three at least, each once; Esc on the map asks before throwing them away), saves it in the server's playlists/ and offers to switch to it."],
     ["Restart", "RESTART SERVER runs the server's restart_cmd from the config (setup writes it): everyone is dropped and the console reconnects once it's back."],
   ]],
   ["F4  BLACKLIST  ·  bans", [["Lists", "Every ban by player, address and device, who may join through a VPN, and the admins. Pick a row, then UNBAN, REVOKE or REMOVE ADMIN."],
