@@ -651,6 +651,16 @@ async fn forge_mine(app: State<'_, App>) -> Result<Value, String> {
     })
 }
 
+/// HOST A SERVER's playlist: a .json picked in a dialog of the backend's own; its path, or null if none was picked.
+#[tauri::command]
+async fn pick_playlist(handle: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || handle.dialog().file().set_title("Pick a playlist").add_filter("Playlist", &["json"]).blocking_pick_file())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
+}
+
 /// The operator picks what to publish in a dialog of the backend's own, so the window can't upload any file it names.
 #[tauri::command]
 async fn forge_pick(handle: AppHandle, app: State<'_, App>) -> Result<Value, String> {
@@ -902,7 +912,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post
