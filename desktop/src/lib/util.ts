@@ -301,9 +301,9 @@ export function explain(detail: string, state = "offline", short = false): strin
 
 export const CATS: Record<string, string> = { chat: WHITE, combat: RED, traffic: CYAN, moderation: AMBER, ops: GREY };
 export const KIND: Record<string, string> = { chat: "chat", kill: "combat", join: "traffic", leave: "traffic", refused: "traffic",
-  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation" };
+  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation" };
 export const GLYPH: Record<string, string> = { health: "⚠", chat: "»", kill: "✕", join: "▲", leave: "▼", refused: "⊘", kick: "◆", ban: "■",
-  unban: "□", mute: "◈", unmute: "◇", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
+  unban: "□", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
 
 /** What an event says, after its time and station. Known kinds get a layout; anything else prints its fields. */
 export function describe(ev: Dict, redact = true): Line {

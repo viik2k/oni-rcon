@@ -391,7 +391,7 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
         .iter()
         .enumerate()
         .map(|(i, s)| json!({"index": i, "name": s.name, "where": s.where_(), "ssh": if s.url.is_empty() { s.ssh.clone() } else { String::new() },
-            "url": s.url, "content_dir": s.content_dir, "host": s.host, "port": s.port}))
+            "url": s.url, "content_dir": s.content_dir, "host": s.host, "port": s.port, "restart": demo || !s.restart_cmd.is_empty()}))
         .collect();
     let hub = Hub::start(handle, servers, by.clone(), hsetup, fsetup, state_dir, &waiting, extra);
     let info = json!({"by": by, "stations": stations, "tunnels": hub.tunnels.iter().map(|t| t.dest.clone()).collect::<Vec<_>>(),
@@ -431,6 +431,41 @@ async fn set_password(password: String, indices: Vec<usize>, app: State<'_, App>
         h.connect(i);
     }
     Ok(())
+}
+
+/// RESTART SERVER: the server's restart_cmd, run where the server is (the demo restarts its own).
+#[tauri::command]
+async fn restart_server(index: usize, app: State<'_, App>) -> Result<(), String> {
+    let h = hub_of(&app)?;
+    if let Some(d) = h.hsetup.demo.clone() {
+        d.restart(index).await;
+        return Ok(());
+    }
+    let s = &h.stations.get(index).ok_or("no such server")?.server;
+    if s.restart_cmd.is_empty() {
+        return Err("no restart_cmd for this server in the config".into());
+    }
+    health::run(&s.restart_cmd, &s.ssh, 180.0).await.map(|_| ())
+}
+
+/// A setting in the server's own dedicated.toml, the one beside its content_dir: it takes effect at the next start.
+#[tauri::command]
+async fn server_setting(index: usize, key: String, value: Value, app: State<'_, App>) -> Result<(), String> {
+    let h = hub_of(&app)?;
+    let v: toml_edit::Value = match (key.as_str(), value.as_i64()) {
+        ("max_players", Some(n)) if (1..=63).contains(&n) => n.into(),
+        ("max_players", _) => return Err("A server holds 1 to 63 players.".into()),
+        _ => return Err(format!("{key} can't be set from here")),
+    };
+    if let Some(d) = h.hsetup.demo.clone() {
+        d.set(index, &key, value);
+        return Ok(());
+    }
+    let s = &h.stations.get(index).ok_or("no such server")?.server;
+    // ponytail: found beside content_dir, as every setup lays it out; a dedicated_toml key when a server doesn't
+    let t = install::target_for(s)?;
+    let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
+    t.write_text("../dedicated.toml", &host::set_server_key(&text, s.port, &key, v)?).await
 }
 
 #[tauri::command]
@@ -674,7 +709,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
         ])

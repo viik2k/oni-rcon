@@ -9,19 +9,19 @@ export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", 
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
 export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke", "mute", "unmute",
   "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername", "password", "maxping", "teamcount", "shuffle", "team",
-  "vote", "startvote", "passvote", "cancelvote", "help"];
+  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "help"];
 
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
-  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""],
-  ["reconnect", "RECONNECT", ""]];
+  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
+  ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "reconnect"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "reconnect", "restart"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
-  ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""]];
+  ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
-  ["team", "TEAM", "j"], ["vpnallow", "VPN OK", "v"], ["copy", "COPY ID", "y"]];
+  ["team", "TEAM", "j"], ["vpnallow", "VPN OK", "v"], ["admin", "MAKE ADMIN", "p"], ["copy", "COPY ID", "y"]];
 
 // What each control does, in plain words: shown when the mouse rests on it.
 export const TIPS: Record<string, string> = {
@@ -40,18 +40,23 @@ export const TIPS: Record<string, string> = {
   "op-servername": "Change the name in the server browser, until the server restarts.",
   "op-password": "Make players type a password to join (or remove it).",
   "op-maxping": "Stop players with a high ping from joining.",
+  "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
   "op-reconnect": "Drop this connection and sign in again.",
+  "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
   "bl-vpnallow": "Let a player or address join through a VPN.  Key: a",
   "bl-vpnrevoke": "Take back the selected VPN allowance.  Key: r",
   "bl-vpncheck": "Check whether an address looks like a VPN.",
+  "bl-adminadd": "Make a player an admin on every server sharing this ban list, at once.  Key: p",
+  "bl-adminremove": "Take admin away from the selected one. Admins written in dedicated.toml are changed there.  Key: d",
   "pl-tell": "Send a private message only they can see.  Key: t",
   "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
   "pl-ban": "Keep them out, for a while or for good.  Key: b",
   "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
   "pl-team": "Move them to another team.  Key: j",
   "pl-vpnallow": "Let them join through a VPN.  Key: v",
+  "pl-admin": "Make them an admin (or take it away) on every server sharing the ban list, at once.  Key: p",
   "pl-copy": "Copy their player ID, for a ban list or a report.  Key: y",
   "add-server": "Add another server with the setup screen.",
   "super": "The Superintendent watches every server's feed and reacts: it welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute.",
@@ -65,7 +70,7 @@ export const TAB_TIPS: Record<string, string> = {
   assets: "Players on the selected server: click one for their file and actions.",
   intercepts: "Live chat, kills, joins and moderation from every server, and a box to talk back.",
   operations: "Change the map or mode, end rounds, run votes, and server settings.",
-  blacklist: "Bans, and players allowed to join through a VPN.",
+  blacklist: "Bans, players allowed to join through a VPN, and admins.",
   console: "Type server commands directly. For when a button doesn't cover it.",
   forge: "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
   health: "Crashes read from each server's log, the host's memory, and whether the workaround service runs.",
@@ -112,6 +117,10 @@ export async function player(what: string, p: Dict | undefined) {
   } else if (what === "team") {
     const team = await oni.pick(`MOVE ${name} TO`, TEAMS.map((c) => [[[c.toUpperCase(), TEAM_COLOR[c]]], c]));
     if (team) oni.send(st, "team", [t, team], ["players"]);
+  } else if (what === "admin") {
+    const sub = p.admin ? "remove" : "add";
+    if (await oni.confirm(`${p.admin ? "REMOVE ADMIN" : "MAKE ADMIN"} · ${name}`, ADMIN_NOTE[sub], p.admin ? "REMOVE" : "MAKE ADMIN", !!p.admin))
+      oni.send(st, "admin", [sub, t], ["players", "admins"]);
   } else if (what === "vpnallow") {
     const f = await oni.form(`VPN ALLOW · ${name}`, [["note", "Note (why)", ""]], { verb: "ALLOW", note: "Lets them join through a VPN on every server sharing the ban list." });
     if (f) oni.send(st, "vpnallow", [t, ...opt(f.note)], ["vpn"]);
@@ -131,6 +140,24 @@ export async function op(name: string) {
       oni.waiting = oni.waiting.filter((i) => i !== st.index);
     }
     return oni.reconnect(st, pw);
+  }
+  if (name === "restart") {
+    if (!(await oni.confirm(`RESTART  ${st.label}`, "Everyone on it is dropped and the game starts over; it's back in a minute or so. Servers sharing its container or window restart with it, and what was changed from here (name, join password, ping limit) goes back to dedicated.toml's.", "RESTART", true))) return;
+    oni.notify("Restarting… the console reconnects by itself.", `RESTART · ${st.label}`, "warning");
+    return invoke("restart_server", { index: st.index }).then(() => oni.notify("Restarted.", `RESTART · ${st.label}`),
+      (e) => oni.notify(String(e), `RESTART FAILED · ${st.label}`, "error", 15));
+  }
+  if (name === "capacity") {
+    const f = await oni.form("PLAYER CAPACITY", [["n", "Most players at once (1 to 63)", String(s.max_players ?? "")]], { verb: "SAVE", required: ["n"],
+      note: "Saved in the server's dedicated.toml: it takes effect when the server restarts." });
+    if (!f) return;
+    try {
+      await invoke("server_setting", { index: st.index, key: "max_players", value: Number(f.n) });
+    } catch (e) {
+      return oni.notify(String(e), `CAPACITY NOT SAVED · ${st.label}`, "error", 15);
+    }
+    if (st.canRestart) return op("restart");
+    return oni.notify(`Saved: ${f.n} players once the server restarts.`, `CAPACITY · ${st.label}`);
   }
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
   if (["load", "map", "mode", "nextmap"].includes(name)) {
@@ -184,7 +211,12 @@ export async function op(name: string) {
   }
 }
 
-export async function bl(name: string, ban?: string | null, vpn?: string | null) {
+const ADMIN_NOTE = {
+  add: "They can kick, ban and move players in game, and can't be vote-kicked. It applies at once on every server sharing this ban list.",
+  remove: "Applies at once on every server sharing this ban list. An admin written in dedicated.toml can't be removed from here.",
+};
+
+export async function bl(name: string, ban?: string | null, vpn?: string | null, admin?: string | null) {
   const st = oni.cur;
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
   if (name === "newban") {
@@ -199,6 +231,21 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null)
   } else if (name === "vpnallow") {
     const f = await oni.form("VPN ALLOW", [["target", "Player ID, IP address or range", ""], ["note", "Note", ""]], { verb: "ALLOW", required: ["target"] });
     if (f) oni.send(st, "vpnallow", [f.target, ...opt(f.note)], ["vpn"]);
+  } else if (name === "adminadd") {
+    const choices: [Line | string, string][] = st.players.filter((p) => !p.admin).map((p) => [String(pick(p, "name") ?? "?"), targetOf(p)]);
+    const who = await oni.pick("MAKE ADMIN", [...choices, [[["Someone not on: type their player ID…", DIM]], "?"]]);
+    if (!who) return;
+    let target = who;
+    if (who === "?") {
+      const f = await oni.form("MAKE ADMIN", [["id", "Player ID", ""]], { verb: "MAKE ADMIN", required: ["id"], note: ADMIN_NOTE.add });
+      if (!f) return;
+      target = f.id.trim();
+    } else if (!(await oni.confirm("MAKE ADMIN", ADMIN_NOTE.add, "MAKE ADMIN", false))) return;
+    oni.send(st, "admin", ["add", target], ["admins", "players"]);
+  } else if (name === "adminremove") {
+    if (!admin) return oni.notify("Select an admin first.", "", "warning");
+    if (await oni.confirm(`REMOVE ADMIN  ${admin}`, ADMIN_NOTE.remove, "REMOVE"))
+      oni.send(st, "admin", ["remove", admin], ["admins", "players"]);
   } else if (name === "vpncheck") {
     const f = await oni.form("CHECK AN ADDRESS", [["ip", "IP address", ""]], { verb: "CHECK", required: ["ip"] });
     if (f) oni.send(st, "vpn", [f.ip]);

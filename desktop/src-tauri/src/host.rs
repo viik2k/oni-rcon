@@ -228,6 +228,20 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
+/// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
+pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
+    use toml_edit::{DocumentMut, Item, Table};
+    let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let list = doc.get_mut("server").and_then(Item::as_array_of_tables_mut).ok_or("dedicated.toml has no [[server]]")?;
+    let port = |t: &Table, k: &str| t.get(k).and_then(Item::as_integer);
+    let t = list
+        .iter_mut()
+        .find(|t| port(t, "rcon_port").or(port(t, "port")) == Some(i64::from(rcon_port)))
+        .ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    t[key] = Item::Value(v);
+    Ok(doc.to_string())
+}
+
 fn new_password() -> String {
     use rand::Rng;
     rand::rng().sample_iter(rand::distr::Alphanumeric).take(24).map(char::from).collect()
@@ -407,7 +421,7 @@ fn read(p: &Path) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-fn found_servers(found: &[Found], pw: &str, content: &Path) -> Vec<Server> {
+fn found_servers(found: &[Found], pw: &str, content: &Path, restart: &str) -> Vec<Server> {
     found
         .iter()
         .map(|f| {
@@ -415,6 +429,7 @@ fn found_servers(found: &[Found], pw: &str, content: &Path) -> Vec<Server> {
             s.name = f.name.clone();
             s.password = if f.password.is_empty() { pw.into() } else { f.password.clone() };
             s.content_dir = content.display().to_string();
+            s.restart_cmd = restart.into();
             s
         })
         .collect()
@@ -478,7 +493,14 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         let mut child = c.spawn().map_err(|e| format!("couldn't start the servers: {e}"))?;
         wait_for(&found, say, 180, || matches!(child.try_wait(), Ok(None))).await?;
     }
-    Ok((found_servers(&found, &pw, &folder.join("content")), vec![join_note(&new, &found)]))
+    // ponytail: one process runs every server in the folder, so restarting one restarts them all
+    let q = |p: &Path| p.display().to_string().replace('\'', "''");
+    let restart = format!(
+        "taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
+        q(&exe),
+        q(folder)
+    );
+    Ok((found_servers(&found, &pw, &folder.join("content"), &restart), vec![join_note(&new, &found)]))
 }
 
 fn read_env(text: &str, key: &str) -> String {
@@ -547,7 +569,8 @@ pub async fn host_docker(folder: &Path, game: Option<&Path>, settings: Option<&S
         return Err(format!("{} has no enabled [[server]]", toml.display()));
     }
     wait_for(&found, say, 300, || true).await?;
-    Ok((found_servers(&found, &pw, &server.join("content")), vec![join_note(&text, &found)]))
+    let restart = format!("cd {} && {} compose restart", sh_quote(&folder.display().to_string()), sh_quote(&docker.display().to_string()));
+    Ok((found_servers(&found, &pw, &server.join("content"), &restart), vec![join_note(&text, &found)]))
 }
 
 // --- finding the servers on a game box -----------------------------------------------------------------------------
@@ -763,6 +786,9 @@ pub async fn connect_box(dest: &str, say: Say<'_>) -> Result<Hosted, String> {
         let kind = if sp.container.is_empty() { "server folder".to_string() } else { format!("container {}", sp.container) };
         if r["ok"] == true {
             say(&format!("✓ {label} ({kind}): {text}"));
+            if !sp.container.is_empty() {
+                sp.server.restart_cmd = format!("{} restart {}", b.docker, sh_quote(&sp.container));
+            }
             ok.push(sp);
         } else {
             say(&format!("✗ {label} ({kind}): {text}"));
@@ -796,6 +822,16 @@ mod tests {
 
     // dedicated init's file, cut down: what the guide shows
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
+
+    #[test]
+    fn a_setting_lands_on_its_own_server() {
+        let text = set_server_key(TOML, 50177, "max_players", 12.into()).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][0].get("max_players"), t["server"][1]["max_players"].as_integer()), (None, Some(12)));
+        assert!(text.contains("# set one to turn on the remote console"), "comments kept");
+        assert!(set_server_key(&text, 49176, "max_players", 4.into()).unwrap().contains("max_players = 4"));
+        assert!(set_server_key(TOML, 1234, "max_players", 4.into()).is_err());
+    }
 
     #[test]
     fn steam_libraries() {
@@ -848,12 +884,14 @@ mod tests {
         s.content_dir = "/srv/rec/server/content".into();
         s.password_command = Cmd::Argv(password_command("me@box", "/srv/rec/server", "reclaimer-server-2-1", "docker"));
         s.password = "read on the box".into();
+        s.restart_cmd = "docker restart 'reclaimer-server-2-1'".into();
         let (ping, health) = docker_templates(&[(50177, "reclaimer-server-2-1".into())], "docker");
         let t = vec![("ping_log".to_string(), toml_str(&ping)), ("health_cmd".to_string(), format!("'''{health}'''"))];
         assert_eq!(save_found(&p, vec![s.clone()], &t, "op", true).unwrap().len(), 1);
         assert!(!std::fs::read_to_string(&p).unwrap().contains("read on the box"));
         let (by, got) = config::load_config(&p).unwrap();
         assert_eq!((by.as_str(), &got[0].password_command, got[0].content_dir.as_str()), ("op", &s.password_command, "/srv/rec/server/content"));
+        assert_eq!(got[0].restart_cmd, s.restart_cmd);
         assert!(got[0].ping_log.contains("case 50177 in") && got[0].health_cmd.contains("--since {since}"));
         assert!(save_found(&p, vec![s], &[("ping_log".into(), "\"mine\"".into())], "", true).unwrap().is_empty());
         assert!(config::load_config(&p).unwrap().1[0].ping_log.contains("reclaimer-server-2-1"));

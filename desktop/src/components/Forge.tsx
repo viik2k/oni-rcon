@@ -164,7 +164,7 @@ export async function forgeAction(what: string) {
     if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
     await oni.fetchNow(st, ["maps", "modes"]);
     const found = listed(oni.sel, entry);
-    if (!found) return oni.notify("The server doesn't list it yet. It may need a restart to pick new content up, which oni-rcon can't do for you.", `LOAD NOW · ${entry.title ?? ""}`, "warning", 15);
+    if (!found) return oni.notify("The server doesn't list it yet. It may need a restart to pick new content up: RESTART SERVER on F3.", `LOAD NOW · ${entry.title ?? ""}`, "warning", 15);
     const [kind, ref] = found, title = entry.title || ref;
     const other = await oni.pick(`${title} · SELECT ${kind === "maps" ? "MODE" : "MAP"}`, entries(st, kind === "maps" ? "modes" : "maps"));
     if (!other) return;

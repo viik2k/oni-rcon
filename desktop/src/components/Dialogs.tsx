@@ -121,9 +121,9 @@ const GUIDE: [string, [string, string][]][] = [
     ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels."],
   ]],
   ["F1  ASSETS  ·  the players", [
-    ["Pick a player", "Click a row, or move with ↑ ↓. Their file opens on the right, with buttons to tell, kick, ban, mute, move or allow them through a VPN."],
+    ["Pick a player", "Click a row, or move with ↑ ↓. Their file opens on the right, with buttons to tell, kick, ban, mute, move, allow them through a VPN or make them an admin."],
     ["Ping", "PING is what a player joined with, read from the server's log (needs ping_log in the config; RCON has no live ping). Over 200 is red."],
-    ["Keys", "t tell  ·  k kick  ·  b ban  ·  m mute  ·  j team  ·  v VPN allow  ·  y copy their ID"],
+    ["Keys", "t tell  ·  k kick  ·  b ban  ·  m mute  ·  j team  ·  v VPN allow  ·  p make admin (or remove)  ·  y copy their ID"],
     ["Flags", "ADM an admin  ·  MUT muted  ·  KIA dead right now  ·  NEW just joined  ·  ★5 on a killing spree"],
     ["Their file", "The glyph is drawn from their player ID: the same player always gets the same one. Medals and their streak count what this console has seen since it connected."],
   ]],
@@ -136,8 +136,11 @@ const GUIDE: [string, [string, string][]][] = [
   ["F3  OPERATIONS  ·  running the match", [
     ["Buttons", "Change map or mode, queue what plays next, end the round, shuffle teams, run votes, broadcast, and server settings. Anything that ends a game asks first."],
     ["Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and whoever made it."],
+    ["Capacity", "PLAYER CAPACITY saves how many players the server takes in its dedicated.toml (the one beside content_dir), then offers to restart it so it applies."],
+    ["Restart", "RESTART SERVER runs the server's restart_cmd from the config (setup writes it): everyone is dropped and the console reconnects once it's back."],
   ]],
-  ["F4  BLACKLIST  ·  bans", [["Lists", "Every ban by player, address and device, and who may join through a VPN. Pick a row, then UNBAN or REVOKE."]]],
+  ["F4  BLACKLIST  ·  bans", [["Lists", "Every ban by player, address and device, who may join through a VPN, and the admins. Pick a row, then UNBAN, REVOKE or REMOVE ADMIN."],
+    ["Admins", "ADD ADMIN (p) makes a player an admin and REMOVE ADMIN (d) takes it away, at once, on every server sharing the ban list: no restart. Admins can kick, ban and move players in game and can't be vote-kicked. The ones written in dedicated.toml are changed there. Needs server 0.9.16 or later."]]],
   ["F5  CONSOLE  ·  typing commands", [["Commands", "For anything without a button. Type help for the server's list; ↑ ↓ bring back earlier ones."]]],
   ["F6  FORGE  ·  community content", [
     ["The catalog", "Maps, gametypes and playlists from ReclaimerForge. s changes the order, w the time window trending and rising count over, and / searches. Pick one for its file and its versions; n fetches more. RATING is thumbs up and down. FAVOURITES is what ReclaimerForge is featuring now."],

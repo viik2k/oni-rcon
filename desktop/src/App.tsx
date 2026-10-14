@@ -8,7 +8,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Banner, Footer, Masthead, Toasts } from "./components/Chrome";
 import { Assets, assetsUi } from "./components/Assets";
 import { ConsoleTab, Intercepts } from "./components/Feeds";
-import { Blacklist, Operations, blUi } from "./components/Ops";
+import { Blacklist, Operations, blSel } from "./components/Ops";
 import { Forge, fg, forgeAction, forgeLoad } from "./components/Forge";
 import { Health } from "./components/Health";
 import { Dialogs } from "./components/Dialogs";
@@ -35,7 +35,7 @@ function palette(onSetup: () => void) {
     ...OPS.map(([o, label]) => [o === "broadcast" ? "Broadcast to stations" : `Ops: ${label.replace(/\b\w+/g, (w) => w[0] + w.slice(1).toLowerCase())}`,
       o === "broadcast" ? "say on this or every station" : `${o} on the selected station`, () => op(o)] as [string, string, () => void]),
     ...BAN_OPS.map(([o, label]) => [`Blacklist: ${label.split("  ")[0].toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}`, o,
-      () => bl(o, blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null)] as [string, string, () => void]),
+      () => bl(o, ...blSel())] as [string, string, () => void]),
     ["Toggle address redaction", "hide or show player IPs", () => oni.toggleRedact()],
     [`Boot sequence: ${oni.fullIntro ? "quick after the first run" : "full every time"}`, oni.fullIntro ? "now: the full sequence plays every time" : "now: full the first time, quick after",
       async () => {
@@ -85,13 +85,13 @@ function useKeys(onSetup: () => void) {
       if (typing || e.altKey) return;
       const k = e.key;
       const tabKeys: Partial<Record<Tab, Record<string, () => void>>> = {
-        assets: Object.fromEntries(["t:tell", "k:kick", "b:ban", "m:mute", "j:team", "v:vpnallow", "y:copy"].map((x) => {
+        assets: Object.fromEntries(["t:tell", "k:kick", "b:ban", "m:mute", "j:team", "v:vpnallow", "p:admin", "y:copy"].map((x) => {
           const [c, w] = x.split(":");
           return [c, () => player(w, assetsUi.selected ? assetsUi.rows.get(assetsUi.selected) : undefined)];
         })),
-        blacklist: Object.fromEntries(["n:newban", "u:unban", "a:vpnallow", "r:vpnrevoke"].map((x) => {
+        blacklist: Object.fromEntries(["n:newban", "u:unban", "a:vpnallow", "r:vpnrevoke", "p:adminadd", "d:adminremove"].map((x) => {
           const [c, w] = x.split(":");
-          return [c, () => bl(w, blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null)];
+          return [c, () => bl(w, ...blSel())];
         })),
         forge: Object.fromEntries(["i:install", "l:load", "a:ack", "s:sort", "w:window", "n:more", "k:key", "y:copy"].map((x) => {
           const [c, w] = x.split(":");

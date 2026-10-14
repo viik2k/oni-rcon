@@ -86,7 +86,7 @@ export class Station {
   aliases = new Map<string, string>();
   unmatched = false;
   constructor(public index: number, public where: string, public name: string, public ssh: string, public url: string,
-    public contentDir: string, public host: string, public port: number) {
+    public contentDir: string, public host: string, public port: number, public canRestart = false) {
     this.label = name || where;
   }
   get online() { return this.state === "online"; }
@@ -179,7 +179,7 @@ class Oni {
   async start(info: Dict) {
     this.stop();
     this.by = info.by;
-    this.stations = info.stations.map((s: Dict) => new Station(s.index, s.where, s.name, s.ssh, s.url, s.content_dir, s.host, s.port));
+    this.stations = info.stations.map((s: Dict) => new Station(s.index, s.where, s.name, s.ssh, s.url, s.content_dir, s.host, s.port, s.restart));
     this.tunnels = new Map(info.tunnels.map((d: string) => [d, { state: "opening", detail: "" }]));
     this.fleet = this.stations.length > FLEET;
     this.demo = info.demo;
@@ -262,7 +262,7 @@ class Oni {
     if (state === "online") {
       st.medals.newGame(); // what happened while we were away is unknown
       this.relabel();
-      this.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn");
+      this.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
       st.polled = performance.now();
       this.logEvent(st, { event: "uplink", text: `SECURE  ${detail}` });
       if (st === this.cur) bump("forge");
@@ -308,6 +308,7 @@ class Oni {
     }
     if (["join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"].includes(kind)) this.fetch(st, "players", "status");
     if (kind === "ban" || kind === "unban") this.fetch(st, "bans");
+    if (kind === "admin") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
   }
@@ -347,7 +348,8 @@ class Oni {
     const replies = await Promise.all(what.map((w) => this.call(st, w)));
     what.forEach((w, i) => {
       const r = replies[i];
-      if (r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
+      if (r.ok && w === "admins" && Array.isArray(r.data)) st.data[w] = { admins: r.data };
+      else if (r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
         if (w === "status" && r.data.phase !== st.data.status?.phase) st.medals.newGame();
         if (w === "players") st.learn(r.data.players ?? []);
         st.data[w] = r.data;
@@ -357,7 +359,7 @@ class Oni {
     if (st === this.cur) {
       if (what.includes("players")) bump("roster");
       if (what.some((w) => ["status", "nextmap", "vote", "players"].includes(w))) bump("ops");
-      if (what.some((w) => w === "bans" || w === "vpn")) bump("bans");
+      if (what.some((w) => w === "bans" || w === "vpn" || w === "admins")) bump("bans");
       if (what.some((w) => w === "maps" || w === "modes")) bump("forge");
     }
     if (what.includes("status")) bump("mast");
@@ -579,7 +581,7 @@ class Oni {
     if (i === this.sel || i < 0 || i >= this.stations.length) return;
     this.sel = i;
     this.cur.alerts = 0;
-    this.fetch(this.cur, "status", "players", "nextmap", "vote", "bans", "vpn");
+    this.fetch(this.cur, "status", "players", "nextmap", "vote", "bans", "vpn", "admins");
     bump("cards", "roster", "ops", "bans", "forge", "mast", "ui", ...(this.localOnly ? ["feed" as const] : []));
   }
 
@@ -599,7 +601,7 @@ class Oni {
 
   refresh() {
     if (this.tab === "health") invoke("health_now").catch(() => {});
-    this.fetch(this.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn");
+    this.fetch(this.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
     for (const st of this.stations) this.fetch(st, "status");
   }
 

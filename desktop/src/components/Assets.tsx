@@ -108,7 +108,7 @@ function Dossier({ p }: { p: Dict | undefined }) {
       {facts(rows)}
       <div className="grid4" style={{ margin: "16px 0" }}>
         {PLAYER_OPS.map(([op, label]) => (
-          <Btn key={op} label={op === "mute" && p.muted ? "UNMUTE" : label} variant={op === "kick" || op === "ban" ? "error" : ""} title={TIPS[`pl-${op}`]} onClick={() => player(op, p)} />
+          <Btn key={op} label={op === "mute" && p.muted ? "UNMUTE" : op === "admin" && p.admin ? "REMOVE ADMIN" : label} variant={op === "kick" || op === "ban" ? "error" : ""} title={TIPS[`pl-${op}`]} onClick={() => player(op, p)} />
         ))}
       </div>
       <details style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>

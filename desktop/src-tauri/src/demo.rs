@@ -38,6 +38,7 @@ pub struct Fake {
     bans: Value,
     allowed: Vec<Value>,
     vote: Value,
+    admins: Vec<Value>, // {player_id, name, source}: the "dedicated.toml" ones can't be removed over RCON
     vote_at: Instant,
     hot: (i64, Instant),
 }
@@ -65,6 +66,7 @@ impl Fake {
                 "ips": [{"ip": "198.51.100.0/24", "reason": "ban evasion", "expires": crate::util::now() + 86400.0 * 6.0}], "devices": []}),
             allowed: vec![json!({"target": "192.0.2.44", "note": "mobile hotspot"})],
             vote: Value::Null,
+            admins: ["Overseer", "Bravo"].iter().map(|n| json!({"player_id": hex128(), "name": n, "source": "dedicated.toml"})).collect(),
             vote_at: Instant::now(),
             hot: (0, Instant::now()),
         };
@@ -81,8 +83,9 @@ impl Fake {
         let g: f64 = (0..6).map(|_| rng.random::<f64>()).sum::<f64>() - 3.0;
         self.skill.insert(self.engine, (0.7 * g).exp());
         let (k, d): (i64, i64) = (rng.random_range(0..=25), rng.random_range(0..=18));
-        json!({"number": 0, "name": name, "player_id": hex128(), "address": format!("203.0.113.{}", rng.random_range(2..=250)),
-            "admin": name == "Bravo", "muted": false, "team": *["red", "blue"].choose(&mut rng).unwrap(), "score": k, "kills": k,
+        let admin = self.admins.iter().find(|a| a["name"] == name).map(|a| a["player_id"].clone()); // the same player ID each time they join
+        json!({"number": 0, "name": name, "player_id": admin.clone().unwrap_or_else(|| json!(hex128())), "address": format!("203.0.113.{}", rng.random_range(2..=250)),
+            "admin": admin.is_some(), "muted": false, "team": *["red", "blue"].choose(&mut rng).unwrap(), "score": k, "kills": k,
             "deaths": d, "service_tag": name.chars().take(4).collect::<String>().to_uppercase(), "alive": rng.random::<f64>() > 0.2,
             "health": (rng.random::<f64>() * 100.0).round() / 100.0, "shields": (rng.random::<f64>() * 100.0).round() / 100.0,
             "seconds_since_last_death": rng.random_range(3..=300), "engine_id": self.engine, "guest_players": []})
@@ -282,6 +285,44 @@ impl Fake {
                 self.status["max_ping"] = json!(v);
                 ok(format!("Max ping {}.", if v == 0 { "off".to_string() } else { v.to_string() }), Some(json!({"max_ping": v})))
             }
+            "admins" | "admin" if a0.is_empty() || a0 == "list" => {
+                let ids: Vec<&Value> = self.players.iter().map(|p| &p["player_id"]).collect();
+                let list: Vec<Value> = self.admins.iter().map(|a| {
+                    let mut a = a.clone();
+                    a["online"] = json!(ids.contains(&&a["player_id"]));
+                    a
+                }).collect();
+                ok(format!("{} admins: see data", list.len()), Some(json!({"admins": list})))
+            }
+            "admin" if a0 == "add" || a0 == "remove" => {
+                let Some(who) = args.get(1).filter(|w| !w.is_empty()).cloned() else { return no(format!("admin {a0} <player | player ID>")) };
+                let found = self.find(&who);
+                let id = found.map(|i| self.players[i]["player_id"].clone()).unwrap_or_else(|| json!(who));
+                let name = found.map(|i| self.players[i]["name"].clone()).unwrap_or(Value::Null);
+                let at = self.admins.iter().position(|a| a["player_id"] == id || a["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&who)));
+                let shown = name.as_str().unwrap_or(&who).to_string();
+                if a0 == "add" {
+                    if at.is_some() {
+                        return no(format!("{shown} is already an admin."));
+                    }
+                    if found.is_none() && !(who.len() >= 32 && who.chars().all(|c| c.is_ascii_hexdigit())) {
+                        return no(format!("No player is named '{who}'; give their player ID."));
+                    }
+                    self.admins.push(json!({"player_id": id, "name": name, "source": "console"}));
+                } else {
+                    let Some(at) = at else { return no(format!("{shown} isn't an admin.")) };
+                    if self.admins[at]["source"] != "console" {
+                        return no(format!("{shown} is an admin in dedicated.toml: change it there and restart the server."));
+                    }
+                    self.admins.remove(at);
+                }
+                if let Some(i) = found {
+                    self.players[i]["admin"] = json!(a0 == "add");
+                }
+                let text = format!("{shown} {} by {by}.", if a0 == "add" { "made an admin" } else { "is no longer an admin" });
+                self.emit("admin", json!({"text": text}));
+                ok(text, None)
+            }
             "help" => ok("Demo server: status players say tell kick ban unban mute unmute team maps modes map mode load ...".into(), None),
             _ => no(format!("Unknown command '{cmd}'; help lists them.")),
         }
@@ -478,7 +519,7 @@ fn iso(t: f64) -> String {
 pub struct FakeHost {
     pub fakes: Vec<(u16, Arc<Mutex<Fake>>)>,
     logs: Mutex<HashMap<u16, Vec<String>>>,
-    started: HashMap<u16, f64>,
+    started: Mutex<HashMap<u16, f64>>,
     mem: Mutex<(i64, i64, i64, i64)>, // avail, swap used, swap total, oom
 }
 
@@ -491,7 +532,7 @@ impl FakeHost {
         let clock = chrono::DateTime::from_timestamp(n, 0).unwrap_or_default().format("%H:%M:%S");
         let mut lines = vec![
             format!("host now={n} clock={clock} mem_available_mb={avail} swap_used_mb={used} swap_total_mb={total} oom_kill={oom}"),
-            format!("container started={} finished=0001-01-01T00:00:00Z oom_killed=false exit_code=0 restarts=0", iso(self.started[&port])),
+            format!("container started={} finished=0001-01-01T00:00:00Z oom_killed=false exit_code=0 restarts=0", iso(self.started.lock()[&port])),
             format!("{} [{name}] Bob connected from 203.0.113.9 (player ID {}, ping 77 ms).", iso((n - 3600) as f64), "ab12".repeat(16)),
         ];
         lines.extend(self.logs.lock().get(&port).cloned().unwrap_or_default());
@@ -519,6 +560,26 @@ impl FakeHost {
             vec!["Error: Engine probe worker failed: exit code: 1".into(), format!("{clock} [{name}] stopped (exit code: 1); restarting in 5 s.")]
         };
         self.logs.lock().entry(*port).or_default().extend(lines);
+        self.bounce(i).await;
+    }
+
+    /// RESTART SERVER: like `docker restart`, the container starts again and everyone is dropped.
+    pub async fn restart(&self, i: usize) {
+        let Some((port, _)) = self.fakes.get(i) else { return };
+        self.started.lock().insert(*port, crate::util::now());
+        self.bounce(i).await;
+    }
+
+    /// A dedicated.toml setting: the demo's servers take it at once.
+    pub fn set(&self, i: usize, key: &str, v: Value) {
+        if let Some((_, f)) = self.fakes.get(i) {
+            f.lock().status[key] = v;
+        }
+    }
+
+    /// Everyone dropped, and five seconds later as many back.
+    async fn bounce(&self, i: usize) {
+        let fake = &self.fakes[i].1;
         let crowd = {
             let mut f = fake.lock();
             let crowd = f.players.len();
@@ -572,7 +633,38 @@ pub async fn serve_fakes(password: &str, content: &[PathBuf], tasks: &mut Vec<to
     let now = crate::util::now();
     let ages = [5.0 * 3600.0, 3.0 * 3600.0 + 1200.0, 11.0 * 3600.0];
     let started = fakes.iter().zip(ages).map(|((p, _), a)| (*p, now - a)).collect();
-    let host = Arc::new(FakeHost { fakes, logs: Mutex::new(HashMap::new()), started, mem: Mutex::new((3400, 120, 2048, 0)) });
+    let host = Arc::new(FakeHost { fakes, logs: Mutex::new(HashMap::new()), started: Mutex::new(started), mem: Mutex::new((3400, 120, 2048, 0)) });
     tasks.push(tokio::spawn(host.clone().timeline()));
     (host.fakes.iter().map(|(p, _)| *p).collect(), host)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_restart_drops_everyone_and_they_come_back() {
+        let (ports, host) = serve_fakes("pw", &[], &mut vec![]).await;
+        let (before, crowd) = (host.report(ports[0]), host.fakes[0].1.lock().players.len());
+        host.restart(0).await;
+        assert_ne!(host.report(ports[0]).lines().nth(1), before.lines().nth(1), "a new container start time");
+        assert_eq!(host.fakes[0].1.lock().players.len(), crowd);
+    }
+
+    #[test]
+    fn admins_add_and_remove_like_the_server() {
+        let mut f = Fake::new("T", "pw", 16, 4, None);
+        let run = |f: &mut Fake, args: &[&str]| f.command("admin", &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "me");
+        let p = f.players[0]["name"].as_str().unwrap().to_string();
+        let was = f.players[0]["admin"] == true;
+        assert_eq!(run(&mut f, &["add", &p])["ok"], !was);
+        assert_eq!(f.players[0]["admin"], true);
+        assert_eq!(run(&mut f, &["remove", "Overseer"])["ok"], false, "a dedicated.toml admin stays");
+        if !was {
+            assert_eq!(run(&mut f, &["remove", &p])["ok"], true);
+            assert_eq!(f.players[0]["admin"], false);
+        }
+        assert_eq!(run(&mut f, &["add", "nobody"])["ok"], false);
+        assert!(f.command("admins", &[], "me")["data"]["admins"].as_array().unwrap().len() >= 2);
+    }
 }

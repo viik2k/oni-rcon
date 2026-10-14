@@ -27,10 +27,10 @@ resolution, and lighter on a big fleet. Installers are on the [releases page](ht
 
 | Tab | |
 |---|---|
-| **F1 Assets** | Live player table per server: team, score, K/D, health and shield bars, admin, dead and spree flags, and the score race between the teams along the bottom. The dossier shows the selected player's file, a biometric glyph drawn from their player ID, the medals they've earned and the raw JSON. `t` tell · `k` kick · `b` ban · `m` mute · `j` team · `v` VPN allow · `y` copy ID |
+| **F1 Assets** | Live player table per server: team, score, K/D, health and shield bars, admin, dead and spree flags, and the score race between the teams along the bottom. The dossier shows the selected player's file, a biometric glyph drawn from their player ID, the medals they've earned and the raw JSON. `t` tell · `k` kick · `b` ban · `m` mute · `j` team · `v` VPN allow · `p` make admin (desktop) · `y` copy ID |
 | **F2 Intercepts** | One feed from every server: chat (team and server), kills with weapon, joins, leaves, kicks, bans, votes and game phases. Kills carry their Halo 3 medals: double kill through killionaire, killing spree through invincible, and killjoy. Filter by chat, combat, traffic, moderation or ops; scroll up to read back and it holds still. Chat that mentions admins or cheating raises a toast and the terminal bell |
-| **F3 Operations** | Sitrep for the selected server with the vote under way and its tally, and the title and author of the map or gametype playing when it came from ReclaimerForge; the theatre, with each team's numbers and score as bars, the top guns and who's on a spree; the playlist rotation with the current map marked; and buttons for load map + mode, change map or mode, queue next, end round or game, shuffle, team count, call, pass or cancel a vote, broadcast, rename, join password and ping limit |
-| **F4 Blacklist** | Bans by player, IP and device; new ban (timed or permanent), unban, VPN allow and revoke, check an IP |
+| **F3 Operations** | Sitrep for the selected server with the vote under way and its tally, and the title and author of the map or gametype playing when it came from ReclaimerForge; the theatre, with each team's numbers and score as bars, the top guns and who's on a spree; the playlist rotation with the current map marked; and buttons for load map + mode, change map or mode, queue next, end round or game, shuffle, team count, call, pass or cancel a vote, broadcast, rename, join password and ping limit, and (desktop) player capacity and restarting the server |
+| **F4 Blacklist** | Bans by player, IP and device; new ban (timed or permanent), unban, VPN allow and revoke, check an IP. The admins, with who's on and where each was made: add or remove one at once on every server sharing the ban list (server 0.9.16 or later; ones in `dedicated.toml` are changed there). `p` add admin · `d` remove admin |
 | **F5 Console** | Type any RCON command (`help` lists them) with ↑/↓ history. The command log records everything sent from this session and its replies. The message in `say`, `tell`, `kick` and `servername` is the rest of the line as typed, sent as one argument, so it needs no quotes |
 | **F6 Forge** | The [ReclaimerForge](https://www.reclaimerforge.net) catalog of community maps, gametypes and playlists, read with your own API key. Order it by trending, rising, latest, updated, downloads, rated, unrated or overlooked (trending and rising over the last 24 hours, 7 days or 30 days), or see the collections ReclaimerForge is featuring now, and search it. Each listing shows its type, authors, thumbs up and down, recent downloads, and whether it runs on the selected server's version; its file lists every version, and any of them installs on the selected server, every file checked against Forge's manifest. `i` install on this server · `l` load it now · `s` sort · `w` window · `/` search · `n` more · `k` key · `y` copy ID |
 | **F7 Health** | Whether the servers are crashing and the box is coping. CRASHES lists each server's latest crashes read from its log (time, server, class, how many players were on, whether the RCON connection dropped with it); HOST shows free memory, swap, the kernel's `oom_kill` counter and each container's start time and OOMKilled flag; WORKAROUND shows whether an optional systemd service is running. A new crash, an OOM kill or memory falling under your limit flashes a banner over every tab, goes in the feed and beeps. Needs `health_cmd` in the config: [see below](#health-watch) |
@@ -211,6 +211,20 @@ port = 49176
 port = 49177
 ```
 
+### Restarting a server
+
+RESTART SERVER on F3 (desktop app) runs the server's `restart_cmd` where the server is: on its `ssh` host, or on
+this machine without one. The setup screen writes it for the servers it finds or hosts; for others, add it to the
+`[[server]]` block (or `[defaults]`; `{port}` is the server's RCON port):
+
+```toml
+restart_cmd = "docker restart my-server-{port}"
+```
+
+Everyone on it is dropped and the console reconnects once it's back. PLAYER CAPACITY (F3, desktop) saves
+`max_players` in that server's `dedicated.toml`, found beside its `content_dir`, then offers this restart so it applies. Servers sharing a container (or, on Windows, the
+one window HOST ONE HERE started) restart together.
+
 ### Player ping
 
 The PLAYERS tab has a PING column (green under 100 ms, amber under 200, red above). RCON has no ping, so it's the
@@ -230,7 +244,7 @@ F7 reads each server's log and the box's memory, so a crash or a memory squeeze 
 It needs one thing from you: `health_cmd`, a command that prints a small report for **one** server. Like `ping_log` it
 is a top-level key above the first `[table]`, `{port}` is the server's RCON port, and it runs on the server's `ssh`
 host (or on this machine without one). It runs once a minute (and soon after a server's RCON connection drops), and it
-only reads: nothing in oni-rcon restarts, kills or changes a server. `{since}` is how far back to read the log: a day
+only reads. `{since}` is how far back to read the log: a day
 the first time, a few minutes after.
 
 ```toml
@@ -359,7 +373,7 @@ content_dir = "~/reclaimer/content"   # on the game box, for a server reached ov
 
 **Loading is a separate step.** Whether a dedicated server picks up new content while it runs is up to the server, so
 installing never loads anything. Once the server lists the new map or gametype, `l` on F6 loads it, the same as LOAD
-MAP+MODE on F3. If it isn't listed yet, the server needs a restart, which oni-rcon can't do for you. A playlist is
+MAP+MODE on F3. If it isn't listed yet, the server needs a restart: RESTART SERVER on F3 in the desktop app. A playlist is
 installed like anything else, but using it means pointing the server's playlist setting at it, and oni-rcon doesn't
 edit `dedicated.toml`. What's installed where is kept in `forge-state.json`, beside the config file.
 

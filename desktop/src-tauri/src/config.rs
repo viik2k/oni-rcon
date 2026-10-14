@@ -50,10 +50,11 @@ pub struct Server {
     pub content_dir: String,
     pub ping_log: String,
     pub health_cmd: String,
+    pub restart_cmd: String,
 }
 
 const SERVER_KEYS: &[&str] =
-    &["port", "host", "name", "ssh", "url", "password", "password_env", "password_command", "content_dir"];
+    &["port", "host", "name", "ssh", "url", "password", "password_env", "password_command", "content_dir", "restart_cmd"];
 
 impl Server {
     pub fn new(host: &str, port: u16) -> Self {
@@ -114,6 +115,7 @@ impl Server {
             password_env: s("password_env")?,
             password_command: Cmd::from_toml(t.get("password_command"))?,
             content_dir: s("content_dir")?,
+            restart_cmd: s("restart_cmd")?.replace("{port}", &port.to_string()),
             ..Default::default()
         };
         if srv.url.is_empty() && srv.port == 0 {
@@ -381,6 +383,9 @@ pub fn add_servers(path: &Path, servers: &[Server], by: &str, remember: bool) ->
         }
         if !s.content_dir.is_empty() {
             text += &format!("content_dir = {}\n", toml_str(&s.content_dir));
+        }
+        if !s.restart_cmd.is_empty() {
+            text += &format!("restart_cmd = {}\n", toml_str(&s.restart_cmd));
         }
     }
     if !text.ends_with('\n') {
