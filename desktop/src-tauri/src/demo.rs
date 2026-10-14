@@ -164,6 +164,7 @@ impl Fake {
             "modes" => {
                 let mut e: Vec<Value> = MODES.iter().map(|m| json!({"kind": "mode", "name": m, "reference": m.to_lowercase().replace(' ', "_")})).collect();
                 e.extend(self.installed(".gt"));
+                e.extend(self.installed(".json")); // NEW GAME TYPE's, listed at once
                 ok("modes: see data".into(), Some(json!({"entries": e})))
             }
             "bans" => ok("bans: see data".into(), Some(self.bans.clone())),

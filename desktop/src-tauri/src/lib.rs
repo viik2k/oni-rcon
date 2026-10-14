@@ -472,6 +472,19 @@ async fn save_playlist(index: usize, name: String, vote_seconds: u32, games: Vec
     Ok(json!({"path": path, "exists": false}))
 }
 
+/// NEW GAME TYPE: written into the server's content folder, Game Modes/; an existing one is only replaced when asked.
+#[tauri::command]
+async fn save_game_type(index: usize, name: String, mode: String, score_to_win: Option<i64>, options: serde_json::Map<String, Value>, replace: bool, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let t = install::target_for(&h.stations.get(index).ok_or("no such server")?.server)?;
+    let (path, json) = host::new_game_type(&name, &mode, score_to_win, &options)?;
+    if !replace && !t.existing(std::slice::from_ref(&path)).await?.is_empty() {
+        return Ok(json!({"path": path, "exists": true}));
+    }
+    t.write_text(&path, &json).await?;
+    Ok(json!({"path": path, "exists": false}))
+}
+
 /// A setting in the server's own dedicated.toml, the one beside its content_dir: it takes effect at the next start.
 #[tauri::command]
 async fn server_setting(index: usize, key: String, value: Value, app: State<'_, App>) -> Result<(), String> {
@@ -734,7 +747,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists, save_playlist,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists, save_playlist, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, prefs_intro, update_check, update_install
         ])

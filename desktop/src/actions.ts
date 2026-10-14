@@ -15,9 +15,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "reconnect", "restart"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "newgametype", "reconnect", "restart"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -44,6 +44,7 @@ export const TIPS: Record<string, string> = {
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
+  "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
@@ -140,6 +141,38 @@ async function saveSetting(st: Station, key: string, value: unknown, what: strin
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
 }
 
+const BASE_MODES: [string, string][] = [["Slayer", "Slayer"], ["Capture the Flag", "CaptureTheFlag"], ["Oddball", "Oddball"], ["King of the Hill", "KingOfTheHill"],
+  ["VIP", "Vip"], ["Juggernaut", "Juggernaut"], ["Territories", "Territories"], ["Assault", "Assault"], ["Infection", "Infection"], ["Escalation Slayer", "EscalationSlayer"]];
+const GAME_OPTIONS: [string, string][] = [["rounds.minutes", "minutes"], ["rounds.limit", "rounds"], ["respawn.lives", "lives"], ["respawn.seconds", "respawn"]];
+
+/** NEW GAME TYPE: a base mode and the options most changed; any left blank stay the mode's own. */
+async function newGameType(st: Station): Promise<void> {
+  const f = await oni.form("NEW GAME TYPE", [["name", "Name (up to 48 characters)", ""], ["mode", "Built on", BASE_MODES],
+    ["teams", "Teams", [["The mode's own", ""], ["Teams", "1"], ["Free for all", "0"]]], ["score", "Score to win (0 = no limit)", ""],
+    ["minutes", "Time limit in minutes, 0 to 60 (0 = none)", ""], ["rounds", "Rounds, 1 to 10", ""], ["lives", "Lives per round, 0 to 50 (0 = unlimited)", ""],
+    ["respawn", "Respawn delay in seconds, 0 to 240", ""], ["shields", "Shields", [["The mode's own", ""], ["None", "1"]]]],
+    { verb: "SAVE", required: ["name"], note: "Blank fields keep the mode's own. It's saved in the server's content folder, Game Modes." });
+  if (!f) return;
+  const options: Dict = {};
+  for (const [k, field] of [["rounds.teams", "teams"], ["player.shields", "shields"], ...GAME_OPTIONS]) if (f[field] !== "") options[k] = Number(f[field]);
+  const args = { index: st.index, name: f.name, mode: f.mode, scoreToWin: f.score === "" ? null : Number(f.score), options };
+  let path: string;
+  try {
+    let r = await invoke<Dict>("save_game_type", { ...args, replace: false });
+    if (r.exists) {
+      if (!(await oni.confirm("REPLACE GAME TYPE", `${r.path} is there already.`, "REPLACE"))) return;
+      r = await invoke<Dict>("save_game_type", { ...args, replace: true });
+    }
+    path = r.path;
+  } catch (e) {
+    return oni.notify(String(e), `GAME TYPE NOT SAVED · ${st.label}`, "error", 15);
+  }
+  if (st.online) await oni.fetchNow(st, ["modes"]);
+  const listed = (st.data.modes?.entries ?? []).some((e: Dict) => String(e.reference ?? "").endsWith(path.split("/").pop()!) || e.name === f.name);
+  const how = listed ? "CHANGE MODE plays it, and NEW PLAYLIST can use it." : "The server picks it up when it restarts; then CHANGE MODE plays it.";
+  oni.notify(`Saved as ${path}. ${how}`, `GAME TYPE · ${st.label}`, "information", 12);
+}
+
 /** NEW PLAYLIST: a name, then a map and a mode a game at a time from the server's own lists. */
 async function newPlaylist(st: Station): Promise<void> {
   const maps = entries(st, "maps"), modes = entries(st, "modes");
@@ -204,6 +237,7 @@ export async function op(name: string) {
     if (f) return saveSetting(st, "max_players", Number(f.n), "CAPACITY", `${f.n} players`);
     return;
   }
+  if (name === "newgametype") return newGameType(st);
   if (name === "playlist") {
     let files: string[];
     try {

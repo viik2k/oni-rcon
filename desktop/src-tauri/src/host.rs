@@ -230,11 +230,13 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
 
 /// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
 /// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
+fn slug(name: &str) -> Result<String, String> {
+    let s = name.trim().to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
+    if s.is_empty() { Err("Name it with a letter or number in it.".into()) } else { Ok(s) }
+}
+
 pub fn new_playlist(name: &str, vote_seconds: u32, games: &[(String, String)]) -> Result<(String, String), String> {
-    let slug = name.trim().to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
-    if slug.is_empty() {
-        return Err("Name it with a letter or number in it.".into());
-    }
+    let slug = slug(name)?;
     if !(5..=120).contains(&vote_seconds) {
         return Err("The vote lasts 5 to 120 seconds.".into());
     }
@@ -247,6 +249,42 @@ pub fn new_playlist(name: &str, vote_seconds: u32, games: &[(String, String)]) -
     let games: Vec<_> = games.iter().map(|(map, game)| serde_json::json!({"map": map, "game": game})).collect();
     let json = serde_json::json!({"version": 2, "name": name.trim(), "vote_seconds": vote_seconds, "games": games});
     Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&json).unwrap() + "
+"))
+}
+
+/// The native game types a game type file builds on, as it names them.
+pub const BASE_MODES: &[&str] = &["Slayer", "CaptureTheFlag", "Oddball", "KingOfTheHill", "Vip", "Juggernaut", "Territories", "Assault", "Infection", "EscalationSlayer"];
+/// The game options NEW GAME TYPE sets, in the ranges Reclaimer 0.9.13's mode-check holds them to.
+const GAME_OPTIONS: &[(&str, i64, i64)] = &[("rounds.teams", 0, 1), ("rounds.minutes", 0, 60), ("rounds.limit", 1, 10),
+    ("respawn.lives", 0, 50), ("respawn.seconds", 0, 240), ("player.shields", 0, 5)];
+
+/// A game type made in the console: its path in the content folder and its JSON. Options left out are the mode's own.
+pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options: &serde_json::Map<String, serde_json::Value>) -> Result<(String, String), String> {
+    let name = name.trim();
+    if name.chars().count() > 48 || name.chars().any(char::is_control) {
+        return Err("A game type's name is up to 48 characters.".into());
+    }
+    let slug = slug(name)?;
+    if !BASE_MODES.contains(&mode) {
+        return Err(format!("{mode} isn't a game type one can be built on."));
+    }
+    let mut rules = serde_json::Map::new();
+    if let Some(n) = score_to_win {
+        if !(0..=32767).contains(&n) {
+            return Err("Score to win is 0 to 32767.".into());
+        }
+        rules.insert("score_to_win".into(), n.into());
+    }
+    for (k, v) in options {
+        let (_, lo, hi) = GAME_OPTIONS.iter().find(|(o, ..)| o == k).ok_or_else(|| format!("{k} can't be set from here"))?;
+        if !v.as_i64().is_some_and(|n| (*lo..=*hi).contains(&n)) {
+            return Err(format!("{k} is {lo} to {hi}."));
+        }
+    }
+    // an empty script: the file is then a custom mode Reclaimer's mode-check passes
+    let json = serde_json::json!({"version": 1, "name": name, "mode": mode, "rules": rules, "options": options,
+        "script": {"version": 1, "name": name, "initial": []}});
+    Ok((format!("Game Modes/{slug}.json"), serde_json::to_string_pretty(&json).unwrap() + "
 "))
 }
 
@@ -848,6 +886,19 @@ mod tests {
 
     // dedicated init's file, cut down: what the guide shows
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
+
+    #[test]
+    fn a_new_game_type_keeps_to_the_ranges() {
+        let o = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let (path, json) = new_game_type("Team Swords", "Slayer", Some(50), &o(serde_json::json!({"rounds.teams": 1, "rounds.minutes": 12}))).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!((path.as_str(), &v["rules"]["score_to_win"], &v["options"]["rounds.minutes"], &v["script"]["initial"]),
+            ("Game Modes/team-swords.json", &50.into(), &12.into(), &serde_json::json!([])));
+        assert!(new_game_type("x", "Slayer", None, &o(serde_json::json!({"rounds.minutes": 61}))).is_err());
+        assert!(new_game_type("x", "Slayer", None, &o(serde_json::json!({"player.health": 1}))).is_err());
+        assert!(new_game_type("x", "Forge", None, &serde_json::Map::new()).is_err());
+        assert!(new_game_type(&"y".repeat(49), "Slayer", None, &serde_json::Map::new()).is_err());
+    }
 
     #[test]
     fn a_new_playlist_keeps_the_rules() {
