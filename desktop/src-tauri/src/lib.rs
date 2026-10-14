@@ -459,12 +459,55 @@ async fn playlists(index: usize, app: State<'_, App>) -> Result<Vec<String>, Str
     Ok(out)
 }
 
-/// NEW PLAYLIST: written into the server folder's playlists/; an existing one is only replaced when asked.
+/// What the server folder's playlists/ holds: each file's name and games, and whether this console made it.
 #[tauri::command]
-async fn save_playlist(index: usize, name: String, vote_seconds: u32, games: Vec<(String, String)>, replace: bool, app: State<'_, App>) -> Result<Value, String> {
+async fn playlist_library(index: usize, app: State<'_, App>) -> Result<Vec<Value>, String> {
     let h = hub_of(&app)?;
     let t = install::target_for(&h.stations.get(index).ok_or("no such server")?.server)?;
-    let (path, json) = host::new_playlist(&name, vote_seconds, &games)?;
+    let mut names: Vec<String> = t.list("../playlists").await?.into_iter().filter(|n| n.ends_with(".json")).collect();
+    names.sort();
+    let mut out = vec![];
+    // ponytail: one read a file (one ssh each on a remote box); the first 60 are shown
+    for n in names.into_iter().take(60) {
+        let path = format!("playlists/{n}");
+        let mut row = json!({"path": path, "here": n.ends_with(".playlist.json")});
+        match t.read_text(&format!("../{path}")).await.and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| e.to_string())) {
+            Ok(v) => {
+                row["name"] = v["name"].clone();
+                row["games"] = json!(v["games"].as_array().map_or(0, Vec::len));
+            }
+            Err(e) => row["problem"] = e.into(),
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// A playlist file as it is, to edit a copy of: one in playlists/, or a Forge one in the content folder ("content/...").
+#[tauri::command]
+async fn playlist_read(index: usize, path: String, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let t = install::target_for(&h.stations.get(index).ok_or("no such server")?.server)?;
+    let p = install::safe_path(&path)?;
+    let rel = match (p.strip_prefix("content/"), p.starts_with("playlists/")) {
+        (Some(inner), _) => inner.to_string(),
+        (None, true) => format!("../{p}"),
+        _ => return Err(format!("{path} isn't a playlist file.")),
+    };
+    serde_json::from_str(&t.read_text(&rel).await?).map_err(|e| format!("{path} doesn't read as a playlist: {e}"))
+}
+
+/// SAVE in the playlist editor: written into the server folder's playlists/ as a new file named for it, or over `path`
+/// (a playlist this console made); an existing file is only replaced when asked.
+#[tauri::command]
+async fn save_playlist(index: usize, playlist: Value, path: Option<String>, replace: bool, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    let t = install::target_for(&h.stations.get(index).ok_or("no such server")?.server)?;
+    let (made, json) = host::playlist_file(&playlist)?;
+    let (path, replace) = match path {
+        Some(p) => (host::console_playlist(&p)?, true),
+        None => (made, replace),
+    };
     let rel = format!("../{path}");
     if !replace && !t.existing(std::slice::from_ref(&rel)).await?.is_empty() {
         return Ok(json!({"path": path, "exists": true}));
@@ -840,7 +883,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists, save_playlist, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install
         ])

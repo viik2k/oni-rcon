@@ -86,6 +86,17 @@ Also:
   modes. A finding that needs review turns the CONDITION red, pops up and chimes; CLEAR ALL acknowledges them. The
   chat is matched by explicit requests ("need an admin", "please kick Red", "Red is cheating"), not by words like "mod"
   or "cheat" alone. (From ibigs/oni-rcon, by RifleJock.)
+- **Content browser.** CHANGE MAP, CHANGE MODE, LOAD and QUEUE NEXT list what the server can load in groups (stock maps and
+  game types, mods, ReclaimerForge downloads, your own content folder, the Halo 3 and Matchmaking variants, saved and
+  Workshop variants) instead of one long list. Type to filter (every word has to match a name, author, folder or file),
+  order by name, install date, downloads or rating (click a button again to turn it round), and a ● marks what is
+  playing now. With a ReclaimerForge key loaded, a last group offers maps and game types the server doesn't have yet:
+  choosing one asks, then installs it. (From ibigs/oni-rcon, by RifleJock.)
+- **Playlists.** PLAYLISTS (F3, desktop) lists the server folder's `playlists`, the ones made here and any other, with
+  the playlists installed from F6. NEW and EDIT open an editor: a name, the seconds players get to vote (5 to 120) and
+  its games, a map and a game type each, with a weight for how often it comes up. Three games at least, each map and game
+  type once, no more than 128, in the shape the dedicated server reads. A playlist this console made is saved over; any
+  other is opened as a copy. USE ON THIS SERVER sets `playlist` in `dedicated.toml`. (From ibigs/oni-rcon, by RifleJock.)
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.
@@ -236,7 +247,7 @@ restart_cmd = "docker restart my-server-{port}"
 Everyone on it is dropped and the console reconnects once it's back. PLAYER CAPACITY (F3, desktop) saves
 `max_players` in that server's `dedicated.toml`, found beside its `content_dir`, then offers this restart so it applies. SWITCH PLAYLIST does the same with `playlist`, picked from the
 `playlists` folder beside `dedicated.toml` or from the playlists installed from F6, and takes out the server's `map`,
-`game`, `variant` or `campaign` (a server plays from one). NEW PLAYLIST makes one there from the server's own maps
+`game`, `variant` or `campaign` (a server plays from one). NEW PLAYLIST (and PLAYLISTS, which also edits them) makes one there from the server's own maps
 and modes, three games at least, and offers to switch to it. NEW GAME TYPE saves a game type in the content folder's
 `Game Modes`, built on one of Reclaimer's ten base modes with the score, teams, time limit, rounds, lives, respawn
 delay and shields you give it (blank keeps the mode's own); once the server lists it, CHANGE MODE plays it. Servers sharing a container (or, on Windows, the

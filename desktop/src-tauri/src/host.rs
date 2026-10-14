@@ -228,28 +228,79 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
-/// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
 /// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
 fn slug(name: &str) -> Result<String, String> {
     let s = name.trim().to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
     if s.is_empty() { Err("Name it with a letter or number in it.".into()) } else { Ok(s) }
 }
 
-pub fn new_playlist(name: &str, vote_seconds: u32, games: &[(String, String)]) -> Result<(String, String), String> {
-    let slug = slug(name)?;
-    if !(5..=120).contains(&vote_seconds) {
-        return Err("The vote lasts 5 to 120 seconds.".into());
+const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "games"];
+const GAME_KEYS: &[&str] = &["map", "game", "name", "weight", "options", "world", "rules"];
+
+/// A playlist in the shape the dedicated server reads (version 2), or why it can't be saved. Unknown keys are refused,
+/// the way the server's own import refuses them; a weight of 1 and empty values are left out. Whether each map and game
+/// is installed is the server's to say. From ibigs/oni-rcon's check_playlist, by RifleJock.
+pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use serde_json::{json, Value};
+    let o = p.as_object().ok_or("A playlist is a JSON object with a name and a list of games.")?;
+    if let Some(k) = o.keys().find(|k| !PLAYLIST_KEYS.contains(&k.as_str())) {
+        return Err(format!("Unknown playlist setting: {k}."));
     }
-    if !(3..=128).contains(&games.len()) {
-        return Err("A playlist holds 3 to 128 games.".into());
+    if o.get("version").is_some_and(|v| v.as_i64() != Some(2)) {
+        return Err("Only version 2 playlists are supported.".into());
     }
-    if games.iter().enumerate().any(|(i, g)| games[..i].contains(g)) {
-        return Err("A game is in it twice.".into());
+    let name = o.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    if name.is_empty() {
+        return Err("Give the playlist a name.".into());
     }
-    let games: Vec<_> = games.iter().map(|(map, game)| serde_json::json!({"map": map, "game": game})).collect();
-    let json = serde_json::json!({"version": 2, "name": name.trim(), "vote_seconds": vote_seconds, "games": games});
-    Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&json).unwrap() + "
-"))
+    let vote = o.get("vote_seconds").map_or(Some(20), Value::as_i64).filter(|n| (5..=120).contains(n)).ok_or("The vote lasts 5 to 120 seconds.")?;
+    let games = o.get("games").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    if games.len() < 3 {
+        return Err(format!("A playlist needs at least 3 games (it has {}): players vote on three different games each time.", games.len()));
+    }
+    if games.len() > 128 {
+        return Err(format!("A playlist holds at most 128 games; this one has {}.", games.len()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = vec![];
+    for (i, g) in games.iter().enumerate() {
+        let n = i + 1;
+        let g = g.as_object().ok_or_else(|| format!("Game {n} isn't a map and game type."))?;
+        if let Some(k) = g.keys().find(|k| !GAME_KEYS.contains(&k.as_str())) {
+            return Err(format!("Game {n} has an unknown setting: {k}."));
+        }
+        let text = |k: &str| g.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let (map, game) = (text("map"), text("game"));
+        if map.is_empty() || game.is_empty() {
+            return Err(format!("Game {n} needs both a map and a game type."));
+        }
+        if !g.get("weight").map_or(Some(1), Value::as_i64).is_some_and(|w| (1..=100).contains(&w)) {
+            return Err(format!("Game {n}'s weight must be a whole number from 1 to 100."));
+        }
+        if !seen.insert((map.clone(), game.clone())) {
+            return Err(format!("{game} on {map} is in it twice: give it a higher weight instead."));
+        }
+        let kept: serde_json::Map<String, Value> =
+            g.iter().filter(|(k, v)| !(k.as_str() == "weight" && v.as_i64() == Some(1)) && !v.is_null() && v.as_str() != Some("")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        out.push(Value::Object(kept));
+    }
+    Ok(json!({"version": 2, "name": name, "vote_seconds": vote, "games": out}))
+}
+
+/// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
+pub fn playlist_file(p: &serde_json::Value) -> Result<(String, String), String> {
+    let checked = check_playlist(p)?;
+    let slug = slug(checked["name"].as_str().unwrap_or_default())?;
+    Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&checked).unwrap() + "\n"))
+}
+
+/// A playlist file the console made, and so may rewrite: playlists/<name>.playlist.json, nothing deeper.
+pub fn console_playlist(path: &str) -> Result<String, String> {
+    let p = crate::install::safe_path(path)?;
+    match p.strip_prefix("playlists/") {
+        Some(f) if !f.contains('/') && f.ends_with(".playlist.json") => Ok(p),
+        _ => Err(format!("{path} isn't a playlist made in this console.")),
+    }
 }
 
 /// The native game types a game type file builds on, as it names them.
@@ -288,6 +339,7 @@ pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options:
 "))
 }
 
+/// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
     edit_server(text, rcon_port, |t| {
         if key == "playlist" {
@@ -945,13 +997,41 @@ mod tests {
 
     #[test]
     fn a_new_playlist_keeps_the_rules() {
-        let g = |m: &str| (m.to_string(), "Slayer".to_string());
-        let (path, json) = new_playlist(" Friday Night! ", 25, &[g("Guardian"), g("Valhalla"), g("The Pit")]).unwrap();
+        let pl = |n: &str, games: serde_json::Value| serde_json::json!({"name": n, "vote_seconds": 25, "games": games});
+        let g = |m: &str| serde_json::json!({"map": m, "game": "Slayer"});
+        let (path, json) = playlist_file(&pl(" Friday Night! ", serde_json::json!([g("Guardian"), g("Valhalla"), g("The Pit")]))).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!((path.as_str(), &v["name"], &v["games"][2]["map"]), ("playlists/friday-night.playlist.json", &"Friday Night!".into(), &"The Pit".into()));
-        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla")]).is_err(), "three at least");
-        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla"), g("Guardian")]).is_err(), "no game twice");
-        assert!(new_playlist("!!", 25, &[g("a"), g("b"), g("c")]).is_err());
+        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla")]))).is_err(), "three at least");
+        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla"), g("Guardian")]))).is_err(), "no game twice");
+        assert!(playlist_file(&pl("!!", serde_json::json!([g("a"), g("b"), g("c")]))).is_err());
+    }
+
+    #[test]
+    fn a_playlist_is_checked_in_the_servers_own_shape() {
+        use serde_json::json;
+        let games = json!([{"map": "Guardian", "game": "Team Slayer", "weight": 3}, {"map": "Valhalla", "game": "Slayer", "weight": 1, "name": ""}, {"map": "The Pit", "game": "Slayer"}]);
+        let out = check_playlist(&json!({"name": "Team Mix", "games": games})).unwrap();
+        assert_eq!(out, json!({"version": 2, "name": "Team Mix", "vote_seconds": 20, "games": [
+            {"map": "Guardian", "game": "Team Slayer", "weight": 3}, {"map": "Valhalla", "game": "Slayer"}, {"map": "The Pit", "game": "Slayer"}]}));
+        let many = |n: usize| (0..n).map(|i| json!({"map": format!("m{i}"), "game": "b"})).collect::<Vec<_>>();
+        for (bad, words) in [
+            (json!({"name": "", "games": games}), "name"),
+            (json!({"name": "x", "games": []}), "at least 3"),
+            (json!({"name": "x", "games": many(129)}), "at most 128"),
+            (json!({"name": "x", "games": [{"map": "a"}, {"map": "b", "game": "c"}, {"map": "d", "game": "e"}]}), "both a map and a game type"),
+            (json!({"name": "x", "games": [{"map": "a", "game": "b", "weight": 0}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "weight"),
+            (json!({"name": "x", "games": [{"map": "a", "game": "b", "script": 1}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "unknown setting"),
+            (json!({"name": "x", "games": games, "shuffle": true}), "Unknown playlist setting"),
+            (json!({"name": "x", "vote_seconds": 4, "games": games}), "5 to 120"),
+        ] {
+            let e = check_playlist(&bad).unwrap_err();
+            assert!(e.contains(words), "{e:?} should mention {words:?}");
+        }
+        assert!(console_playlist("playlists/a.playlist.json").is_ok());
+        for bad in ["playlists/a.json", "playlists/../a.playlist.json", "Maps/a.playlist.json", "playlists/x/a.playlist.json"] {
+            assert!(console_playlist(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

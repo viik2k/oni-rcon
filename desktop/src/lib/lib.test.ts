@@ -9,6 +9,7 @@ import { decrypt, noise } from "../art/palette";
 import { advice, level, scaleTop } from "./perf";
 import { filterTerms, nameDistance, rankedPlayers, type Found } from "./search";
 import { Findings, chatRequest, publicRoster } from "./findings";
+import { arrange, catalogItems, checkPlaylist, gameLabel, itemsFor, ordered, slug } from "./content";
 
 describe("console lines", () => {
   it("keeps a message whole for say, tell, kick and rename", () => {
@@ -310,5 +311,87 @@ describe("findings", () => {
     c.t += 61;
     expect(burst("A", "CTF")).toEqual([]);
     expect(burst("B", "CTF")).not.toEqual([]);
+  });
+});
+
+describe("content browser", () => {
+  const MAPS = [{ kind: "map", name: "Valhalla", reference: "riverworld" }, { kind: "map", name: "Guardian", reference: "guardian" },
+    { kind: "map", name: "Hang 'Em High", reference: "hang_em_high" }, { kind: "variant", name: "Guardian", reference: "default_guardian_012.mvar" },
+    { kind: "variant", name: "MLG Guardian", reference: "MLG Guardian" }, { kind: "variant", name: "Pit Stop", reference: "Maps/Forge/rf-3c1d0a9e44b2f7d81e02.json" },
+    { kind: "variant", name: "Club Dead", reference: "Maps/Club Dead.mvar" }];
+  const MODES = [{ kind: "mode", name: "Slayer", reference: "Slayer" }, { kind: "variant", name: "Team Slayer", reference: "2v2_team_slayer_010.bin" },
+    { kind: "variant", name: "UFM | ASSAULT", reference: "Game Modes/Forge/rf-d70540eb57f22df48390.json" },
+    { kind: "variant", name: "UFM | ASSAULT", reference: "Game Modes/Forge/UFM Encompass/UFM _ASSAULT.json" },
+    { kind: "variant", name: "FIESTA SMALL", reference: "FIESTA SMALL" }];
+  const INSTALLED = {
+    lst_pit: { listing_id: "lst_pit", title: "Pit Stop", kind: "map", author: "Ana", version: "2", installed_at: "2026-10-12T10:00:00Z", files: [{ path: "Maps/Forge/rf-3c1d0a9e44b2f7d81e02.json" }] },
+    lst_ufm: { listing_id: "lst_ufm", title: "UFM | ASSAULT", kind: "gametype", author: "Zed", version: "1.2", installed_at: "2026-10-13T10:00:00Z", files: [{ path: "Game Modes/Forge/rf-d70540eb57f22df48390.json" }] },
+  };
+  const groups = (entries: any[], what: "maps" | "modes", ...rest: [string?, string?, boolean?]) =>
+    Object.fromEntries(arrange(itemsFor(entries, INSTALLED), what, ...rest).map(([k, , rows]) => [k, rows.map((i) => [i.name, i.folder])]));
+
+  it("puts every map in the group people look in", () => {
+    expect(groups(MAPS, "maps")).toEqual({
+      stock: [["Guardian", ""], ["Valhalla", ""]], mods: [["Hang 'Em High", ""]], forge: [["Pit Stop", ""]], folder: [["Club Dead", ""]],
+      builtin: [["Guardian", ""]], saved: [["MLG Guardian", ""]],
+    });
+  });
+
+  it("matches Forge files by their own file and keeps their folder", () => {
+    const items = new Map(itemsFor(MODES, INSTALLED).map((i) => [`${i.name}|${i.folder}`, i]));
+    const ours = items.get("UFM | ASSAULT|")!;
+    expect([ours.group, ours.detail, !!ours.installedAt]).toEqual(["forge", "v1.2 · Zed", true]);
+    const theirs = items.get("UFM | ASSAULT|UFM Encompass")!; // the same title in another folder: an upload, not our install
+    expect([theirs.group, theirs.forge, theirs.detail]).toEqual(["forge", null, "UFM _ASSAULT.json"]);
+    expect([items.get("Team Slayer|")!.group, items.get("FIESTA SMALL|")!.group]).toEqual(["builtin", "saved"]);
+  });
+
+  it("filters on every word, over authors and folders too", () => {
+    expect(groups(MODES, "modes", "name", "ufm encompass")).toEqual({ forge: [["UFM | ASSAULT", "UFM Encompass"]] });
+    expect(groups(MODES, "modes", "name", "zed")).toEqual({ forge: [["UFM | ASSAULT", ""]] });
+    expect(groups(MAPS, "maps", "name", "nothing like it")).toEqual({});
+  });
+
+  it("turns orders round and keeps the unknowns last", () => {
+    const items = itemsFor(MODES, INSTALLED);
+    expect(ordered(items, "name").slice(0, 2).map((i) => i.name)).toEqual(["FIESTA SMALL", "Slayer"]);
+    expect(ordered(items, "name", true)[0].name).toBe("UFM | ASSAULT");
+    expect(ordered(items, "recent")[0].installedAt).toBe("2026-10-13T10:00:00Z");
+    const oldest = ordered([...items, ...itemsFor(MAPS, INSTALLED)], "recent", true);
+    expect([oldest[0].installedAt, oldest[2].installedAt]).toEqual(["2026-10-12T10:00:00Z", ""]);
+  });
+
+  it("offers from the catalog only what is not here", () => {
+    const listings = [{ id: "lst_pit", title: "Pit Stop", kind: "map", upvote_count: 9 }, { id: "a", title: "Alpha", kind: "map", upvote_count: 1, downvote_count: 4 },
+      { id: "b", title: "Bravo", kind: "map", upvote_count: 30, download_count: 7 }, { id: "c", title: "Charlie", kind: "gametype" },
+      { id: "d", title: "Delta", kind: "map", status: "withdrawn" }];
+    const got = catalogItems(listings, "map", new Set(Object.keys(INSTALLED)));
+    const names = (rows: typeof got) => rows.map((i) => i.name);
+    expect(names(got)).toEqual(["Alpha", "Bravo"]);
+    expect(names(ordered(got, "rated"))).toEqual(["Bravo", "Alpha"]);
+    expect(names(ordered(got, "rated", true))).toEqual(["Alpha", "Bravo"]);
+    expect(names(ordered(got, "downloads"))).toEqual(["Bravo", "Alpha"]);
+  });
+});
+
+describe("playlists", () => {
+  const good = { name: "Team Mix", games: [{ map: "Guardian", game: "Team Slayer", weight: 3 }, { map: "Valhalla", game: "Slayer", weight: 1 }, { map: "The Pit", game: "Slayer" }] };
+
+  it("are checked in the server's own shape", () => {
+    expect(checkPlaylist(good)).toEqual({ version: 2, name: "Team Mix", vote_seconds: 20,
+      games: [{ map: "Guardian", game: "Team Slayer", weight: 3 }, { map: "Valhalla", game: "Slayer" }, { map: "The Pit", game: "Slayer" }] });
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ map: `m${i}`, game: "b" }));
+    for (const [bad, words] of [[{ name: "", games: good.games }, "name"], [{ name: "x", games: [] }, "at least 3"],
+      [{ name: "x", games: good.games.slice(0, 2) }, "at least 3 games \\(it has 2\\)"], [{ name: "x", games: [{ map: "Guardian" }, { map: "a" }, { map: "b" }] }, "both a map and a game type"],
+      [{ name: "x", games: many(3).map((g) => ({ ...g, weight: 0 })) }, "weight"], [{ name: "x", games: many(129) }, "at most 128"],
+      [{ name: "x", games: good.games, shuffle: true }, "Unknown playlist setting"], [{ name: "x", games: many(3).map((g) => ({ ...g, script: 1 })) }, "unknown settings"],
+      [{ name: "x", vote_seconds: 4, games: good.games }, "5 to 120"], [{ name: "x", games: [...good.games, good.games[0]] }, "twice"]] as [unknown, string][])
+      expect(() => checkPlaylist(bad)).toThrow(new RegExp(words));
+  });
+
+  it("word a game the way the server lists it", () => {
+    expect(gameLabel({ map: "Guardian", game: "Team Slayer", weight: 3 })).toBe("Team Slayer on Guardian  ×3");
+    expect(gameLabel({ map: "a", game: "b", name: "Mine" })).toBe("Mine");
+    expect(slug(" Friday Night! ")).toBe("friday-night");
   });
 });

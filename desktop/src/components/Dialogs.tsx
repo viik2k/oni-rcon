@@ -7,6 +7,7 @@ import { oni, useV, type Dialog } from "../engine";
 import { CREDIT } from "../lib/forge";
 import { everyone, rankedPlayers, type Found } from "../lib/search";
 import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
+import { ContentBrowser, PlaylistEditor, PlaylistLibrary } from "./Content";
 import { FindingsView } from "./Findings";
 import { L, Pixel, Table, type Row } from "./ui";
 
@@ -185,7 +186,8 @@ const GUIDE: [string, [string, string][]][] = [
     ["Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and whoever made it."],
     ["Capacity", "PLAYER CAPACITY saves how many players the server takes in its dedicated.toml (the one beside content_dir), then offers to restart it so it applies."],
     ["Playlist", "SWITCH PLAYLIST sets which playlist the server plays (one in the server folder's playlists/, or one installed from F6) in its dedicated.toml, in place of a fixed map and game, then offers to restart it."],
-    ["New playlist", "NEW PLAYLIST names a playlist and the seconds players get to vote, then takes its games a map and a mode at a time from the server's own lists (three at least, each once; Esc on the map asks before throwing them away), saves it in the server's playlists/ and offers to switch to it."],
+    ["Content browser", "CHANGE MAP, CHANGE MODE, LOAD and QUEUE NEXT list what the server can load in groups. Type to filter, order by name, install date, downloads or rating (click again to turn it round); a ● marks what is playing. With a ReclaimerForge key, the last group offers ones the server doesn't have yet: choosing one installs it."],
+    ["Playlists", "PLAYLISTS lists the server folder's playlists and the ones installed from F6: NEW and EDIT open the editor (name, vote seconds, games with weights; three at least, each map and game type once, Ctrl+S saves), USE ON THIS SERVER puts the server on one. NEW PLAYLIST goes straight to an empty editor and offers to switch to it once saved. A playlist this console didn't make is edited as a copy."],
     ["New game type", "NEW GAME TYPE builds one on a base mode (Slayer, Capture the Flag, Oddball, King of the Hill, VIP, Juggernaut, Territories, Assault, Infection, Escalation Slayer) with its score, teams, time limit, rounds, lives, respawn delay and shields; blank fields keep the mode's own. It's saved in the server's content folder, Game Modes, and played with CHANGE MODE once the server lists it."],
     ["Restart", "RESTART SERVER runs the server's restart_cmd from the config (setup writes it): everyone is dropped and the console reconnects once it's back."],
   ]],
@@ -247,7 +249,8 @@ function Palette({ d }: { d: Dialog }) {
   return <Pick d={{ ...d, props: { title: "COMMAND PALETTE", options }, resolve: (v: string | null) => { d.resolve(null); if (v !== null) items[Number(v)][2](); } }} />;
 }
 
-const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find, findings: FindingsView };
+const KINDS: Record<string, (p: { d: Dialog }) => React.ReactElement> = { confirm: Confirm, form: Form, pick: Pick, help: Help, palette: Palette, find: Find, findings: FindingsView,
+  content: ContentBrowser, playlists: PlaylistLibrary, playlist: PlaylistEditor };
 
 export function Dialogs() {
   useV((s) => s.dialog);

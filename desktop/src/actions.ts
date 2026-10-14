@@ -3,6 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { oni, type Station } from "./engine";
+import { newPlaylist, type Playlist } from "./lib/content";
+import { latestOf } from "./lib/forge";
 import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
@@ -15,9 +17,9 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
+  ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "newplaylist", "newgametype", "reconnect", "restart"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
@@ -43,6 +45,7 @@ export const TIPS: Record<string, string> = {
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
+  "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
   "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
@@ -194,42 +197,94 @@ async function newGameType(st: Station): Promise<void> {
   oni.notify(`Saved as ${path}. ${how}`, `GAME TYPE · ${st.label}`, "information", 12);
 }
 
-/** NEW PLAYLIST: a name, then a map and a mode a game at a time from the server's own lists. */
-async function newPlaylist(st: Station): Promise<void> {
-  const maps = entries(st, "maps"), modes = entries(st, "modes");
-  if (!maps.length || !modes.length) return oni.notify("Map and mode lists not loaded yet.", "", "warning");
-  const f = await oni.form("NEW PLAYLIST", [["name", "Name (shown in the lobby)", ""], ["vote", "Seconds players get to vote (5 to 120)", "20"]],
-    { verb: "PICK GAMES", required: ["name", "vote"], note: "Then its games, a map and a mode each: three at least, each once." });
-  if (!f) return;
-  const games: [string, string][] = [];
+/** Pick a map or a game type in the content browser. A ReclaimerForge one that isn't installed yet is installed instead
+ *  (after a confirm), and null comes back: open the browser again once that has finished. */
+async function browse(st: Station, what: "maps" | "modes", title: string, keep = false): Promise<string | null> {
+  const got = await oni.ask<string | { listing: Dict } | null>("content", { title, what, index: st.index, keep });
+  if (got === null || typeof got === "string") return got;
+  const plan = await invoke<Dict>("forge_plan", { index: st.index, listing: got.listing, version: latestOf(got.listing) ?? {} });
+  if (plan.error) oni.notify(plan.error.text, plan.error.short, "error", 15);
+  else if (await oni.confirm(plan.title, plan.body, plan.replacing ? "REPLACE" : "INSTALL", plan.replacing)) {
+    await invoke("forge_put", { plan: plan.plan });
+    oni.notify("It is installing: open this again once it has finished.", `FORGE · ${st.label}`);
+  }
+  return null;
+}
+
+/** A game for the playlist: a map, then a game type, from the server's own lists (typed in when it hasn't sent them). */
+async function pickGame(st: Station, n: number): Promise<[string, string] | null> {
+  if (!st.data.maps?.entries?.length || !st.data.modes?.entries?.length) {
+    const f = await oni.form("ADD GAME", [["map", "Map (as the server names it)", ""], ["game", "Game type", ""]], { verb: "ADD", required: ["map", "game"],
+      note: `${st.label} hasn't listed its maps, so type the names. The server checks them before the playlist is used.` });
+    return f ? [f.map, f.game] : null;
+  }
+  const mp = await browse(st, "maps", `GAME ${n} · SELECT MAP`);
+  const md = mp ? await browse(st, "modes", `GAME ${n} · SELECT GAME TYPE`) : null;
+  return mp && md ? [mp, md] : null;
+}
+
+/** The playlist editor until it is saved (the file's path) or dropped (null), with ADD GAME going out to the browser and
+ *  back. `path`: a playlist this console made, to save over; null saves a new one in playlists/. */
+async function editPlaylist(st: Station, p: Playlist, path: string | null, note = ""): Promise<string | null> {
+  const start = JSON.stringify(p), sink: { p?: Playlist } = {};
+  let sel: string | undefined;
   for (;;) {
-    const n = games.length + 1, done: [Line, string][] = games.length >= 3 ? [[[[`✓ DONE: save these ${games.length} games`, AMBER]], ""]] : [];
-    // ponytail: the server's own map and mode references, taken as what its playlists name them by
-    const mp = await oni.pick(`GAME ${n} · SELECT MAP`, [...done, ...maps]);
-    if (mp === "") break;
-    if (mp === null) {
-      if (!games.length || (await oni.confirm("DISCARD PLAYLIST", `Its ${games.length} game${games.length > 1 ? "s" : ""} so far are thrown away.`, "DISCARD"))) return;
-      continue;
+    const r = await oni.ask<{ do: string; p: Playlist } | null>("playlist", { index: st.index, p, path, note, sel, sink });
+    p = r?.p ?? sink.p ?? p; // outside the dialog counts as closing it
+    if (!r || r.do === "close") {
+      if (JSON.stringify(p) === start || (await oni.confirm("DISCARD CHANGES", `${p.name || "This playlist"} hasn't been saved.`, "DISCARD", true))) return null;
+    } else if (r.do === "add") {
+      const game = await pickGame(st, p.games.length + 1);
+      if (!game) continue;
+      if (p.games.some((g) => g.map === game[0] && g.game === game[1])) oni.notify(`${game[1]} on ${game[0]} is in it already: give it a higher weight instead.`, "", "warning");
+      else p = { ...p, games: [...p.games, { map: game[0], game: game[1] }] };
+      sel = String(p.games.length - 1);
+    } else {
+      const args = { index: st.index, playlist: p, path };
+      try {
+        let saved = await invoke<Dict>("save_playlist", { ...args, replace: false });
+        if (saved.exists) {
+          if (!(await oni.confirm("REPLACE PLAYLIST", `${saved.path} is there already.`, "REPLACE", true))) continue;
+          saved = await invoke<Dict>("save_playlist", { ...args, replace: true });
+        }
+        return saved.path;
+      } catch (e) {
+        oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
+      }
     }
-    const md = await oni.pick(`GAME ${n} · ${mp} · SELECT MODE`, modes);
-    if (!md) continue;
-    if (games.some(([a, b]) => a === mp && b === md)) oni.notify(`${mp} / ${md} is in it already.`, "", "warning");
-    else games.push([mp, md]);
   }
-  const args = { index: st.index, name: f.name, voteSeconds: Number(f.vote), games };
-  let path: string;
-  try {
-    let r = await invoke<Dict>("save_playlist", { ...args, replace: false });
-    if (r.exists) {
-      if (!(await oni.confirm("REPLACE PLAYLIST", `${r.path} is there already.`, "REPLACE"))) return;
-      r = await invoke<Dict>("save_playlist", { ...args, replace: true });
+}
+
+/** A new playlist, or `path` opened to edit: one this console made is rewritten, any other (a hand-made file, or one
+ *  installed from Forge) is the start of a new one. Returns where it was saved. */
+async function playlistEdit(st: Station, path: string | null): Promise<string | null> {
+  let p = newPlaylist(), mine = path, note = "";
+  if (path) {
+    try {
+      const raw = await invoke<Dict>("playlist_read", { index: st.index, path });
+      p = { version: 2, name: String(raw.name ?? ""), vote_seconds: raw.vote_seconds ?? 20, games: Array.isArray(raw.games) ? raw.games : [] };
+    } catch (e) {
+      oni.notify(String(e), `PLAYLIST · ${st.label}`, "error", 15);
+      return null;
     }
-    path = r.path;
-  } catch (e) {
-    return oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
+    if (!/^playlists\/[^/]+\.playlist\.json$/.test(path)) {
+      mine = null;
+      note = `A copy of ${path}: SAVE puts it in the server folder's playlists/ as its own playlist; the original stays as it is.`;
+    }
   }
-  if (await oni.confirm(`SWITCH TO  ${f.name}`, `Saved as ${path}. Put the server on it now?`, "SWITCH", false)) return saveSetting(st, "playlist", path, "PLAYLIST", path);
-  oni.notify(`Saved as ${path}: SWITCH PLAYLIST puts the server on it.`, `PLAYLIST · ${st.label}`);
+  return editPlaylist(st, p, mine, note);
+}
+
+/** PLAYLISTS: the library, with NEW and EDIT going into the editor and back, until one is used or it is closed. */
+async function playlistsManager(st: Station): Promise<void> {
+  let sel: string | undefined;
+  for (;;) {
+    const r = await oni.ask<{ do: string; path?: string } | null>("playlists", { index: st.index, sel });
+    if (!r) return;
+    sel = r.path;
+    if (r.do === "use") return saveSetting(st, "playlist", r.path, "PLAYLIST", r.path!);
+    sel = (await playlistEdit(st, r.do === "edit" ? r.path! : null)) ?? sel;
+  }
 }
 
 export async function op(name: string) {
@@ -259,6 +314,13 @@ export async function op(name: string) {
     return;
   }
   if (name === "newgametype") return newGameType(st);
+  if (name === "playlists") return playlistsManager(st);
+  if (name === "newplaylist") {
+    const path = await playlistEdit(st, null);
+    if (path && (await oni.confirm("SWITCH PLAYLIST", `Saved as ${path}. Put the server on it now?`, "SWITCH", false))) return saveSetting(st, "playlist", path, "PLAYLIST", path);
+    if (path) oni.notify(`Saved as ${path}: SWITCH PLAYLIST puts the server on it.`, `PLAYLIST · ${st.label}`);
+    return;
+  }
   if (name === "playlist") {
     let files: string[];
     try {
@@ -275,20 +337,16 @@ export async function op(name: string) {
     return;
   }
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
-  if (name === "newplaylist") return newPlaylist(st);
   if (["load", "map", "mode", "nextmap"].includes(name)) {
     let mp = "", md = "";
     if (name !== "mode") {
-      const maps = entries(st, "maps");
-      if (!maps.length) return oni.notify("Map list not loaded yet.", "", "warning");
-      const got = await oni.pick("SELECT MAP", maps);
+      if (!entries(st, "maps").length) return oni.notify("Map list not loaded yet.", "", "warning");
+      const got = await browse(st, "maps", "SELECT MAP");
       if (!got) return;
       mp = got;
     }
     if (name !== "map") {
-      let modes = entries(st, "modes");
-      if (name === "nextmap") modes = [[[["(keep the current rules)", DIM]], ""], ...modes];
-      const got = await oni.pick("SELECT MODE", modes);
+      const got = await browse(st, "modes", "SELECT MODE", name === "nextmap");
       if (got === null || (name !== "nextmap" && !got)) return;
       md = got;
     }
