@@ -9,6 +9,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "./art/palette";
 import { Superintendent, classify } from "./art/superintendent";
 import { Medals } from "./lib/medals";
+import { Engine, type Roles } from "./lib/rules";
+import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
@@ -24,8 +26,8 @@ export const TABS: Tab[] = ["assets", "intercepts", "operations", "blacklist", "
 
 // --- what the window repaints, by counter ----------------------------------------------------------------------
 type Counters = { cards: number; roster: number; ops: number; bans: number; feed: number; log: number; forge: number;
-  health: number; mast: number; ui: number; toasts: number; dialog: number };
-export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0 }));
+  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number };
+export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0 }));
 const pending = new Set<keyof Counters>();
 let flushQueued = false;
 // the feed and the log repaint at most this often: a fleet's events arrive as a stream, and a repaint per event
@@ -164,6 +166,18 @@ class Oni {
   alertAt = -Infinity;
   sup = new Superintendent();
   findings = new Findings();
+  /** Automation rules: they run while this console is open, and act through the same calls as the buttons do. */
+  rules: Dict[] = [];
+  roles: Roles = {};
+  runner = new Runner({
+    call: (where, command, args) => {
+      const st = this.stations.find((s) => s.where === where);
+      return st?.online ? this.call(st, command, args) : Promise.resolve(null);
+    },
+    discord: (name, text) => invoke<number>("discord_post", { name, text }),
+    changed: () => bump("auto"),
+    noted: (n) => this.noteAutomation(n),
+  });
   private rosters = new WeakMap<object, Who[]>();
   labelWidth = 14;
   banner: { text: string; warn: boolean; until: number } | null = null;
@@ -200,6 +214,9 @@ class Oni {
     this.feed = [];
     this.log = [];
     this.findings.clear();
+    this.runner.history = [];
+    this.runner.engine = new Engine();
+    this.loadAutomation();
     this.sup.clear();
     this.measureLabels();
     this.logLine([["ONI remote console. Commands go to the selected station; `@all` prefixes run on every station; `help` asks the server; `clear` clears this log.", DIM]]);
@@ -210,6 +227,28 @@ class Oni {
     every(1000, () => this.pollSlow());
     for (const st of this.stations) if (st.online) this.fetch(st, "status");
     bump("cards", "roster", "ops", "bans", "feed", "log", "forge", "health", "mast", "ui");
+  }
+
+  async loadAutomation() {
+    try {
+      const f = await invoke<Dict>("automation_load");
+      [this.rules, this.roles, this.runner.webhooks] = [f.rules, f.roles, f.webhooks];
+      this.runner.load(this.rules, this.roles);
+    } catch (e) {
+      this.notify(String(e), "AUTOMATION", "error", 10);
+    }
+  }
+
+  /** Save the rules and roles (the Rust side keeps the file), then run on them. */
+  async saveAutomation(rules = this.rules, roles = this.roles) {
+    await invoke("automation_save", { rules, roles });
+    [this.rules, this.roles] = [rules, roles];
+    this.runner.load(rules, roles);
+  }
+
+  /** What a rule did goes in the command log, the audit trail beside everything typed by hand. */
+  private noteAutomation(n: Note) {
+    this.logLine([[new Date().toTimeString().slice(0, 9), DIM], ["AUTO ", CYAN], [`${n.name || n.rule}${n.server ? ` · ${n.server}` : ""}  `, WHITE], [n.result, DIM]]);
   }
 
   stop() {
@@ -247,7 +286,11 @@ class Oni {
         if (st === this.cur) bump("roster");
         return;
       }
-      case "health": this.health = m.view; return bump("health", "mast", "cards", "ops");
+      case "health": {
+        this.health = m.view;
+        if (this.runner.wantsFps) for (const st of this.stations) this.runner.fps(st.where, m.view.frames?.[String(st.index)]?.fps);
+        return bump("health", "mast", "cards", "ops");
+      }
       case "health-notice": return this.healthNotice(m);
       case "toast": return this.notify(m.explain ? explain(m.text) : m.text, m.title, m.severity, m.timeout);
       case "log": {
@@ -267,6 +310,7 @@ class Oni {
     st.state = state;
     st.detail = detail;
     st.info = m.info ?? st.info;
+    if (state !== "connecting") this.runner.connection(st.where, state === "online", st.label);
     if (state === "online") {
       st.medals.newGame(); // what happened while we were away is unknown
       this.relabel();
@@ -292,6 +336,7 @@ class Oni {
     const context = this.findingContext(st);
     const found = this.findings.ingest(String(st.index), raw, (id) => this.nameOf(st, names, id), context, this.roster(st));
     for (const f of found) this.reportFinding(f, st);
+    this.runner.event(st.where, raw);
     if (raw.event === "join") {
       for (const f of idForms(pick(raw, "id", "player_id"))) if (f.length >= 8) st.past.set(f, String(pick(raw, "name", "player") ?? "?"));
     }
@@ -401,7 +446,11 @@ class Oni {
       if (r.ok && w === "admins" && Array.isArray(r.data)) st.data[w] = { admins: r.data };
       else if (r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
         if (w === "status" && r.data.phase !== st.data.status?.phase) st.medals.newGame();
-        if (w === "players") st.learn(r.data.players ?? []);
+        if (w === "players") {
+          st.learn(r.data.players ?? []);
+          this.runner.players(st.where, r.data.players ?? []);
+        }
+        if (w === "status") this.runner.status(st.where, r.data);
         st.data[w] = r.data;
       }
     });
@@ -555,6 +604,7 @@ class Oni {
   }
 
   private tick() {
+    this.runner.tick();
     if (this.banner && performance.now() > this.banner.until) this.banner = null;
     const latest = this.findings.recent().find((r) => r.at > this.findings.acknowledgedAt);
     if (latest && Date.now() / 1000 - latest.at <= 300) this.sup.last = redactText(`${this.stations[Number(latest.server)]?.label ?? latest.server}: ${latest.title} · F8`, this.redact);
@@ -587,6 +637,7 @@ class Oni {
     for (const st of this.stations) seen.set(st.label, (seen.get(st.label) ?? 0) + 1);
     for (const st of this.stations) if (st.tag && (seen.get(st.label) ?? 0) > 1) [st.label, st.tag] = [`${st.tag} · ${st.label}`, ""];
     this.measureLabels();
+    for (const st of this.stations) this.runner.engine.lobby(st.where, st.label);
     invoke("set_labels", { labels: this.stations.map((s) => s.label) }).catch(() => {});
     bump("cards", "feed", "ui");
   }

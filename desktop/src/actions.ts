@@ -5,6 +5,7 @@ import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
+import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TEMPLATE_HELP, block, describe, describeBlock, plan, sample, stepWords, validate, type Field, type Part } from "./lib/rules";
 import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
@@ -470,4 +471,242 @@ export function sayText(text: string) {
   text = text.replace(/^@all /, "").trim();
   if (text && targets.length) oni.fanout(targets, "say", [text]);
   if (text && !targets.length) oni.notify("Not connected: nothing was sent.", "", "warning");
+}
+
+// --- automation --------------------------------------------------------------------------------------------------
+const serverName = (k: string) => oni.stations.find((x) => x.where === k)?.label ?? k;
+const DONE = "\0done";
+
+/** A pick list you can tick several of; Done returns the ticked values. */
+async function toggles(title: string, options: [string, string][], on: string[]): Promise<string[] | null> {
+  const set = new Set(on);
+  for (;;) {
+    const got = await oni.pick(title, [...options.map(([l, v]) => [`${set.has(v) ? "✓" : "  "} ${l}`, v] as [string, string]), ["Done", DONE]]);
+    if (got === null) return null;
+    if (got === DONE) return [...set];
+    if (!set.delete(got)) set.add(got);
+  }
+}
+
+/** The form row for one catalog field: the current value first in a select, so it is what Enter keeps. */
+function fieldRow(f: Field, now: unknown): [string, string, string | [string, string][]] | null {
+  const cur = String(now ?? f.default ?? "");
+  const first = (opts: [string, string][]): [string, string][] => [...opts.filter(([, v]) => v === cur), ...opts.filter(([, v]) => v !== cur)];
+  if (f.kind === "choice") return [f.key, f.label, first(f.options!.map((o) => [o, o]))];
+  if (f.kind === "server") return [f.key, f.label, first(oni.stations.map((x) => [x.label, x.where]))];
+  if (f.kind === "webhook") {
+    const names = Object.keys(oni.runner.webhooks);
+    return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.webhooks[n]}`, n]))] : null;
+  }
+  return [f.key, f.label, cur];
+}
+
+/** One WHEN, IF or THEN block of the given type, asked field by field and checked; `init` holds the values to start from. */
+async function askBlock(part: Part, type: string, init: Dict = {}): Promise<Dict | null> {
+  const { label, hint, fields } = CATALOG[part][type];
+  if (!fields.length) return block(part, { type });
+  let cur: Dict = { ...init }, note = hint + (fields.some((f) => f.kind === "message") ? `\nIn a message: ${TEMPLATE_HELP}` : "");
+  for (;;) {
+    const rows = fields.map((f) => fieldRow(f, cur[f.key]));
+    if (rows.includes(null)) {
+      oni.notify("Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
+      return null;
+    }
+    const v = await oni.form(label.toUpperCase(), rows as [string, string, string | [string, string][]][], { verb: "OK", note });
+    if (!v) return null;
+    cur = v;
+    try {
+      return block(part, { type, ...v });
+    } catch (e) {
+      note = `${(e as Error).message}\n${hint}`;
+    }
+  }
+}
+
+const pickType = (part: Part) => oni.pick({ when: "WHEN", if: "ONLY IF", then: "THEN DO" }[part], Object.entries(CATALOG[part]).map(([k, e]) => [e.label, k] as [string, string]));
+
+/** The IF or THEN list: add, edit, move and remove blocks until Done. */
+async function blocks(part: "if" | "then", list: Dict[]): Promise<Dict[] | null> {
+  const lo = part === "then" ? 1 : 0;
+  for (;;) {
+    const got = await oni.pick(part === "if" ? "ONLY IF · all of these must hold" : "THEN DO · in this order", [
+      ...list.map((b, i) => [`${i + 1}. ${describeBlock(part, b)}`, `b${i}`] as [string, string]),
+      ...(list.length < 8 ? [[part === "if" ? "+ Add a condition" : "+ Add an action", "add"] as [string, string]] : []),
+      [list.length >= lo ? "Done" : "Done (a rule needs at least one action)", DONE],
+    ]);
+    if (got === null) return null;
+    if (got === DONE) {
+      if (list.length >= lo) return list;
+      oni.notify("A rule needs something to do.", "AUTOMATION", "warning");
+    } else if (got === "add") {
+      const type = await pickType(part);
+      const b = type && (await askBlock(part, type));
+      if (b) list = [...list, b];
+    } else {
+      const i = Number(got.slice(1)), act = await oni.pick(describeBlock(part, list[i]), [["Edit", "edit"], ["Move up", "up"], ["Remove", "rm"]]);
+      if (act === "edit") {
+        const b = await askBlock(part, list[i].type, list[i]);
+        if (b) list = list.map((x, j) => (j === i ? b : x));
+      } else if (act === "up" && i > 0) list = list.map((x, j) => (j === i - 1 ? list[i] : j === i ? list[i - 1] : x));
+      else if (act === "rm") list = list.filter((_, j) => j !== i);
+    }
+  }
+}
+
+/** Build a rule (or change `base`) a step at a time: name, servers, WHEN, IF, THEN, limits, then a read-back. Null: dropped. */
+async function ruleFlow(base: Dict | null): Promise<Dict | null> {
+  const stations = oni.stations;
+  const some = !!base && base.servers !== "all";
+  const f = await oni.form(base?.id ? "EDIT RULE" : "NEW RULE", [["name", "Name", base?.name ?? ""],
+    ...(stations.length > 1 ? [["scope", "Runs on", some ? [["Chosen servers", "some"], ["Every server", "all"]] : [["Every server", "all"], ["Chosen servers", "some"]]] as [string, string, [string, string][]]] : [])],
+  { verb: "NEXT", required: ["name"] });
+  if (!f) return null;
+  let servers: "all" | string[] = "all";
+  if (f.scope === "some") {
+    const got = await toggles("RUNS ON · tick the servers", stations.map((x) => [x.label, x.where] as [string, string]), some ? base!.servers : []);
+    if (!got) return null;
+    if (got.length) servers = got;
+    else oni.notify("None ticked, so it runs on every server.", "AUTOMATION");
+  }
+  const type = await pickType("when");
+  if (!type) return null;
+  const when = await askBlock("when", type, base?.when?.type === type ? base.when : {});
+  const conds = when && (await blocks("if", base?.if ?? []));
+  const acts = conds && (await blocks("then", base?.then ?? []));
+  if (!when || !conds || !acts) return null;
+  const draft = validate({ name: f.name.trim(), servers, when, if: conds, then: acts });
+  let limits: Dict | null = { cooldown: String(base?.cooldown ?? draft.cooldown), per_hour: String(base?.per_hour ?? draft.per_hour) };
+  let note = "Cooldown: seconds before it can fire again for the same server and player. Per hour: the most times it may fire.";
+  for (;;) {
+    limits = await oni.form("LIMITS", [["cooldown", "Cooldown (seconds)", limits!.cooldown], ["per_hour", "Most times an hour (1–600)", limits!.per_hour]], { verb: "NEXT", note });
+    if (!limits) return null;
+    try {
+      const rule = validate({ ...draft, id: base?.id, enabled: base?.enabled ?? true, cooldown: Number(limits.cooldown), per_hour: Number(limits.per_hour) });
+      return (await oni.confirm("SAVE THIS RULE", describe(rule, serverName), "SAVE", false)) ? rule : null;
+    } catch (e) {
+      note = (e as Error).message;
+    }
+  }
+}
+
+/** TEST: what the rule would do if it fired right now on a server, with the option of really doing it. */
+async function testRule(rule: Dict) {
+  const up = oni.stations.filter((x) => x.online);
+  if (!up.length) return oni.notify("No server is connected to test on.", "AUTOMATION", "warning");
+  const where = up.length === 1 ? up[0].where : await oni.pick("TEST ON WHICH SERVER", up.map((x) => [x.label, x.where] as [string, string]));
+  if (!where) return;
+  const fire = sample(oni.runner.engine, rule, where), steps = plan(oni.runner.engine, fire);
+  const body = steps.length ? steps.map((x) => `• ${stepWords(oni.runner.engine, x)}`).join("\n") : "Nothing: there is nobody it would tell.";
+  const text = `If this fired now on ${serverName(where)} (its conditions and limits aside) it would:\n${body}`;
+  if (!steps.length) return void (await oni.confirm(`TEST · ${rule.name}`, text, "OK", false));
+  if (await oni.confirm(`TEST · ${rule.name}`, `${text}\n\nSEND FOR REAL does these now; ABORT only showed them.`, "SEND FOR REAL", false)) await oni.runner.steps(fire, steps);
+}
+
+/** Who has which role. ADMIN here is for rules only (who counts as an admin); the server's own admin list is under F4. */
+async function rolesFlow() {
+  const roles = { ...oni.roles };
+  const id = (p: Dict) => String(pick(p, "player_id", "id") ?? "");
+  for (;;) {
+    const got = await oni.pick("ROLES · who rules treat as ADMIN, VIP or MOD", [
+      ...Object.entries(roles).map(([k, p]) => [`${p.name || k.slice(0, 12)}  ${p.roles.join(", ").toUpperCase()}`, k] as [string, string]),
+      ["+ Add a player", "add"], ["Done", DONE]]);
+    if (got === null) return;
+    if (got === DONE) return void (await oni.saveAutomation(oni.rules, roles).catch((e) => oni.notify(String(e), "AUTOMATION", "error", 10)));
+    let who = got, name = roles[got]?.name ?? "";
+    if (got === "add") {
+      const seen = new Map<string, [string, string]>();
+      for (const x of oni.stations) for (const p of x.players) if (id(p)) seen.set(id(p), [String(pick(p, "name") ?? id(p)), x.label]);
+      const chosen = await oni.pick("WHICH PLAYER", [...[...seen].map(([k, [n, at]]) => [`${n}  (${at})`, k] as [string, string]), ["Type a player ID…", "type"]]);
+      if (!chosen) continue;
+      if (chosen === "type") {
+        const t = await oni.form("PLAYER ID", [["id", "Player ID (64 characters)", ""], ["name", "Name (to recognise them by)", ""]], { verb: "OK", required: ["id"] });
+        if (!t) continue;
+        [who, name] = [t.id.trim(), t.name.trim()];
+      } else [who, name] = [chosen, seen.get(chosen)![0]];
+    } else {
+      const act = await oni.pick(name || who, [["Change roles", "edit"], ["Remove", "rm"]]);
+      if (act === "rm") delete roles[who];
+      if (act !== "edit") continue;
+    }
+    const picked = await toggles(`ROLES · ${name || who.slice(0, 12)}`, ROLES.map((r) => [r.toUpperCase(), r] as [string, string]), roles[who]?.roles ?? []);
+    if (!picked) continue;
+    if (picked.length) roles[who] = { name, roles: picked, servers: roles[who]?.servers ?? "all" };
+    else delete roles[who];
+  }
+}
+
+/** Discord webhooks: add, send a test, remove. The URLs stay in the app's own storage; this window sees them hidden. */
+async function discordFlow() {
+  for (;;) {
+    const got = await oni.pick("DISCORD WEBHOOKS", [...Object.entries(oni.runner.webhooks).map(([n, u]) => [`${n}  ${u}`, n] as [string, string]),
+      ["+ Add a webhook", "add"], ["How do I get a webhook URL?", "help"], ["Done", DONE]]);
+    if (got === null || got === DONE) return;
+    try {
+      if (got === "help") await oni.confirm("A DISCORD WEBHOOK", DISCORD_STEPS, "OK", false);
+      else if (got === "add") {
+        const f = await oni.form("ADD A WEBHOOK", [["name", "Name (letters, numbers, - _), like alerts", ""], ["url", "Webhook URL", ""]], { verb: "ADD", required: ["name", "url"], secret: ["url"] });
+        if (f) {
+          await invoke("discord_add", { name: f.name, url: f.url });
+          await oni.loadAutomation();
+          oni.notify("Added: pick it and SEND A TEST to see it arrive.", "DISCORD");
+        }
+      } else {
+        const act = await oni.pick(got, [["Send a test message", "test"], ["Remove", "rm"]]);
+        if (act === "test") {
+          const code = await invoke<number>("discord_post", { name: got, text: "Test message from ONI RCON: this webhook works." });
+          const ok = code >= 200 && code < 300;
+          oni.notify(ok ? "Sent: check the channel." : `Discord answered ${code}.`, "DISCORD", ok ? "information" : "error");
+        } else if (act === "rm" && (await oni.confirm("REMOVE WEBHOOK", `${got} will stop working in every rule that posts to it.`, "REMOVE", true))) {
+          await invoke("discord_remove", { name: got });
+          await oni.loadAutomation();
+        }
+      }
+    } catch (e) {
+      oni.notify(String(e), "DISCORD", "error", 12);
+    }
+  }
+}
+
+/** AUTOMATION: the rules list, with each button going out to its flow and back until it is closed. */
+export async function automation() {
+  let sel: string | undefined;
+  for (;;) {
+    const r = await oni.ask<{ do: string; id?: string } | null>("automation", { sel });
+    if (!r) return;
+    sel = r.id ?? sel;
+    const rule = oni.rules.find((x) => x.id === r.id);
+    const save = (rules: Dict[]) => oni.saveAutomation(rules);
+    try {
+      if (r.do === "new" || r.do === "template" || (r.do === "edit" && rule)) {
+        if (r.do !== "edit" && oni.rules.length >= MAX_RULES) {
+          oni.notify(`${MAX_RULES} rules is the limit.`, "AUTOMATION", "warning");
+          continue;
+        }
+        let base: Dict | null = r.do === "edit" ? rule! : null;
+        if (r.do === "template") {
+          const name = await oni.pick("TEMPLATE · a starting point to change", STARTERS.map((t) => [`${t.name}  ·  ${CATALOG.when[t.when.type].label}`, t.name] as [string, string]));
+          const t = STARTERS.find((x) => x.name === name);
+          if (!t) continue;
+          const hook = Object.keys(oni.runner.webhooks)[0];
+          if (t.then.some((a: Dict) => a.type === "discord") && !hook) {
+            oni.notify("This one posts to Discord: add a webhook first (DISCORD).", "AUTOMATION", "warning", 10);
+            continue;
+          }
+          base = { ...t, then: t.then.map((a: Dict) => (a.type === "discord" ? { ...a, webhook: hook } : a)) };
+        }
+        const made = await ruleFlow(base);
+        if (made) {
+          await save(rule && r.do === "edit" ? oni.rules.map((x) => (x.id === rule.id ? made : x)) : [...oni.rules, made]);
+          sel = made.id;
+        }
+      } else if (rule && r.do === "toggle") await save(oni.rules.map((x) => (x === rule ? { ...x, enabled: !x.enabled } : x)));
+      else if (rule && r.do === "delete") {
+        if (await oni.confirm("DELETE RULE", `${rule.name} is removed for good.`, "DELETE", true)) await save(oni.rules.filter((x) => x !== rule));
+      } else if (rule && r.do === "test") await testRule(rule);
+      else if (r.do === "roles") await rolesFlow();
+      else if (r.do === "discord") await discordFlow();
+    } catch (e) {
+      oni.notify(String(e), "AUTOMATION", "error", 12);
+    }
+  }
 }

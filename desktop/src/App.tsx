@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
 import { bump, oni, TABS, useV, type Tab } from "./engine";
-import { OPS, BAN_OPS, TAB_TIPS, askPassword, bl, broadcast, goto, op, player } from "./actions";
+import { OPS, BAN_OPS, TAB_TIPS, askPassword, automation, bl, broadcast, goto, op, player } from "./actions";
 import { Sidebar } from "./components/Sidebar";
 import { Banner, Footer, Masthead, Toasts } from "./components/Chrome";
 import { Assets, assetsUi } from "./components/Assets";
@@ -61,6 +61,7 @@ function palette(onSetup: () => void) {
   const items: [string, string, () => void][] = [
     ["Go to station", "every station, the busiest first  (g)", goto],
     ["Superintendent findings", "what it noticed in the last hour, with the evidence  (F8)", openFindings],
+    ["Automation rules", "when something happens, do this: chat, Discord, votes, alerts  (F9)", automation],
     ["Find a player", "on any station, by name, tag, clan, team, ID or address  (Ctrl+F)", findPlayer],
     ...oni.stations.map((s, i) => [`Station ${i + 1}: ${s.label}`, s.where, () => oni.select(i)] as [string, string, () => void]),
     ...OPS.map(([o, label]) => [o === "broadcast" ? "Broadcast to stations" : `Ops: ${label.replace(/\b\w+/g, (w) => w[0] + w.slice(1).toLowerCase())}`,
@@ -105,6 +106,10 @@ function useKeys(onSetup: () => void) {
       if (e.key === "F8") {
         e.preventDefault();
         return void openFindings();
+      }
+      if (e.key === "F9") {
+        e.preventDefault();
+        return void automation();
       }
       const fn = /^F([1-7])$/.exec(e.key);
       if (fn) {
