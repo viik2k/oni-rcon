@@ -26,7 +26,7 @@ const NO_DOCKER: &str = "Docker isn't installed. On Ubuntu: sudo apt install doc
 fn open_ports_note(ports: &[u16], master: u16, upnp: bool) -> String {
     let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(",");
     let how = if cfg!(windows) {
-        format!("In PowerShell as administrator: New-NetFirewallRule -DisplayName \"Reclaimer games\" -Direction Inbound -Protocol UDP -LocalPort {list} -Action Allow; New-NetFirewallRule -DisplayName \"Reclaimer browser\" -Direction Inbound -Protocol TCP -LocalPort {master} -Action Allow")
+        format!("Paste this into any PowerShell (it asks for administrator, which the rules need): Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','New-NetFirewallRule -DisplayName ''Reclaimer games'' -Direction Inbound -Protocol UDP -LocalPort {list} -Action Allow; New-NetFirewallRule -DisplayName ''Reclaimer browser'' -Direction Inbound -Protocol TCP -LocalPort {master} -Action Allow'")
     } else {
         format!("sudo ufw allow {}/udp && sudo ufw allow {master}/tcp", list.replace(',', "/udp && sudo ufw allow "))
     };
@@ -164,6 +164,7 @@ pub struct Settings {
     pub hidden: bool,     // not listed: players join by address
     pub internet: bool,   // UPnP: ask the router to forward the ports
     pub auto_update: bool,
+    pub playlist: String, // a playlist .json picked on this PC; empty keeps the server's own default rotation
 }
 
 impl Settings {
@@ -179,7 +180,25 @@ impl Settings {
         if ![&self.name, &self.host, &self.password].into_iter().all(|s| plain(s)) {
             return Err("Names and passwords can't contain control characters.".into());
         }
-        Ok(())
+        self.chosen_playlist().map(drop)
+    }
+
+    /// The picked playlist as the server folder keeps it: its path there and its JSON, held to Reclaimer's rules.
+    pub fn chosen_playlist(&self) -> Result<Option<(String, String)>, String> {
+        if self.playlist.trim().is_empty() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&self.playlist).map_err(|e| format!("The playlist file didn't open: {e}"))?;
+        let json = serde_json::from_str(&text).map_err(|e| format!("{} isn't a playlist file: {e}", self.playlist))?;
+        playlist_file(&json).map(Some)
+    }
+
+    /// Puts the picked playlist in the server folder's playlists/.
+    pub fn place_playlist(&self, folder: &Path) -> Result<(), String> {
+        let Some((path, text)) = self.chosen_playlist()? else { return Ok(()) };
+        let dest = folder.join(&path);
+        std::fs::create_dir_all(dest.parent().unwrap_or(folder)).map_err(|e| e.to_string())?;
+        write_atomic(&dest, &text, false).map_err(|e| format!("couldn't save the playlist in {}: {e}", dest.display()))
     }
 }
 
@@ -220,6 +239,12 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
         }
         if s.hidden {
             t["hidden"] = value(true);
+        }
+        if let Some((path, _)) = s.chosen_playlist()? {
+            for other in ["map", "game", "base_map", "variant", "campaign"] {
+                t.remove(other); // a server plays from one source
+            }
+            t["playlist"] = value(path);
         }
     }
     if !kept {
@@ -594,7 +619,10 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
     }
     let disk = read(&toml)?;
     let base = match settings {
-        Some(s) if fresh => apply_settings(&disk, s)?,
+        Some(s) if fresh => {
+            s.place_playlist(folder)?;
+            apply_settings(&disk, s)?
+        }
         _ => disk.clone(),
     };
     let (new, pw) = ensure_rcon_password(&base, &new_password())?;
@@ -641,9 +669,11 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
 fn windows_restart(exe: &Path, folder: &Path) -> String {
     let q = |p: &Path| p.display().to_string().replace('\'', "''");
     format!(
-        "taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
+        "cd /d \"{f}\" && \"{e}\" dedicated check >nul 2>&1 || ( echo NOT RESTARTED: dedicated check found problems in the server folder, fix them in dedicated.toml and the playlists: & \"{e}\" dedicated check 2>&1 & exit /b 1 ) & taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
         q(exe),
-        q(folder)
+        q(folder),
+        e = exe.display(),
+        f = folder.display(),
     )
 }
 
@@ -716,6 +746,7 @@ pub async fn host_docker(folder: &Path, game: Option<&Path>, settings: Option<&S
     tokio::time::sleep(Duration::from_secs(1)).await; // written whole by now
     let mut text = read(&toml)?;
     if let Some(s) = custom {
+        s.place_playlist(&server)?;
         text = apply_settings(&text, s)?;
         write_atomic(&toml, &text, false).map_err(|e| format!("couldn't save your settings in {}: {e}", toml.display()))?;
         say("Saved your settings; restarting the server with them…");
@@ -1134,7 +1165,7 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
         std::fs::write(dir.path().join("dedicated.toml"), "[[server]]\nport = 49176\n").unwrap();
         let mut s = Server::new("127.0.0.1", 49176);
         s.content_dir = dir.path().join("content").display().to_string();
-        assert!(default_restart(&s).contains("taskkill"));
+        assert!(default_restart(&s).contains("taskkill") && default_restart(&s).contains("dedicated check")); // a bad toml must not take the running servers down
         s.port = 49177; // not one the folder runs
         assert!(default_restart(&s).is_empty());
         s.port = 49176;
@@ -1143,8 +1174,25 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
     }
 
     #[test]
+    fn a_picked_playlist_replaces_the_default_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mine.json");
+        let g = |m: &str| serde_json::json!({"map": m, "game": "Slayer"});
+        std::fs::write(&file, serde_json::json!({"name": "Friday Mix", "games": [g("Guardian"), g("Valhalla"), g("The Pit")]}).to_string()).unwrap();
+        let s = Settings { playlist: file.display().to_string(), ..Default::default() };
+        let out = apply_settings("[[server]]\nport = 1\nmap = \"Guardian\"\ngame = \"Slayer\"\n", &s).unwrap();
+        let t: toml::Table = out.parse().unwrap();
+        assert_eq!(t["server"][0]["playlist"].as_str(), Some("playlists/friday-mix.playlist.json"));
+        assert!(t["server"][0].get("map").is_none() && t["server"][0].get("game").is_none());
+        s.place_playlist(dir.path()).unwrap();
+        assert!(dir.path().join("playlists/friday-mix.playlist.json").is_file());
+        std::fs::write(&file, r#"{"name": "Two", "games": []}"#).unwrap();
+        assert!(s.check().is_err(), "a playlist short of games is refused before anything downloads");
+    }
+
+    #[test]
     fn settings_make_one_custom_server() {
-        let s = Settings { name: "Friday \"Slayer\"".into(), host: "Finn".into(), password: "letmein".into(), max_players: 8, hidden: true, internet: true, auto_update: true };
+        let s = Settings { name: "Friday \"Slayer\"".into(), host: "Finn".into(), password: "letmein".into(), max_players: 8, hidden: true, internet: true, auto_update: true, ..Default::default() };
         let out = apply_settings(TOML, &s).unwrap();
         assert!(out.contains("# set one to turn on the remote console")); // the file's comments stay
         let t: toml::Table = out.parse().unwrap();

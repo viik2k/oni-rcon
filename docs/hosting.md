@@ -39,11 +39,11 @@ Then **CREATE & START**:
    untick **Remember the password**).
 
 When it's up, it tells you how players get in ("find *Friday Night* in the server browser", or the address to join a
-hidden one) and the firewall commands for your ports, to run in an admin PowerShell:
+hidden one) and the firewall command for your ports. Paste it into any PowerShell: it opens a second window that asks
+for administrator, which the rules need (run plain, `New-NetFirewallRule` fails with "Access is denied"):
 
 ```
-New-NetFirewallRule -DisplayName "Reclaimer games" -Direction Inbound -Protocol UDP -LocalPort 49176 -Action Allow
-New-NetFirewallRule -DisplayName "Reclaimer browser" -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','New-NetFirewallRule -DisplayName ''Reclaimer games'' -Direction Inbound -Protocol UDP -LocalPort 49176 -Action Allow; New-NetFirewallRule -DisplayName ''Reclaimer browser'' -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow'
 ```
 
 The same ports must be forwarded on your router for players outside your home, unless you chose UPnP. The remote
