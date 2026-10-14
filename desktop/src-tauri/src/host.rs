@@ -228,6 +228,109 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
+/// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
+/// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
+fn slug(name: &str) -> Result<String, String> {
+    let s = name.trim().to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
+    if s.is_empty() { Err("Name it with a letter or number in it.".into()) } else { Ok(s) }
+}
+
+pub fn new_playlist(name: &str, vote_seconds: u32, games: &[(String, String)]) -> Result<(String, String), String> {
+    let slug = slug(name)?;
+    if !(5..=120).contains(&vote_seconds) {
+        return Err("The vote lasts 5 to 120 seconds.".into());
+    }
+    if !(3..=128).contains(&games.len()) {
+        return Err("A playlist holds 3 to 128 games.".into());
+    }
+    if games.iter().enumerate().any(|(i, g)| games[..i].contains(g)) {
+        return Err("A game is in it twice.".into());
+    }
+    let games: Vec<_> = games.iter().map(|(map, game)| serde_json::json!({"map": map, "game": game})).collect();
+    let json = serde_json::json!({"version": 2, "name": name.trim(), "vote_seconds": vote_seconds, "games": games});
+    Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&json).unwrap() + "
+"))
+}
+
+/// The native game types a game type file builds on, as it names them.
+pub const BASE_MODES: &[&str] = &["Slayer", "CaptureTheFlag", "Oddball", "KingOfTheHill", "Vip", "Juggernaut", "Territories", "Assault", "Infection", "EscalationSlayer"];
+/// The game options NEW GAME TYPE sets, in the ranges Reclaimer 0.9.13's mode-check holds them to.
+const GAME_OPTIONS: &[(&str, i64, i64)] = &[("rounds.teams", 0, 1), ("rounds.minutes", 0, 60), ("rounds.limit", 1, 10),
+    ("respawn.lives", 0, 50), ("respawn.seconds", 0, 240), ("player.shields", 0, 5)];
+
+/// A game type made in the console: its path in the content folder and its JSON. Options left out are the mode's own.
+pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options: &serde_json::Map<String, serde_json::Value>) -> Result<(String, String), String> {
+    let name = name.trim();
+    if name.chars().count() > 48 || name.chars().any(char::is_control) {
+        return Err("A game type's name is up to 48 characters.".into());
+    }
+    let slug = slug(name)?;
+    if !BASE_MODES.contains(&mode) {
+        return Err(format!("{mode} isn't a game type one can be built on."));
+    }
+    let mut rules = serde_json::Map::new();
+    if let Some(n) = score_to_win {
+        if !(0..=32767).contains(&n) {
+            return Err("Score to win is 0 to 32767.".into());
+        }
+        rules.insert("score_to_win".into(), n.into());
+    }
+    for (k, v) in options {
+        let (_, lo, hi) = GAME_OPTIONS.iter().find(|(o, ..)| o == k).ok_or_else(|| format!("{k} can't be set from here"))?;
+        if !v.as_i64().is_some_and(|n| (*lo..=*hi).contains(&n)) {
+            return Err(format!("{k} is {lo} to {hi}."));
+        }
+    }
+    // an empty script: the file is then a custom mode Reclaimer's mode-check passes
+    let json = serde_json::json!({"version": 1, "name": name, "mode": mode, "rules": rules, "options": options,
+        "script": {"version": 1, "name": name, "initial": []}});
+    Ok((format!("Game Modes/{slug}.json"), serde_json::to_string_pretty(&json).unwrap() + "
+"))
+}
+
+pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
+    edit_server(text, rcon_port, |t| {
+        if key == "playlist" {
+            for other in ["map", "game", "base_map", "variant", "campaign"] {
+                t.remove(other); // a server plays from one source
+            }
+        }
+        t[key] = toml_edit::Item::Value(v);
+        Ok(())
+    })
+}
+
+/// `id` added to, or taken off, the admins of the [[server]] on `rcon_port` only: Reclaimer has no other tiers.
+pub fn set_server_admin(text: &str, rcon_port: u16, id: &str, add: bool) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() || id.starts_with('#') || id.chars().any(char::is_control) {
+        return Err("That's not a player ID.".into());
+    }
+    edit_server(text, rcon_port, |t| {
+        let a = t.entry("admins").or_insert(toml_edit::value(toml_edit::Array::new())).as_array_mut().ok_or("admins in dedicated.toml isn't a list")?;
+        let at = a.iter().position(|v| v.as_str() == Some(id));
+        match (add, at) {
+            (true, Some(_)) => Err(format!("{id} is already an admin of this server.")),
+            (true, None) => Ok(a.push(id)),
+            (false, Some(i)) => Ok(a.remove(i)).map(drop),
+            (false, None) => Err(format!("{id} isn't in this server's admins: it may be in the top-level admins of dedicated.toml, for every server.")),
+        }
+    })
+}
+
+fn edit_server(text: &str, rcon_port: u16, edit: impl FnOnce(&mut toml_edit::Table) -> Result<(), String>) -> Result<String, String> {
+    use toml_edit::{DocumentMut, Item, Table};
+    let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let list = doc.get_mut("server").and_then(Item::as_array_of_tables_mut).ok_or("dedicated.toml has no [[server]]")?;
+    let port = |t: &Table, k: &str| t.get(k).and_then(Item::as_integer);
+    let t = list
+        .iter_mut()
+        .find(|t| port(t, "rcon_port").or(port(t, "port")) == Some(i64::from(rcon_port)))
+        .ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    edit(t)?;
+    Ok(doc.to_string())
+}
+
 fn new_password() -> String {
     use rand::Rng;
     rand::rng().sample_iter(rand::distr::Alphanumeric).take(24).map(char::from).collect()
@@ -407,7 +510,7 @@ fn read(p: &Path) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-fn found_servers(found: &[Found], pw: &str, content: &Path) -> Vec<Server> {
+fn found_servers(found: &[Found], pw: &str, content: &Path, restart: &str) -> Vec<Server> {
     found
         .iter()
         .map(|f| {
@@ -415,6 +518,7 @@ fn found_servers(found: &[Found], pw: &str, content: &Path) -> Vec<Server> {
             s.name = f.name.clone();
             s.password = if f.password.is_empty() { pw.into() } else { f.password.clone() };
             s.content_dir = content.display().to_string();
+            s.restart_cmd = restart.into();
             s
         })
         .collect()
@@ -478,7 +582,14 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         let mut child = c.spawn().map_err(|e| format!("couldn't start the servers: {e}"))?;
         wait_for(&found, say, 180, || matches!(child.try_wait(), Ok(None))).await?;
     }
-    Ok((found_servers(&found, &pw, &folder.join("content")), vec![join_note(&new, &found)]))
+    // ponytail: one process runs every server in the folder, so restarting one restarts them all
+    let q = |p: &Path| p.display().to_string().replace('\'', "''");
+    let restart = format!(
+        "taskkill /F /T /IM project-reclaimer.exe >nul 2>&1 & powershell -NoProfile -Command \"Start-Sleep 2; Start-Process -FilePath '{}' -ArgumentList dedicated -WorkingDirectory '{}'\"",
+        q(&exe),
+        q(folder)
+    );
+    Ok((found_servers(&found, &pw, &folder.join("content"), &restart), vec![join_note(&new, &found)]))
 }
 
 fn read_env(text: &str, key: &str) -> String {
@@ -547,7 +658,8 @@ pub async fn host_docker(folder: &Path, game: Option<&Path>, settings: Option<&S
         return Err(format!("{} has no enabled [[server]]", toml.display()));
     }
     wait_for(&found, say, 300, || true).await?;
-    Ok((found_servers(&found, &pw, &server.join("content")), vec![join_note(&text, &found)]))
+    let restart = format!("cd {} && {} compose restart", sh_quote(&folder.display().to_string()), sh_quote(&docker.display().to_string()));
+    Ok((found_servers(&found, &pw, &server.join("content"), &restart), vec![join_note(&text, &found)]))
 }
 
 // --- finding the servers on a game box -----------------------------------------------------------------------------
@@ -763,6 +875,9 @@ pub async fn connect_box(dest: &str, say: Say<'_>) -> Result<Hosted, String> {
         let kind = if sp.container.is_empty() { "server folder".to_string() } else { format!("container {}", sp.container) };
         if r["ok"] == true {
             say(&format!("✓ {label} ({kind}): {text}"));
+            if !sp.container.is_empty() {
+                sp.server.restart_cmd = format!("{} restart {}", b.docker, sh_quote(&sp.container));
+            }
             ok.push(sp);
         } else {
             say(&format!("✗ {label} ({kind}): {text}"));
@@ -796,6 +911,58 @@ mod tests {
 
     // dedicated init's file, cut down: what the guide shows
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
+
+    #[test]
+    fn a_new_game_type_keeps_to_the_ranges() {
+        let o = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let (path, json) = new_game_type("Team Swords", "Slayer", Some(50), &o(serde_json::json!({"rounds.teams": 1, "rounds.minutes": 12}))).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!((path.as_str(), &v["rules"]["score_to_win"], &v["options"]["rounds.minutes"], &v["script"]["initial"]),
+            ("Game Modes/team-swords.json", &50.into(), &12.into(), &serde_json::json!([])));
+        assert!(new_game_type("x", "Slayer", None, &o(serde_json::json!({"rounds.minutes": 61}))).is_err());
+        assert!(new_game_type("x", "Slayer", None, &o(serde_json::json!({"player.health": 1}))).is_err());
+        assert!(new_game_type("x", "Forge", None, &serde_json::Map::new()).is_err());
+        assert!(new_game_type(&"y".repeat(49), "Slayer", None, &serde_json::Map::new()).is_err());
+    }
+
+    #[test]
+    fn a_new_playlist_keeps_the_rules() {
+        let g = |m: &str| (m.to_string(), "Slayer".to_string());
+        let (path, json) = new_playlist(" Friday Night! ", 25, &[g("Guardian"), g("Valhalla"), g("The Pit")]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!((path.as_str(), &v["name"], &v["games"][2]["map"]), ("playlists/friday-night.playlist.json", &"Friday Night!".into(), &"The Pit".into()));
+        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla")]).is_err(), "three at least");
+        assert!(new_playlist("x", 25, &[g("Guardian"), g("Valhalla"), g("Guardian")]).is_err(), "no game twice");
+        assert!(new_playlist("!!", 25, &[g("a"), g("b"), g("c")]).is_err());
+    }
+
+    #[test]
+    fn a_setting_lands_on_its_own_server() {
+        let text = set_server_key(TOML, 50177, "max_players", 12.into()).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][0].get("max_players"), t["server"][1]["max_players"].as_integer()), (None, Some(12)));
+        assert!(text.contains("# set one to turn on the remote console"), "comments kept");
+        assert!(set_server_key(&text, 49176, "max_players", 4.into()).unwrap().contains("max_players = 4"));
+        assert!(set_server_key(TOML, 1234, "max_players", 4.into()).is_err());
+        let text = set_server_key(&text.replace("rcon_port = 50177", "rcon_port = 50177
+map = \"Valhalla\"
+game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][1].get("map"), t["server"][1]["playlist"].as_str()), (None, Some("playlists/a.playlist.json")), "a playlist replaces map + game");
+    }
+
+    #[test]
+    fn an_admin_of_one_server() {
+        let text = set_server_admin(TOML, 50177, "abc123", true).unwrap();
+        let text = set_server_admin(&text, 50177, "def456", true).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        assert_eq!((t["server"][0].get("admins"), t["server"][1]["admins"].as_array().unwrap().len()), (None, 2));
+        assert!(set_server_admin(&text, 50177, "abc123", true).is_err(), "not twice");
+        let text = set_server_admin(&text, 50177, "abc123", false).unwrap();
+        assert!(!text.contains("abc123") && text.contains("def456"));
+        assert!(set_server_admin(&text, 50177, "abc123", false).is_err());
+        assert!(set_server_admin(TOML, 50177, "#3", true).is_err(), "a slot number isn't an ID");
+    }
 
     #[test]
     fn steam_libraries() {
@@ -848,12 +1015,14 @@ mod tests {
         s.content_dir = "/srv/rec/server/content".into();
         s.password_command = Cmd::Argv(password_command("me@box", "/srv/rec/server", "reclaimer-server-2-1", "docker"));
         s.password = "read on the box".into();
+        s.restart_cmd = "docker restart 'reclaimer-server-2-1'".into();
         let (ping, health) = docker_templates(&[(50177, "reclaimer-server-2-1".into())], "docker");
         let t = vec![("ping_log".to_string(), toml_str(&ping)), ("health_cmd".to_string(), format!("'''{health}'''"))];
         assert_eq!(save_found(&p, vec![s.clone()], &t, "op", true).unwrap().len(), 1);
         assert!(!std::fs::read_to_string(&p).unwrap().contains("read on the box"));
         let (by, got) = config::load_config(&p).unwrap();
         assert_eq!((by.as_str(), &got[0].password_command, got[0].content_dir.as_str()), ("op", &s.password_command, "/srv/rec/server/content"));
+        assert_eq!(got[0].restart_cmd, s.restart_cmd);
         assert!(got[0].ping_log.contains("case 50177 in") && got[0].health_cmd.contains("--since {since}"));
         assert!(save_found(&p, vec![s], &[("ping_log".into(), "\"mine\"".into())], "", true).unwrap().is_empty());
         assert!(config::load_config(&p).unwrap().1[0].ping_log.contains("reclaimer-server-2-1"));

@@ -78,7 +78,7 @@ export function Operations() {
     ["VPN BLOCK", yesNo(s.block_vpn)], ["TEXT CHAT", yesNo(s.text_chat)], ["VOICE", yesNo(s.voice)], ["HIDDEN", yesNo(s.hidden, "YES", "NO")],
   ];
   const voting = "vote" in st.data ? !!vote.vote : null;
-  const off = (o: string) => (o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
+  const off = (o: string) => (o === "restart" ? !st.canRestart : ["capacity", "playlist", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
   const ops = Object.fromEntries(OPS.map(([o, l, v]) => [o, [l, v]]));
   const here = norm(s.map);
   const pulledRefs = new Set<string>();
@@ -119,12 +119,15 @@ export function Operations() {
   );
 }
 
-export const blUi = { ban: null as string | null, vpn: null as string | null, bans: new Map<string, string>(), vpns: new Map<string, string>() };
+export const blUi = { ban: null as string | null, vpn: null as string | null, admin: null as string | null,
+  bans: new Map<string, string>(), vpns: new Map<string, string>(), admins: new Map<string, string>(), fixed: new Set<string>() };
+/** The bl() arguments for what's selected on F4. */
+export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null, blUi.admin ? blUi.admins.get(blUi.admin) : null, !!blUi.admin && blUi.fixed.has(blUi.admin)] as const;
 
 export function Blacklist() {
   useV((s) => s.bans);
   const [, force] = useState(0);
-  const st = oni.cur, b: Dict = st.data.bans ?? {}, v: Dict = st.data.vpn ?? {};
+  const st = oni.cur, b: Dict = st.data.bans ?? {}, v: Dict = st.data.vpn ?? {}, a: Dict | undefined = st.data.admins;
   const rows: Row[] = [];
   blUi.bans = new Map();
   for (const [kind, color, list] of [["PLAYER", AMBER, b.players], ["IP", RED, b.ips], ["DEVICE", CYAN, b.devices]] as [string, string, Dict[]][]) {
@@ -146,19 +149,41 @@ export function Blacklist() {
     blUi.vpns.set(key, target);
     vrows.push({ id: key, cells: [redactText(target, oni.redact), String(pick(e, "note") ?? "")] });
   }
-  const sel = (k: "ban" | "vpn") => (id: string) => { blUi[k] = id; force((x) => x + 1); };
-  const disabled = (o: string) => !st.online || (o === "unban" && !blUi.bans.size) || (o === "vpnrevoke" && !blUi.vpns.size);
+  // ponytail: the admins reply isn't documented, so this takes an ID string or an object with the usual field names
+  const arows: Row[] = [];
+  blUi.admins = new Map();
+  blUi.fixed = new Set();
+  const online = new Set(st.players.map((p) => String(pick(p, "player_id", "id"))));
+  for (const e of (a?.admins ?? a?.entries ?? a?.list ?? []) as unknown[]) {
+    const id = String(typeof e === "string" ? e : pick(e, "player_id", "id") ?? ""), name = String(pick(e, "name") ?? "");
+    const target = id || name;
+    if (!target) continue;
+    const key = blUi.admins.has(target) ? `${target}~${blUi.admins.size}` : target;
+    blUi.admins.set(key, target);
+    const from = String(pick(e, "source", "from", "origin") ?? "");
+    if (/toml|config/i.test(from)) blUi.fixed.add(key);
+    const on = pick(e, "online", "connected") ?? (id ? online.has(id) : undefined);
+    arows.push({ id: key, cells: [[[name || "—", name ? AMBER : DIM]], id || "—", [[on ? "ON" : on === false ? "—" : "?", on ? GREEN : DIM]], [[from || "—", DIM]]] });
+  }
+  const sel = (k: "ban" | "vpn" | "admin") => (id: string) => { blUi[k] = id; force((x) => x + 1); };
+  const disabled = (o: string) => !st.online || (o === "unban" && !blUi.bans.size) || (o === "vpnrevoke" && !blUi.vpns.size)
+    || (o === "adminremove" && (!blUi.admins.size || (!!blUi.admin && blUi.fixed.has(blUi.admin) && !st.contentDir)));
   return (
     <div className="vsplit grow">
       <Panel title={`BLACKLIST · ${rows.length}`} className="grow" style={{ flex: 2 }}>
         <Table id="bans" cols={["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"]} rows={rows} selected={blUi.ban} onSelect={sel("ban")} />
       </Panel>
-      <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}`} className="grow">
-        <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
-      </Panel>
+      <div className="hsplit grow">
+        <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}`} className="grow">
+          <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
+        </Panel>
+        <Panel title={a ? `ADMINS · ${arows.length}` : "ADMINS · needs server 0.9.16 or later"} className="grow">
+          <Table id="admins" cols={["ADMIN", "PLAYER ID", "ON", "FROM"]} rows={arows} selected={blUi.admin} onSelect={sel("admin")} />
+        </Panel>
+      </div>
       <div className="bar">
         {BAN_OPS.map(([o, l, va]) => <Btn key={o} label={l} variant={va} disabled={disabled(o)} title={TIPS[`bl-${o}`]}
-          onClick={() => bl(o, blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null)} />)}
+          onClick={() => bl(o, ...blSel())} />)}
       </div>
     </div>
   );

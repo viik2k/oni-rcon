@@ -140,6 +140,41 @@ impl Target {
         Ok((code, String::from_utf8_lossy(&out.stdout).to_string() + &err))
     }
 
+    /// A text file of ours near the content: `rel` may climb out of it, unlike a manifest's paths.
+    pub async fn read_text(&self, rel: &str) -> Result<String, String> {
+        match self {
+            Target::Local(root) => std::fs::read_to_string(root.join(rel)).map_err(|e| format!("{}: {e}", root.join(rel).display())),
+            Target::Ssh { dest, root } => crate::health::run(&format!("cat -- {}", rpath(root, rel)), dest, 30.0).await,
+        }
+    }
+
+    pub async fn write_text(&self, rel: &str, text: &str) -> Result<(), String> {
+        match self {
+            Target::Local(root) => crate::util::write_atomic(&root.join(rel), text, false).map_err(|e| format!("{}: {e}", root.join(rel).display())),
+            Target::Ssh { dest, root } => {
+                let tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+                std::fs::write(tmp.path(), text).map_err(|e| e.to_string())?;
+                let (part, to) = (rpath(root, &format!("{rel}.part")), rpath(root, rel));
+                let (code, out) = Self::ssh(dest, &format!("cat > {part} && mv -f -- {part} {to}"), Some(tmp.path()), 30).await?;
+                if code == 0 {
+                    return Ok(());
+                }
+                Err(format!("Couldn't write {rel} on {dest}: {}", out.trim().lines().last().map(str::to_string).unwrap_or_else(|| format!("exit {code}"))))
+            }
+        }
+    }
+
+    /// The names in a folder near the content; none when it isn't there.
+    pub async fn list(&self, rel: &str) -> Result<Vec<String>, String> {
+        match self {
+            Target::Local(root) => Ok(std::fs::read_dir(root.join(rel)).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()),
+            Target::Ssh { dest, root } => {
+                let out = crate::health::run(&format!("ls -1A -- {} 2>/dev/null; true", rpath(root, rel)), dest, 30.0).await?;
+                Ok(out.lines().map(str::to_string).collect())
+            }
+        }
+    }
+
     pub async fn existing(&self, paths: &[String]) -> Result<Vec<String>, String> {
         match self {
             Target::Local(root) => Ok(paths.iter().filter(|p| root.join(p).exists()).cloned().collect()),

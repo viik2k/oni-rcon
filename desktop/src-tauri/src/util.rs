@@ -115,7 +115,7 @@ pub fn shell(line: &str) -> tokio::process::Command {
     #[cfg(windows)]
     {
         let mut c = command("cmd");
-        c.arg("/C").arg(line);
+        c.raw_arg(format!("/S /C \"{line}\"")); // as typed: arg() escapes quotes in a way cmd doesn't read
         c
     }
     #[cfg(not(windows))]
@@ -213,6 +213,12 @@ pub fn num(v: Option<&Value>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shell_runs_the_line_as_typed() {
+        let out = shell("echo \"a  b\"").output().await.unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("a  b"));
+    }
 
     #[test]
     fn secrets_never_print() {

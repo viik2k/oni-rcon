@@ -77,7 +77,7 @@ oni.onForgeRefresh = (lid) => {
 oni.onInstalled = async (m: Dict) => {
   const st = oni.stations[m.index], entry = m.entry;
   await Promise.all(m.sharing.map((i: number) => oni.stations[i]).filter((s: any) => s.online).map((s: any) => oni.fetchNow(s, ["maps", "modes"])));
-  const after = kindOf(entry) === "playlist" ? "Point the server's playlist setting at it to use it: oni-rcon doesn't edit dedicated.toml."
+  const after = kindOf(entry) === "playlist" ? "SWITCH PLAYLIST on F3 puts the server on it."
     : listed(m.index, entry) ? "The server lists it now: l loads it." : "The server doesn't list it yet: it may need a restart to pick new content up.";
   oni.notify(`${entry.title} v${entry.version} is on ${st.label}. ${after}`, "FORGE · INSTALLED", "information", 15);
 };
@@ -160,11 +160,11 @@ export async function forgeAction(what: string) {
   if (what === "load") {
     const st = oni.cur, entry = x ? installed(st.where)[listingId(x)] : undefined;
     if (!entry) return oni.notify("Install it on this server first (i).", "", "warning");
-    if (kindOf(entry) === "playlist") return oni.notify("A playlist isn't loaded from here: point the server's playlist setting at it.", "", "warning");
+    if (kindOf(entry) === "playlist") return oni.notify("A playlist isn't loaded from here: SWITCH PLAYLIST on F3 puts the server on it.", "", "warning");
     if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
     await oni.fetchNow(st, ["maps", "modes"]);
     const found = listed(oni.sel, entry);
-    if (!found) return oni.notify("The server doesn't list it yet. It may need a restart to pick new content up, which oni-rcon can't do for you.", `LOAD NOW · ${entry.title ?? ""}`, "warning", 15);
+    if (!found) return oni.notify("The server doesn't list it yet. It may need a restart to pick new content up: RESTART SERVER on F3.", `LOAD NOW · ${entry.title ?? ""}`, "warning", 15);
     const [kind, ref] = found, title = entry.title || ref;
     const other = await oni.pick(`${title} · SELECT ${kind === "maps" ? "MODE" : "MAP"}`, entries(st, kind === "maps" ? "modes" : "maps"));
     if (!other) return;
