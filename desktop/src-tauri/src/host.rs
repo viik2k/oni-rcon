@@ -833,13 +833,26 @@ fn sh_quote(s: &str) -> String {
     }
 }
 
-/// Reads the RCON password on the box at each start, so it's never kept on this machine.
-pub fn password_command(dest: &str, folder: &str, container: &str, docker: &str) -> Vec<String> {
-    let mut cmd = format!(
-        r#"sed -n '/^\[rcon\]/,/^\[/s/^[[:space:]]*password[[:space:]]*=[[:space:]]*["'"'"']\(.*\)["'"'"'].*/\1/p' {}"#,
-        sh_quote(&format!("{folder}/dedicated.toml"))
-    );
-    if !container.is_empty() {
+/// Reads the RCON password on the box at each start, so it's never kept on this machine. `own`: the RCON port of a
+/// server with its own rcon_password, read from its [[server]] block instead of [rcon] or the container's environment.
+pub fn password_command(dest: &str, folder: &str, container: &str, docker: &str, own: Option<u16>) -> Vec<String> {
+    let file = sh_quote(&format!("{folder}/dedicated.toml"));
+    let mut cmd = if let Some(port) = own {
+        // ponytail: plain quoted strings only (no escapes or multi-line), like the [rcon] sed below
+        format!(
+            r#"awk -v p={port} 'function done() {{ if (pw != "" && (rp == p || (rp == "" && gp == p))) print pw; inb = 0; gp = rp = pw = "" }}
+function val(s) {{ sub(/^[^=]*=[ \t]*/, "", s); return s }}
+/^[ \t]*\[/ {{ if (inb) done(); inb = $0 ~ /^[ \t]*\[\[[ \t]*server[ \t]*\]\]/; next }}
+inb && /^[ \t]*port[ \t]*=/ {{ gp = val($0); sub(/[^0-9].*/, "", gp) }}
+inb && /^[ \t]*rcon_port[ \t]*=/ {{ rp = val($0); sub(/[^0-9].*/, "", rp) }}
+inb && /^[ \t]*rcon_password[ \t]*=/ {{ v = val($0); q = substr(v, 1, 1); v = substr(v, 2); i = index(v, q); if (i > 1) pw = substr(v, 1, i - 1) }}
+END {{ if (inb) done() }}' {file}"#
+        )
+        .replace('\n', " ") // one line: the config file keeps it as a plain string
+    } else {
+        format!(r#"sed -n '/^\[rcon\]/,/^\[/s/^[[:space:]]*password[[:space:]]*=[[:space:]]*["'"'"']\(.*\)["'"'"'].*/\1/p' {file}"#)
+    };
+    if own.is_none() && !container.is_empty() {
         cmd = format!(
             "{docker} inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {} | sed -n 's/^RECLAIMER_DEDICATED_RCON_PASSWORD=//p' | grep . || {cmd}",
             sh_quote(container)
@@ -870,11 +883,12 @@ pub fn spots(b: &Box_, dest: &str) -> Vec<Spot> {
         s.content_dir = format!("{folder}/content");
         let has_pw = rcon.and_then(|r| r.get("password")).and_then(toml::Value::as_str).is_some_and(|p| !p.is_empty());
         let problem = if !f.password.is_empty() {
-            "has its own rcon_password: put it in the config as password_env or password by hand"
+            s.password_command = Cmd::Argv(password_command(dest, folder, container, &b.docker, Some(f.port)));
+            ""
         } else if !(env_pw || has_pw) {
             "has its remote console off: set [rcon] password in dedicated.toml and restart it"
         } else {
-            s.password_command = Cmd::Argv(password_command(dest, folder, container, &b.docker));
+            s.password_command = Cmd::Argv(password_command(dest, folder, container, &b.docker, None));
             ""
         };
         if !out.iter().any(|x| x.server.where_() == s.where_()) {
@@ -1138,13 +1152,34 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
     }
 
     #[test]
+    fn a_server_with_its_own_rcon_password_is_added() {
+        let toml = TOML.replace("rcon_port = 50177", "rcon_port = 50177 # its own\nrcon_password = 'snipe-only'")
+            .replace("port = 49176\n", "port = 49176\nrcon_password = \"rotation-pw\"\n");
+        let out = format!("@@docker docker\n@@toml /srv/rec/server\n{}@@end\n@@done\n", toml.replace("'snipe-only'", "\"hidden\"").replace("\"rotation-pw\"", "\"hidden\""));
+        let found = spots(&read_discovery(&out), "me@box");
+        assert_eq!(found.iter().map(|sp| (sp.server.port, sp.problem.as_str())).collect::<Vec<_>>(), [(49176, ""), (50177, "")]);
+        #[cfg(unix)]
+        {
+            // what the box would run, against the real file: each server's own password, by its RCON port
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("dedicated.toml"), &toml).unwrap();
+            let read = |port| {
+                let cmd = password_command("me@box", &dir.path().display().to_string(), "", "docker", Some(port));
+                let out = std::process::Command::new("sh").arg("-c").arg(cmd.last().unwrap()).output().unwrap();
+                String::from_utf8(out.stdout).unwrap()
+            };
+            assert_eq!((read(49176).as_str(), read(50177).as_str(), read(49177).as_str()), ("rotation-pw\n", "snipe-only\n", ""));
+        }
+    }
+
+    #[test]
     fn found_servers_save_without_their_password() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("c.toml");
         let mut s = Server::new("127.0.0.1", 50177);
         s.ssh = "me@box".into();
         s.content_dir = "/srv/rec/server/content".into();
-        s.password_command = Cmd::Argv(password_command("me@box", "/srv/rec/server", "reclaimer-server-2-1", "docker"));
+        s.password_command = Cmd::Argv(password_command("me@box", "/srv/rec/server", "reclaimer-server-2-1", "docker", None));
         s.password = "read on the box".into();
         s.restart_cmd = "docker restart 'reclaimer-server-2-1'".into();
         let (ping, health) = docker_templates(&[(50177, "reclaimer-server-2-1".into())], "docker");
