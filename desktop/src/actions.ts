@@ -5,7 +5,7 @@ import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
-import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TEMPLATE_HELP, block, describe, describeBlock, plan, sample, stepWords, validate, type Field, type Part } from "./lib/rules";
+import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
 import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
@@ -508,6 +508,10 @@ function fieldRow(f: Field, now: unknown): [string, string, string | [string, st
     const names = Object.keys(oni.runner.webhooks);
     return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.webhooks[n]}`, n]))] : null;
   }
+  if (f.kind === "chat") {
+    const names = Object.keys(oni.runner.chats);
+    return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.chats[n]}`, n]))] : null;
+  }
   return [f.key, f.label, cur];
 }
 
@@ -519,7 +523,8 @@ async function askBlock(part: Part, type: string, init: Dict = {}): Promise<Dict
   for (;;) {
     const rows = fields.map((f) => fieldRow(f, cur[f.key]));
     if (rows.includes(null)) {
-      oni.notify("Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
+      oni.notify(fields.some((f) => f.kind === "chat") ? "Add a Telegram chat first (TELEGRAM in the automation list), then use this step."
+        : "Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
       return null;
     }
     const v = await oni.form(label.toUpperCase(), rows as [string, string, string | [string, string][]][], { verb: "OK", note });
@@ -677,6 +682,67 @@ async function discordFlow() {
   }
 }
 
+const ADD = "\0add", HELP = "\0help", AGAIN = "\0again", TYPE = "\0type"; // none can be a chat's name, which is letters, numbers, - and _
+
+/** The bot token, then the chat (found from the bot's recent messages, or typed), then a name. Nothing is saved until all three are. */
+async function telegramAdd() {
+  const t = await oni.form("ADD A TELEGRAM CHAT", [["token", "Bot token (from @BotFather)", ""]], { verb: "NEXT", required: ["token"], secret: ["token"] });
+  if (!t) return;
+  const look = () => invoke<{ bot: string; chats: { id: string; label: string }[] }>("telegram_find_chats", { token: t.token });
+  let found = await look(), chat = "";
+  while (!chat) {
+    // anyone who can message the bot shows up here under a name they chose; the kind of chat leading each line is Telegram's
+    const got = await oni.pick(found.chats.length ? `${found.bot} · WHICH CHAT? (anyone can message a bot: check the kind)` : `${found.bot} · NO CHATS YET: message the bot, then look again`,
+      [...found.chats.map((c) => [`${c.label}  ${c.id}`, c.id] as [string, string]), ["Look again (after messaging the bot)", AGAIN], ["Type a chat ID or @channelname", TYPE]]);
+    if (got === null) return;
+    if (got === AGAIN) found = await look();
+    else if (got !== TYPE) chat = got;
+    else {
+      const f = await oni.form("CHAT", [["chat", "Chat ID, or @channelname for a public channel", ""]], { verb: "NEXT", required: ["chat"] });
+      if (!f) return;
+      if (chatOk(f.chat)) chat = f.chat.trim();
+      else oni.notify("A chat is its number (like -1001234567890) or a public channel's @name.", "TELEGRAM", "warning", 10);
+    }
+  }
+  // a name already in use is replaced only on purpose: rules that post to it would post here instead
+  const taken = Object.keys(oni.runner.chats);
+  let fresh = "alerts";
+  for (let i = 2; taken.includes(fresh); i++) fresh = `alerts-${i}`;
+  const n = await oni.form("NAME IT", [["name", "Name (letters, numbers, - _), like alerts", fresh]], { verb: "ADD", required: ["name"] });
+  if (!n) return;
+  const name = n.name.trim().toLowerCase();
+  if (taken.includes(name) && !(await oni.confirm("REPLACE CHAT", `${name} is already set up (${oni.runner.chats[name]}). Rules that post to it will post to this chat instead.`, "REPLACE", true))) return;
+  await invoke("telegram_add", { name, token: t.token, chat });
+  await oni.loadAutomation();
+  oni.notify("Added: pick it and SEND A TEST to see it arrive.", "TELEGRAM");
+}
+
+/** Telegram chats: add, send a test, remove. The bot tokens stay in the app's own storage; this window sees them hidden. */
+async function telegramFlow() {
+  for (;;) {
+    const got = await oni.pick("TELEGRAM CHATS", [...Object.entries(oni.runner.chats).map(([n, u]) => [`${n}  ${u}`, n] as [string, string]),
+      ["+ Add a chat", ADD], ["How do I set up a bot?", HELP], ["Done", DONE]]);
+    if (got === null || got === DONE) return;
+    try {
+      if (got === HELP) await oni.confirm("A TELEGRAM BOT", TELEGRAM_STEPS, "OK", false);
+      else if (got === ADD) await telegramAdd();
+      else {
+        const act = await oni.pick(got, [["Send a test message", "test"], ["Remove", "rm"]]);
+        if (act === "test") {
+          const code = await invoke<number>("telegram_post", { name: got, text: "Test message from ONI RCON: this chat works." });
+          const ok = code >= 200 && code < 300;
+          oni.notify(ok ? "Sent: check the chat." : `${telegramWhy(code)}.`, "TELEGRAM", ok ? "information" : "error", ok ? 6 : 12);
+        } else if (act === "rm" && (await oni.confirm("REMOVE CHAT", `${got} will stop working in every rule that posts to it.`, "REMOVE", true))) {
+          await invoke("telegram_remove", { name: got });
+          await oni.loadAutomation();
+        }
+      }
+    } catch (e) {
+      oni.notify(String(e), "TELEGRAM", "error", 12);
+    }
+  }
+}
+
 /** AUTOMATION: the rules list, with each button going out to its flow and back until it is closed. */
 export async function automation() {
   let sel: string | undefined;
@@ -697,12 +763,13 @@ export async function automation() {
           const name = await oni.pick("TEMPLATE · a starting point to change", STARTERS.map((t) => [`${t.name}  ·  ${CATALOG.when[t.when.type].label}`, t.name] as [string, string]));
           const t = STARTERS.find((x) => x.name === name);
           if (!t) continue;
-          const hook = Object.keys(oni.runner.webhooks)[0];
-          if (t.then.some((a: Dict) => a.type === "discord") && !hook) {
-            oni.notify("This one posts to Discord: add a webhook first (DISCORD).", "AUTOMATION", "warning", 10);
+          // a template that posts to Discord posts to Telegram instead when that is the only place set up
+          const hook = Object.keys(oni.runner.webhooks)[0], chat = Object.keys(oni.runner.chats)[0];
+          if (t.then.some((a: Dict) => a.type === "discord") && !hook && !chat) {
+            oni.notify("This one posts to Discord or Telegram: add a webhook (DISCORD) or a chat (TELEGRAM) first.", "AUTOMATION", "warning", 10);
             continue;
           }
-          base = { ...t, then: t.then.map((a: Dict) => (a.type === "discord" ? { ...a, webhook: hook } : a)) };
+          base = relay(t, hook, chat);
         }
         const made = await ruleFlow(base);
         if (made) {
@@ -715,6 +782,7 @@ export async function automation() {
       } else if (rule && r.do === "test") await testRule(rule);
       else if (r.do === "roles") await rolesFlow();
       else if (r.do === "discord") await discordFlow();
+      else if (r.do === "telegram") await telegramFlow();
     } catch (e) {
       oni.notify(String(e), "AUTOMATION", "error", 12);
     }

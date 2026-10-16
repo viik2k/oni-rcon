@@ -98,10 +98,11 @@ Also:
   type once, no more than 128, in the shape the dedicated server reads. A playlist this console made is saved over; any
   other is opened as a copy. USE ON THIS SERVER sets `playlist` in `dedicated.toml`. (From ibigs/oni-rcon, by RifleJock.)
 - **Automation rules.** AUTOMATION (F9, desktop) holds rules of WHEN something happens, ONLY IF it holds, THEN DO these: say in
-  chat, message a player, the admins or a role, cancel a vote, shuffle the teams, post to Discord. Build one step by step,
-  start from a template, TEST it, and set who counts as an ADMIN, VIP or MOD. Chat from rules is held to 20 lines a minute
-  per server, Discord webhook URLs stay in the app and show hidden, and every run is written to the command log. Rules run
-  while the console is open. See [docs/AUTOMATION.md](docs/AUTOMATION.md). (From ibigs/oni-rcon, by RifleJock.)
+  chat, message a player, the admins or a role, cancel a vote, shuffle the teams, post to Discord or Telegram. Build one step
+  by step, start from a template, TEST it, and set who counts as an ADMIN, VIP or MOD. Chat from rules is held to 20 lines a
+  minute per server, Discord webhook URLs and Telegram bot tokens stay in the app and show hidden, and every run is written to
+  the command log. Rules run while the console is open. See [docs/AUTOMATION.md](docs/AUTOMATION.md). (From ibigs/oni-rcon, by
+  RifleJock.)
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.

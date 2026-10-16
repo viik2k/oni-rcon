@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, fill, plan, sample, validate, zoned } from "./rules";
+import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, chatOk, describe as describeRule, fill, plan, relay, sample, telegramWhy, validate, zoned } from "./rules";
 
 const rule = (o: Record<string, any>) => validate({ name: "t", ...o });
 const lobby = (e: Engine, key = "s1") => {
@@ -24,6 +24,58 @@ describe("rules", () => {
     expect(() => rule({ when: { type: "join" }, then: [{ type: "say", to: "this", message: "hi {nobody}" }] })).toThrow(/unknown placeholder/);
     expect(() => rule({ when: { type: "join" }, then: [] })).toThrow(/1 to 8/);
     expect(() => rule({ when: { type: "at", cron: "61 * * * *" }, then: [{ type: "cancel_vote" }] })).toThrow();
+  });
+
+  it("a Telegram step needs a chat, plans a post, and reads back in words", () => {
+    expect(() => rule({ when: { type: "join" }, then: [{ type: "telegram", message: "hi" }] })).toThrow(/choose a Telegram chat/);
+    expect(() => rule({ when: { type: "join" }, then: [{ type: "telegram", chat: "alerts", message: "hi {nobody}" }] })).toThrow(/unknown placeholder/);
+    const r = rule({ when: { type: "join" }, then: [{ type: "telegram", chat: "alerts", message: "{player} joined {server}" }] });
+    const e = new Engine([r]);
+    lobby(e);
+    expect(plan(e, sample(e, r, "s1"))).toEqual([{ kind: "telegram", chat: "alerts", text: "ExamplePlayer joined Server One" }]);
+    expect(describeRule(r)).toContain('THEN  Post to Telegram: alerts, "{player} joined {server}"');
+  });
+
+  it("a template relays to Telegram when no Discord webhook is set up, and says so to the player", () => {
+    let posts = 0;
+    for (const s of STARTERS) {
+      const viaTelegram = relay(s, undefined, "alerts"), viaDiscord = relay(s, "hook", "alerts");
+      expect(JSON.stringify(viaTelegram)).not.toMatch(/Discord|"webhook"/);
+      expect(viaTelegram.then.filter((a: any) => a.type === "telegram").length).toBe(s.then.filter((a: any) => a.type === "discord").length);
+      expect(JSON.stringify(viaDiscord)).not.toMatch(/"telegram"/); // a webhook wins when both exist
+      if (!s.then.some((a: any) => a.type === "discord")) expect(viaTelegram).toBe(s);
+      else posts++;
+      expect(() => validate(viaTelegram)).not.toThrow();
+    }
+    expect(posts).toBeGreaterThanOrEqual(3);
+    const admin = relay(STARTERS.find((s) => s.name === "!admin with nobody on")!, undefined, "alerts");
+    expect(admin.then).toEqual([{ type: "telegram", chat: "alerts", message: "{player} on {server} asked for an admin: {args}" }, { type: "tell_player", message: "No admin is online; we've pinged Telegram." }]);
+  });
+
+  it("explains a Telegram status in words", () => {
+    expect(telegramWhy(200)).toBe("done");
+    expect(telegramWhy(0)).toBe("Telegram could not be reached");
+    expect(telegramWhy(403)).toMatch(/\(403\): the bot was removed/);
+    expect(telegramWhy(418)).toBe("Telegram refused it (418)");
+    expect(telegramWhy(503)).toMatch(/^Telegram failed \(503\)/);
+  });
+
+  it("a player can't turn their name or !admin text into a Telegram mention, and the rule's own words are untouched", () => {
+    const e = new Engine([]);
+    lobby(e);
+    const make = (then: object) => rule({ when: { type: "join" }, then: [then] });
+    const f = (r: any) => { const x = sample(e, r, "s1"); x.ctx.player = "@admin_bob"; x.ctx.args = "hey @all and @ops"; return x; };
+    const tg = make({ type: "telegram", chat: "alerts", message: "{player} says {args} (cc @ops)" });
+    expect(plan(e, f(tg))[0].text).toBe("\uFF20admin_bob says hey \uFF20all and \uFF20ops (cc @ops)");
+    expect(plan(e, f(tg))[0].text).not.toMatch(/(?<!cc )@/);
+    // Discord blocks pings itself (allowed_mentions), so its text is as filled; in-game chat has no mentions
+    expect(plan(e, f(make({ type: "discord", webhook: "h", message: "{player} says {args}" })))[0].text).toBe("@admin_bob says hey @all and @ops");
+  });
+
+  it("a chat is a number or a public @channel, as the Rust side holds it", () => {
+    // a chat is trimmed before it is checked, as the Rust side does when it saves one
+    for (const ok of ["-1001234567890", "123456789", "@oni_alerts", "123456789012345678", " -100 ", "@oni_alerts\n"]) expect(chatOk(ok), ok).toBe(true);
+    for (const bad of ["", "-", "12a", "@a", "@1abcdef", "oni_alerts", "@oni alerts", "-100 1", "@oni_alerts/../x", "1234567890123456789", "-1234567890123456789", 5, null]) expect(chatOk(bad), String(bad)).toBe(false);
   });
 
   it("fills placeholders on one line", () => {

@@ -10,7 +10,7 @@ import { Table, type Row } from "./ui";
 const Keys = ({ hints }: { hints: string[] }) => <div className="keys">{hints.join("   ·   ")}</div>;
 const clock = (t: number) => new Date(t * 1000).toTimeString().slice(0, 8);
 
-/** Resolves {do: "new" | "template" | "edit" | "test" | "toggle" | "delete" | "roles" | "discord", id?} or null. */
+/** Resolves {do: "new" | "template" | "edit" | "test" | "toggle" | "delete" | "roles" | "discord" | "telegram", id?} or null. */
 export function AutomationHub({ d }: { d: Dialog }) {
   useV((s) => s.auto);
   const [sel, setSel] = useState<string | null>((d.props.sel as string | undefined) ?? null);
@@ -31,7 +31,7 @@ export function AutomationHub({ d }: { d: Dialog }) {
       <div style={{ color: DIM, marginBottom: 4 }}>
         {`Rules act through this console, so they run while it is open. ${rules.filter((r) => r.enabled).length} of ${rules.length} on`}
         {vip ? " · VIP kick protection is on" : ""}
-        {Object.keys(oni.runner.webhooks).length ? "" : " · no Discord webhook yet"}
+        {Object.keys(oni.runner.webhooks).length || Object.keys(oni.runner.chats).length ? "" : " · no Discord webhook or Telegram chat yet"}
       </div>
       <div style={{ flex: 1, minHeight: 110, display: "flex", flexDirection: "column" }}>
         {rows.length ? <Table id="rules" cols={["", "RULE", "WHEN", "RUNS ON"]} rows={rows} selected={sel} onSelect={setSel} onEnter={() => go("edit")} />
@@ -56,6 +56,7 @@ export function AutomationHub({ d }: { d: Dialog }) {
         <button className="btn error" disabled={!rule} onClick={() => go("delete")}>DELETE</button>
         <button className="btn" onClick={() => go("roles")}>ROLES</button>
         <button className="btn" onClick={() => go("discord")}>DISCORD</button>
+        <button className="btn" onClick={() => go("telegram")}>TELEGRAM</button>
         <button className="btn" onClick={() => d.resolve(null)}>CLOSE</button>
       </div>
       <Keys hints={["Esc close", "↑ ↓ pick a rule", "Enter edit"]} />

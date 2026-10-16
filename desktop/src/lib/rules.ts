@@ -1,7 +1,7 @@
 // Automation rules: WHEN something happens on a server, IF the conditions hold, THEN do things. From ibigs/oni-rcon's
 // rules.py and rules_run.py, by RifleJock. A rule is plain data built from the menus in CATALOG; the engine is pure:
 // it is fed events, status and roster readings and hands back Firings, and `plan` turns one into Steps. Nothing here
-// sends anything, so TEST can show a rule's steps. A rule can talk (say, tell, Discord), cancel a vote or shuffle
+// sends anything, so TEST can show a rule's steps. A rule can talk (say, tell, Discord, Telegram), cancel a vote or shuffle
 // teams. It can't kick, ban, mute, restart or run commands, and nothing reacts to what people say except "!commands"
 // typed on purpose.
 import { idForms, pick, type Dict } from "./util";
@@ -15,13 +15,15 @@ export const MAX_RULES = 128;
 export const MAX_LINE = 240;
 export const SAY_PER_MINUTE = 20; // per server, across every rule: a misjudged rule can't flood the chat
 export const DISCORD_GAP = 2; // seconds between Discord posts (Discord allows about 30 a minute per webhook)
+export const TELEGRAM_GAP = 3; // seconds between Telegram posts (a group allows 20 a minute, a single chat about 1 a second)
+export const MAX_QUEUED = 20; // posts waiting to go to one service; past that a misfiring rule would only deliver stale alerts, late
 export const HISTORY = 200;
 export const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 // moments (a medal, a join) aren't held back by default; states and alerts get a breather
 const INSTANT = new Set(["medal", "spree", "multikill", "join", "leave", "match_start", "match_end", "before_match", "every", "at", "vote", "weapon_kill", "first_blood", "kills_reached"]);
 
 export type Part = "when" | "if" | "then";
-export interface Field { key: string; label: string; kind: "int" | "number" | "text" | "choice" | "message" | "server" | "webhook"; default: any; min?: number; max?: number; options?: string[] }
+export interface Field { key: string; label: string; kind: "int" | "number" | "text" | "choice" | "message" | "server" | "webhook" | "chat"; default: any; min?: number; max?: number; options?: string[] }
 export interface Entry { label: string; hint: string; fields: Field[] }
 const F = (key: string, label: string, kind: Field["kind"], dflt: any, o: Partial<Field> = {}): Field => ({ key, label, kind, default: dflt, ...o });
 const TZ = "America/New_York";
@@ -78,6 +80,7 @@ export const CATALOG: Record<Part, Record<string, Entry>> = {
     shuffle: { label: "Shuffle the teams", hint: "Only while a match is being played.", fields: [] },
     wait: { label: "Wait a few seconds", hint: "Pause before the next step (1–300 seconds).", fields: [F("seconds", "Seconds", "int", 5, { min: 1, max: 300 })] },
     discord: { label: "Post to Discord", hint: "Sends the message to a Discord channel through a webhook you've added.", fields: [F("webhook", "Webhook", "webhook", ""), F("message", "Message", "message", "")] },
+    telegram: { label: "Post to Telegram", hint: "Sends the message to a Telegram chat through a bot you've added.", fields: [F("chat", "Chat", "chat", ""), F("message", "Message", "message", "")] },
   },
 };
 
@@ -108,6 +111,15 @@ export const STARTERS: Dict[] = [
   { name: "Votes off", when: { type: "vote", kind: "any" }, then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "Player votes are off on this server." }], cooldown: 0 },
 ];
 
+/** A starter ready to use: its Discord steps point at `hook`, or, when a Telegram `chat` is all that is set up, become Telegram
+ *  steps and every message that names Discord names Telegram instead (the player is told where the alert really went). */
+export function relay(t: Dict, hook?: string, chat?: string): Dict {
+  if (!t.then.some((a: Dict) => a.type === "discord")) return t;
+  const toTelegram = !hook && !!chat;
+  const words = (a: Dict) => (toTelegram && "message" in a ? { ...a, message: String(a.message).replace(/Discord/g, "Telegram") } : a);
+  return { ...t, then: t.then.map((a: Dict) => words(a.type !== "discord" ? a : toTelegram ? { type: "telegram", chat, message: a.message } : { ...a, webhook: hook })) };
+}
+
 /** Always on while anyone has the VIP role: VIPs can't be vote-kicked. */
 export const VIP_GUARD = () => validate({ id: "builtin-vip-guard", name: "VIP kick protection (built in)", enabled: true, servers: "all", when: { type: "vote", kind: "kick" },
   if: [{ type: "player_role", role: "vip" }], then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "{target} is a VIP and can't be vote-kicked." }], cooldown: 0, per_hour: 120 });
@@ -130,6 +142,28 @@ export const DISCORD_STEPS = [
   "  4. Paste the URL here and give it a short name, like alerts.",
   "You need the Manage Webhooks permission in that Discord server. Anyone with the URL can post in that channel, so keep it private. Delete the webhook in Discord to revoke it.",
 ].join("\n");
+
+export const TELEGRAM_STEPS = [
+  "To let rules post in a Telegram chat:",
+  "  1. In Telegram, message @BotFather, send /newbot, and pick a name. It replies with a bot token.",
+  "  2. Open a chat with your new bot and send it a message. For a group or channel, add the bot to it",
+  "     (a channel needs the bot as an admin that can post) and send a message there.",
+  "  3. Choose ADD A CHAT, paste the token, and pick the chat from the list. The console finds it from the bot's recent messages.",
+  "Anyone with the token can post as the bot, so keep it private. Send /revoke to @BotFather to cancel it.",
+].join("\n");
+
+/** A chat Telegram takes: its number (negative for a group or channel) or a public channel's @name. The Rust side holds the same line. */
+export const CHAT = /^(?:-?\d{1,18}|@[A-Za-z][A-Za-z0-9_]{4,31})$/;
+export const chatOk = (c: unknown) => typeof c === "string" && CHAT.test(c.trim());
+
+/** What Telegram's HTTP status means for a post, in words (also what TEST says). */
+export function telegramWhy(code: number): string {
+  if (code >= 200 && code < 300) return "done";
+  if (!code) return "Telegram could not be reached";
+  if (code >= 500) return `Telegram failed (${code}): a problem on its side, it may work again soon`;
+  const why: Record<number, string> = { 400: "check the chat, and that the bot is in it", 401: "the bot token is wrong or was revoked", 403: "the bot was removed from the chat or blocked", 404: "the bot token is wrong or was revoked", 429: "too many messages, slow down" };
+  return `Telegram refused it (${code})` + (why[code] ? `: ${why[code]}` : "");
+}
 
 // --- time zones and cron ----------------------------------------------------------------------------------------
 export interface Zoned { date: string; hm: string; minute: number; hour: number; day: number; month: number; dow: number; key: string }
@@ -223,6 +257,7 @@ export function block(part: Part, b: unknown): Dict {
       v = (v as string).trim();
       if (f.kind === "server" && !v) fail(`${label}: choose a server.`);
       if (f.kind === "webhook" && !v) fail(`${label}: choose a Discord webhook (add one under DISCORD first).`);
+      if (f.kind === "chat" && !v) fail(`${label}: choose a Telegram chat (add one under TELEGRAM first).`);
     }
     out[f.key] = v;
   }
@@ -727,12 +762,17 @@ export class Engine {
 }
 
 // --- what a firing does -----------------------------------------------------------------------------------------
-/** One concrete thing to do: an RCON command on a server, a wait, or a Discord post. */
-export interface Step { kind: "rcon" | "discord" | "wait"; server?: string; args?: string[]; webhook?: string; text?: string; seconds?: number }
+/** The facts a message is filled from, with each @ made a look-alike: a player's name or `!admin` text then can't become a
+ *  Telegram @mention that pings someone. The words an admin wrote into the rule itself are left alone. */
+const unmention = (ctx: Dict): Dict => Object.fromEntries(Object.entries(ctx).map(([k, v]) => [k, typeof v === "string" ? v.replace(/@/g, "\uFF20") : v]));
+
+/** One concrete thing to do: an RCON command on a server, a wait, or a Discord or Telegram post. */
+export interface Step { kind: "rcon" | "discord" | "telegram" | "wait"; server?: string; args?: string[]; webhook?: string; chat?: string; text?: string; seconds?: number }
 
 /** What a step says it does, in words. */
 export function stepWords(e: Engine, s: Step): string {
   if (s.kind === "discord") return `Post to Discord (${s.webhook}): ${s.text}`;
+  if (s.kind === "telegram") return `Post to Telegram (${s.chat}): ${s.text}`;
   if (s.kind === "wait") return `Wait ${s.seconds} s`;
   const at = e.name(s.server!), [cmd, ...rest] = s.args!;
   if (cmd === "say") return `Say on ${at}: ${rest[0]}`;
@@ -761,6 +801,7 @@ export function plan(e: Engine, f: Firing): Step[] {
       case "cancel_vote": steps.push({ kind: "rcon", server: here, args: ["cancelvote"] }); break;
       case "shuffle": steps.push({ kind: "rcon", server: here, args: ["shuffle"] }); break;
       case "discord": steps.push({ kind: "discord", webhook: a.webhook, text: msg }); break;
+      case "telegram": steps.push({ kind: "telegram", chat: a.chat, text: fill(a.message, unmention(f.ctx)) }); break;
       case "wait": steps.push({ kind: "wait", seconds: a.seconds }); break;
     }
   }

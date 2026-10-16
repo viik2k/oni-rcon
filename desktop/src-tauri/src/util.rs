@@ -73,21 +73,36 @@ pub fn scrub_value(v: &mut Value) {
     }
 }
 
+/// The temp file for a write, made new (a leftover from a crash is removed first, and nothing planted at that name is
+/// followed). `private`: owner-only from the moment it exists on Unix, so what is written to it (a password, a token) is
+/// never readable by anyone else, not even for an instant.
+fn create_tmp(tmp: &Path, private: bool) -> std::io::Result<std::fs::File> {
+    let _ = std::fs::remove_file(tmp);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    o.open(tmp)
+}
+
 /// Write through a temp file, so a crash midway leaves the old file whole. `private`: owner-only on Unix.
 pub fn write_atomic(path: &Path, text: &str, private: bool) -> std::io::Result<()> {
+    use std::io::Write;
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
     }
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let tmp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, text)?;
-    #[cfg(unix)]
-    if private {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    let written = create_tmp(&tmp, private).and_then(|mut f| f.write_all(text.as_bytes()));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp); // never leave half a secret lying about
+        return Err(e);
     }
-    #[cfg(not(unix))]
-    let _ = private;
     std::fs::rename(&tmp, path)
 }
 
@@ -230,6 +245,33 @@ mod tests {
         let mut v = serde_json::json!({"a": ["x rfk_live_abcdefghij"]});
         scrub_value(&mut v);
         assert_eq!(v["a"][0], format!("x {HIDDEN}"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_is_owner_only_from_the_first_byte() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        // the temp file is private the moment it exists, before anything is written to it
+        let tmp = dir.path().join("fresh.tmp");
+        drop(create_tmp(&tmp, true).unwrap());
+        assert_eq!(mode(&tmp), 0o600);
+        // a stale temp file left by a crash, world-readable, is tightened before the secret goes in
+        let stale = dir.path().join("stale.tmp");
+        std::fs::write(&stale, "old").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(create_tmp(&stale, true).unwrap());
+        assert_eq!(mode(&stale), 0o600);
+        // and the finished file, replaced in place, stays private; a public write is left to the umask
+        let f = dir.path().join("secret.json");
+        write_atomic(&f, "one", true).unwrap();
+        write_atomic(&f, "two", true).unwrap();
+        assert_eq!((std::fs::read_to_string(&f).unwrap().as_str(), mode(&f)), ("two", 0o600));
+        let open = dir.path().join("open.json");
+        write_atomic(&open, "x", false).unwrap();
+        assert_ne!(mode(&open), 0o600);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".tmp")).count(), 2); // only the two made above
     }
 
     #[test]
