@@ -1,11 +1,11 @@
-// F3 Operations (sitrep, controls, rotation, theatre) and F4 Blacklist (bans and VPN allowances).
+// F3 Operations (sitrep, controls, rotation, theatre) and F4 Blacklist (bans, VPN allowances, admins and kicks).
 import { useState } from "react";
 import { AMBER, CYAN, DIM, GOLD, GREEN, RED, TEAM_COLOR, WHITE } from "../art/palette";
 import { oni, SPREE, useV } from "../engine";
 import { BAN_OPS, OPS, OP_GROUPS, TIPS, bl, op } from "../actions";
 import { norm, refsOf } from "../lib/forge";
 import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
-import { num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Line } from "../lib/util";
+import { kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
 import { Btn, L, Panel, Table, useSize, type Row } from "./ui";
 
 const QUIET = new Set(["", "unknown", "none"]);
@@ -122,10 +122,11 @@ export function Operations() {
   );
 }
 
-export const blUi = { ban: null as string | null, vpn: null as string | null, admin: null as string | null,
-  bans: new Map<string, string>(), vpns: new Map<string, string>(), admins: new Map<string, string>(), fixed: new Set<string>() };
+export const blUi = { ban: null as string | null, vpn: null as string | null, admin: null as string | null, kick: null as string | null,
+  bans: new Map<string, string>(), vpns: new Map<string, string>(), admins: new Map<string, string>(), fixed: new Set<string>(), kicks: new Map<string, Kick>() };
 /** The bl() arguments for what's selected on F4. */
-export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null, blUi.admin ? blUi.admins.get(blUi.admin) : null, !!blUi.admin && blUi.fixed.has(blUi.admin)] as const;
+export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn ? blUi.vpns.get(blUi.vpn) : null, blUi.admin ? blUi.admins.get(blUi.admin) : null, !!blUi.admin && blUi.fixed.has(blUi.admin),
+  blUi.kick ? blUi.kicks.get(blUi.kick) : null] as const;
 
 export function Blacklist() {
   useV((s) => s.bans);
@@ -168,7 +169,13 @@ export function Blacklist() {
     const on = pick(e, "online", "connected") ?? (id ? online.has(id) : undefined);
     arows.push({ id: key, cells: [[[name || "—", name ? AMBER : DIM]], id || "—", [[on ? "ON" : on === false ? "—" : "?", on ? GREEN : DIM]], [[from || "—", DIM]]] });
   }
-  const sel = (k: "ban" | "vpn" | "admin") => (id: string) => { blUi[k] = id; force((x) => x + 1); };
+  blUi.kicks = st.kicks;
+  const krows: Row[] = [...st.kicks].reverse().map(([key, k]) => {
+    const left = kickLeft(k);
+    return { id: key, cells: [[[k.name || "—", k.name ? AMBER : DIM]], k.id || redactAddr(k.ip, oni.redact) || "—", String(k.reason), String(k.by),
+      [[left, left.endsWith("m") ? AMBER : DIM]]] };
+  });
+  const sel = (k: "ban" | "vpn" | "admin" | "kick") => (id: string) => { blUi[k] = id; force((x) => x + 1); };
   const disabled = (o: string) => !st.online || (o === "unban" && !blUi.bans.size) || (o === "vpnrevoke" && !blUi.vpns.size)
     || (o === "adminremove" && (!blUi.admins.size || (!!blUi.admin && blUi.fixed.has(blUi.admin) && !st.contentDir)));
   return (
@@ -182,6 +189,9 @@ export function Blacklist() {
         </Panel>
         <Panel title={a ? `ADMINS · ${arows.length}` : "ADMINS · needs server 0.9.16 or later"} className="grow">
           <Table id="admins" cols={["ADMIN", "PLAYER ID", "ON", "FROM"]} rows={arows} selected={blUi.admin} onSelect={sel("admin")} />
+        </Panel>
+        <Panel title={`KICKED · ${krows.length}`} className="grow">
+          <Table id="kicks" cols={["KICKED", "PLAYER ID", "REASON", "BY", "OUT"]} rows={krows} selected={blUi.kick} onSelect={sel("kick")} />
         </Panel>
       </div>
       <div className="bar">

@@ -14,7 +14,8 @@ import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
-  redactData, redactText, resolve, splitTag, stripEnds, who, type Dict, type Line,
+  redactData, redactText, resolve, splitTag, stripEnds, who, noteKick,
+  type Dict, type Kick, type Line,
 } from "./lib/util";
 
 export const FLEET = 12;
@@ -89,6 +90,7 @@ export class Station {
   past = new Map<string, string>();
   aliases = new Map<string, string>();
   unmatched = false;
+  kicks = new Map<string, Kick>(); // who it saw kicked, for F4's PARDON
   constructor(public index: number, public where: string, public name: string, public ssh: string, public url: string,
     public contentDir: string, public host: string, public port: number, public canRestart = false) {
     this.label = name || where;
@@ -338,6 +340,7 @@ class Oni {
     const found = this.findings.ingest(String(st.index), raw, (id) => this.nameOf(st, names, id), context, this.roster(st));
     for (const f of found) this.reportFinding(f, st);
     this.runner.event(st.where, raw);
+    if (noteKick(st.kicks, raw) && st === this.cur) bump("bans");
     if (raw.event === "join") {
       for (const f of idForms(pick(raw, "id", "player_id"))) if (f.length >= 8) st.past.set(f, String(pick(raw, "name", "player") ?? "?"));
     }

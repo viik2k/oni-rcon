@@ -294,6 +294,39 @@ export function hotReloads(version: unknown): boolean {
   return major > 0 || minor > 9 || (minor === 9 && patch >= 18);
 }
 
+/** Someone this station saw kicked: `pardon` (server 0.9.16 or later) lets them back in now. `until` is 0 when unknown. */
+export type Kick = { name: string; id: string; ip: string; by: string; reason: string; until: number };
+
+/** Keeps a station's kicked list from its events: a kick adds them, a refused join adds its address (or them, when a
+ *  kick from before we connected turned them away), and a pardon takes them off. */
+export function noteKick(kicks: Map<string, Kick>, ev: Dict, now = Date.now()): boolean {
+  const kind = ev.event, id = String(pick(ev, "id", "player_id") ?? ""), name = String(pick(ev, "name") ?? "");
+  const key = id || name, ip = String(pick(ev, "ip") ?? "");
+  if (kind === "kick") {
+    const s = num(ev.seconds) ?? 0;
+    if (s <= 0 || !key) return false; // removed for holding up the next game: not kept out
+    kicks.delete(key); // re-added last, so the list runs oldest to newest
+    kicks.set(key, { name, id, ip, by: String(ev.by ?? ""), reason: String(ev.reason ?? ""), until: now + s * 1000 });
+    while (kicks.size > 50) kicks.delete(kicks.keys().next().value!);
+  } else if (kind === "refused") {
+    const k = kicks.get(key);
+    if (k) k.ip ||= ip;
+    else if (key && /kick/i.test(String(ev.reason ?? ""))) kicks.set(key, { name, id, ip, by: "", reason: String(ev.reason), until: 0 });
+    else return false;
+  } else if (kind === "pardon") {
+    const t = String(ev.target ?? ""), names = [ev.name ?? []].flat().map(String);
+    const before = kicks.size;
+    for (const [k, v] of kicks) if ([v.id, v.ip, v.name].includes(t) || names.includes(v.name)) kicks.delete(k);
+    return kicks.size !== before;
+  } else return false;
+  return true;
+}
+
+/** What a pardon is sent with: the player ID, else the address, else the name they were kicked under. */
+export const pardonTarget = (k: Kick) => k.id || k.ip || k.name;
+/** How long a kick still keeps them out: minutes, "over" (a pardon still resets their next kick) or "?" when unknown. */
+export const kickLeft = (k: Kick, now = Date.now()) => (!k.until ? "?" : k.until > now ? `${Math.ceil((k.until - now) / 60000)}m` : "over");
+
 /** Why a station isn't online, for someone who has never seen a socket error. */
 export function explain(detail: string, state = "offline", short = false): string {
   const d = (detail || "").replace(/;?\s*retry in \d+s$/, "").trim();
@@ -309,9 +342,9 @@ export function explain(detail: string, state = "offline", short = false): strin
 
 export const CATS: Record<string, string> = { chat: WHITE, combat: RED, traffic: CYAN, moderation: AMBER, ops: GREY };
 export const KIND: Record<string, string> = { chat: "chat", kill: "combat", join: "traffic", leave: "traffic", refused: "traffic",
-  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation" };
+  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation", pardon: "moderation" };
 export const GLYPH: Record<string, string> = { health: "⚠", chat: "»", kill: "✕", join: "▲", leave: "▼", refused: "⊘", kick: "◆", ban: "■",
-  unban: "□", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
+  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
 
 /** What an event says, after its time and station. Known kinds get a layout; anything else prints its fields. */
 export function describe(ev: Dict, redact = true): Line {
@@ -335,6 +368,10 @@ export function describe(ev: Dict, redact = true): Line {
     const how = pick(ev, "weapon", "damage", "cause", "how");
     if (how) line.push([`  [${how}]`, DIM]);
     for (const m of ev._medals ?? []) line.push(["  "], [` ${m} `, INK, GOLD]);
+  } else if (kind === "pardon") {
+    const names = [ev.name ?? []].flat().map(String).filter(Boolean);
+    line.push(["PARDON", AMBER], [`  ${names.length ? names.join(", ") : redactText(String(ev.target ?? "?"), redact)}`, WHITE], ["  may rejoin", DIM]);
+    if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
   } else if (kind === "health") {
     line.push(["HEALTH  " + String(ev.text ?? ""), ev.level === "crit" ? RED : AMBER]);
   } else {
