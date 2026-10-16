@@ -6,7 +6,7 @@ import { oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { hotReloads, num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
+import { hotReloads, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
@@ -22,7 +22,8 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
   ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
-  ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"]];
+  ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
+  ["pardon", "PARDON  o", ""]];
 export const PLAYER_OPS: [string, string, string][] = [["tell", "TELL", "t"], ["kick", "KICK", "k"], ["ban", "BAN", "b"], ["mute", "MUTE", "m"],
   ["team", "TEAM", "j"], ["vpnallow", "VPN OK", "v"], ["admin", "MAKE ADMIN", "p"], ["copy", "COPY ID", "y"]];
 
@@ -58,6 +59,7 @@ export const TIPS: Record<string, string> = {
   "bl-vpncheck": "Check whether an address looks like a VPN.",
   "bl-adminadd": "Make a player an admin on every server sharing this ban list at once, or of this server only through its dedicated.toml.  Key: p",
   "bl-adminremove": "Take admin away from the selected one. Admins written in dedicated.toml are changed there.  Key: d",
+  "bl-pardon": "Let the selected kicked player rejoin now, or name one. Their next kick starts at 10 minutes again.  Key: o",
   "pl-tell": "Send a private message only they can see.  Key: t",
   "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
   "pl-ban": "Keep them out, for a while or for good.  Key: b",
@@ -84,7 +86,7 @@ export const TAB_TIPS: Record<string, string> = {
   assets: "Players on the selected server: click one for their file and actions.",
   intercepts: "Live chat, kills, joins and moderation from every server, and a box to talk back.",
   operations: "Change the map or mode, end rounds, run votes, and server settings.",
-  blacklist: "Bans, players allowed to join through a VPN, and admins.",
+  blacklist: "Bans, players allowed to join through a VPN, admins, and who was kicked.",
   console: "Type server commands directly. For when a button doesn't cover it.",
   forge: "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
   health: "Crashes read from each server's log, the host's memory, and whether the workaround service runs.",
@@ -410,7 +412,9 @@ const ADMIN_NOTE = {
   remove: "Applies at once on every server sharing this ban list. An admin written in dedicated.toml can't be removed from here.",
 };
 
-export async function bl(name: string, ban?: string | null, vpn?: string | null, admin?: string | null, fixed?: boolean) {
+const PARDON_NOTE = "Lets them rejoin this server now, and their next kick here starts at 10 minutes again. A ban needs UNBAN. Needs server 0.9.16 or later.";
+
+export async function bl(name: string, ban?: string | null, vpn?: string | null, admin?: string | null, fixed?: boolean, kick?: Kick | null) {
   const st = oni.cur;
   if (!st.online) return oni.notify(`${st.label} is not connected.`, "", "warning");
   if (name === "newban") {
@@ -441,6 +445,13 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null,
     }
     if (await oni.confirm(`REMOVE ADMIN  ${admin}`, ADMIN_NOTE.remove, "REMOVE"))
       oni.send(st, "admin", ["remove", admin], ["admins", "players"]);
+  } else if (name === "pardon") {
+    if (kick) {
+      if (await oni.confirm(`PARDON  ${kick.name || redactText(pardonTarget(kick), oni.redact)}`, PARDON_NOTE, "PARDON", false)) oni.send(st, "pardon", [pardonTarget(kick)]);
+      return;
+    }
+    const f = await oni.form("PARDON A KICK", [["target", "Name they were kicked under, player ID or IP", ""]], { verb: "PARDON", required: ["target"], note: PARDON_NOTE });
+    if (f) oni.send(st, "pardon", [f.target.trim()]);
   } else if (name === "vpncheck") {
     const f = await oni.form("CHECK AN ADDRESS", [["ip", "IP address", ""]], { verb: "CHECK", required: ["ip"] });
     if (f) oni.send(st, "vpn", [f.ip]);

@@ -43,6 +43,7 @@ class Fake:
                      "ips": [{"ip": "198.51.100.0/24", "reason": "ban evasion", "expires": time.time() + 86400 * 6}],
                      "devices": []}
         self.allowed = [{"target": "192.0.2.44", "note": "mobile hotspot"}]
+        self.kicked = {}  # player ID -> name, until a pardon
         self.vote, self.vote_at = None, 0.0
         self.hot = (None, 0.0)  # the last killer and when: some go on a roll, for multi-kills
 
@@ -140,7 +141,11 @@ class Fake:
                 if cmd == "ban":
                     self.bans["players"].append({"id": p["player_id"], "name": p["name"], "reason": " ".join(args[1:]),
                                                  "banned_by": by, "expires": None})
-                await self.emit(cmd, player=p["name"], by=by, reason=" ".join(args[1:]))
+                if cmd == "kick":
+                    self.kicked[p["player_id"]] = p["name"]
+                    await self.emit("kick", name=p["name"], id=p["player_id"], by=by, reason=" ".join(args[1:]), seconds=600)
+                else:
+                    await self.emit(cmd, player=p["name"], by=by, reason=" ".join(args[1:]))
                 return ok(f"{p['name']} was {cmd}{'n' if cmd == 'ban' else ''}ed by {by}.")
             if cmd in ("mute", "unmute"):
                 p["muted"] = cmd == "mute"
@@ -160,6 +165,13 @@ class Fake:
                         lst.remove(e)
                         return ok(f"{cmd} {args[0]} done.")
             return no(f"Nothing matches '{args[0] if args else ''}'.")
+        if cmd == "pardon":
+            pid = next((i for i, n in self.kicked.items() if args and args[0] in (i, n)), None)
+            if pid is None:
+                return no(f"Nobody kicked here matches '{args[0] if args else ''}'.")
+            name = self.kicked.pop(pid)
+            await self.emit("pardon", target=args[0], name=[name], by=by)
+            return ok(f"{name} may rejoin now.")
         if cmd in ("map", "mode", "load", "nextmap"):
             self.status["next"] = " / ".join(args)
             if cmd != "nextmap":

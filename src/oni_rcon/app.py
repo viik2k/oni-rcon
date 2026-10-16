@@ -65,13 +65,13 @@ BAN_TIMES = [("Permanent", ""), ("30 minutes", "30m"), ("2 hours", "2h"), ("12 h
 MUTE_TIMES = [("Until restart", ""), ("10 minutes", "10m"), ("1 hour", "1h"), ("12 hours", "12h"), ("1 day", "1d")]
 COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke",
             "mute", "unmute", "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername",
-            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "help"]
+            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "pardon", "help"]
 
 CATS = {"chat": WHITE, "combat": RED, "traffic": CYAN, "moderation": AMBER, "ops": GREY}
 KIND = {"chat": "chat", "kill": "combat", "join": "traffic", "leave": "traffic", "refused": "traffic",
         "kick": "moderation", "ban": "moderation", "unban": "moderation", "mute": "moderation",
-        "unmute": "moderation", "cheat": "moderation"}
-GLYPH = {"health": "⚠", "chat": "»", "kill": "✕", "join": "▲", "leave": "▼", "refused": "⊘", "kick": "◆", "ban": "■", "unban": "□",
+        "unmute": "moderation", "cheat": "moderation", "pardon": "moderation"}
+GLYPH = {"health": "⚠", "chat": "»", "kill": "✕", "join": "▲", "leave": "▼", "refused": "⊘", "kick": "◆", "ban": "■", "unban": "□", "pardon": "↺",
          "mute": "◈", "unmute": "◇", "cheat": "!", "vote": "◉", "control": "•", "uplink": "≡", "forge": "⬢"}
 STATE = {"online": ("◉", GREEN), "connecting": ("◌", AMBER), "offline": ("○", RED), "denied": ("⊘", RED)}
 SPIN = "◐◓◑◒"
@@ -110,7 +110,8 @@ OPS = [("load", "LOAD MAP+MODE", "primary"), ("map", "CHANGE MAP", "default"), (
        ("servername", "RENAME", "default"), ("password", "JOIN PASSWORD", "default"),
        ("maxping", "PING LIMIT", "default"), ("reconnect", "RECONNECT", "default")]
 BAN_OPS = [("newban", "NEW BAN", "error"), ("unban", "UNBAN  u", "warning"), ("vpnallow", "VPN ALLOW  a", "default"),
-           ("vpnrevoke", "VPN REVOKE  r", "default"), ("vpncheck", "CHECK IP", "default")]
+           ("vpnrevoke", "VPN REVOKE  r", "default"), ("vpncheck", "CHECK IP", "default"),
+           ("pardon", "PARDON  o", "default")]
 OP_GROUPS = [("MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]),
              ("TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]),
              ("SERVER", ["broadcast", "servername", "password", "maxping", "reconnect"])]
@@ -140,6 +141,7 @@ TIPS = {
     "bl-vpnallow": "Let a player or address join through a VPN.  Key: a",
     "bl-vpnrevoke": "Take back the selected VPN allowance.  Key: r",
     "bl-vpncheck": "Check whether an address looks like a VPN.",
+    "bl-pardon": "Let the selected kicked player rejoin now, or name one. Their next kick starts at 10 minutes again.  Key: o",
     "pl-tell": "Send a private message only they can see.  Key: t",
     "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
     "pl-ban": "Keep them out, for a while or for good.  Key: b",
@@ -164,7 +166,7 @@ TIPS = {
 TAB_TIPS = {"assets": "Players on the selected server: click one for their file and actions.",
             "intercepts": "Live chat, kills, joins and moderation from every server, and a box to talk back.",
             "operations": "Change the map or mode, end rounds, run votes, and server settings.",
-            "blacklist": "Bans, and players allowed to join through a VPN.",
+            "blacklist": "Bans, players allowed to join through a VPN, and who was kicked.",
             "console": "Type server commands directly. For when a button doesn't cover it.",
             "forge": "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
             "health": "Crashes read from each server's log, the host's memory, and whether the workaround service runs."}
@@ -463,6 +465,14 @@ def describe(ev: dict, names: dict, redact: bool = True) -> Text:
         for medal in ev.get("_medals") or ():  # padded with blank braille, not spaces: wrap between pills only
             line.append("  ")
             line.append(f"\u2800{medal}\u2800".replace(" ", "\u2800"), f"{INK} on {GOLD}")
+    elif kind == "pardon":
+        kicked = [str(n) for n in (ev["name"] if isinstance(ev.get("name"), list) else [ev.get("name")]) if n]
+        line.append("PARDON", AMBER)
+        line.append(f"  {', '.join(kicked) or redact_text(str(ev.get('target', '?')), redact)}", WHITE)
+        line.append("  may rejoin", DIM)
+        if ev.get("by"):
+            line.append("  by ", DIM)
+            line.append(str(ev["by"]))
     elif kind == "health":
         line.append("HEALTH  " + str(ev.get("text", "")), RED if ev.get("level") == "crit" else AMBER)
     else:
@@ -480,6 +490,52 @@ def describe(ev: dict, names: dict, redact: bool = True) -> Text:
             line.append(f"  {k}=", DIM)
             line.append(str(v))
     return line
+
+
+def note_kick(kicks: dict, ev: dict, now: float | None = None) -> bool:
+    """Keeps a station's kicked list from its events: a kick adds them, a refused join adds its address (or them, when
+    a kick from before we connected turned them away), and a pardon takes them off. `until` is 0 when unknown.
+    True when the list changed."""
+    now = time.time() if now is None else now
+    kind, pid, name = ev.get("event"), str(pick(ev, "id", "player_id", default="")), str(pick(ev, "name", default=""))
+    key, ip = pid or name, str(pick(ev, "ip", default=""))
+    if kind == "kick":
+        secs = num(ev.get("seconds")) or 0
+        if secs <= 0 or not key:
+            return False  # removed for holding up the next game: not kept out
+        kicks.pop(key, None)  # re-added last, so the list runs oldest to newest
+        kicks[key] = {"name": name, "id": pid, "ip": ip, "by": str(ev.get("by", "")),
+                      "reason": str(ev.get("reason", "")), "until": now + secs}
+        while len(kicks) > 50:
+            kicks.pop(next(iter(kicks)))
+    elif kind == "refused":
+        if key in kicks:
+            kicks[key]["ip"] = kicks[key]["ip"] or ip
+        elif key and re.search("kick", str(ev.get("reason", "")), re.I):
+            kicks[key] = {"name": name, "id": pid, "ip": ip, "by": "", "reason": str(ev["reason"]), "until": 0}
+        else:
+            return False
+    elif kind == "pardon":
+        target = str(ev.get("target", ""))
+        names = [str(n) for n in (ev["name"] if isinstance(ev.get("name"), list) else [ev.get("name")]) if n]
+        gone = [k for k, v in kicks.items() if target in (v["id"], v["ip"], v["name"]) or v["name"] in names]
+        for k in gone:
+            del kicks[k]
+        return bool(gone)
+    else:
+        return False
+    return True
+
+
+def pardon_target(k: dict) -> str:
+    """What a pardon is sent with: the player ID, else the address, else the name they were kicked under."""
+    return k["id"] or k["ip"] or k["name"]
+
+
+def kick_left(k: dict, now: float | None = None) -> str:
+    """How long a kick still keeps them out: minutes, "over" (a pardon still resets their next kick) or "?"."""
+    now = time.time() if now is None else now
+    return "?" if not k["until"] else f"{-int((now - k['until']) // 60)}m" if k["until"] > now else "over"
 
 
 def reaction_words(ev: dict, names: dict, redact: bool = True) -> str:
@@ -548,6 +604,7 @@ class Station:
     here: dict = field(default_factory=dict)  # every spelling of an ID on the roster now -> callsign
     past: dict = field(default_factory=dict)  # the long ones from earlier rosters and joins: a kill by someone who just left
     aliases: dict = field(default_factory=dict)  # an ID nobody here answers to -> PLAYER n, so it's never shown raw
+    kicks: dict = field(default_factory=dict)  # who it saw kicked, for F4's PARDON: key -> note_kick's entry
     unmatched: bool = False  # said once that kills name players by an ID the roster doesn't carry
     check_at: float = 0.0  # when its next health report is due (monotonic)
     checking: bool = False
@@ -779,6 +836,10 @@ GUIDE = [
     ("F4  BLACKLIST  ·  bans", [
         ("Lists", "Every ban by player, address and device, and who may join through a VPN. Pick a row, then UNBAN "
                   "or REVOKE."),
+        ("Kicks", "A kick keeps a player out for 10, 30, 60 and then 120 minutes. KICKED lists who this console saw "
+                  "kicked, or turned away for a recent kick, with how long they're still out. PARDON (o) lets the "
+                  "selected one rejoin now and starts their next kick at 10 minutes again; with nothing selected it "
+                  "asks for the name they were kicked under, a player ID or an IP. Needs server 0.9.16 or later."),
     ]),
     ("F5  CONSOLE  ·  typing commands", [
         ("Commands", "For anything without a button. Type help for the server's list; ↑ ↓ bring back earlier ones."),
@@ -1007,7 +1068,8 @@ class Assets(Horizontal):
 
 class Blacklist(Vertical):
     BINDINGS = [Binding("n", "app.bl('newban')", "New ban"), Binding("u", "app.bl('unban')", "Unban"),
-                Binding("a", "app.bl('vpnallow')", "VPN allow"), Binding("r", "app.bl('vpnrevoke')", "VPN revoke")]
+                Binding("a", "app.bl('vpnallow')", "VPN allow"), Binding("r", "app.bl('vpnrevoke')", "VPN revoke"),
+                Binding("o", "app.bl('pardon')", "Pardon")]
 
 
 class ForgePane(Vertical):
@@ -1243,6 +1305,7 @@ class OniApp(App):
         self.row_players: dict[str, dict] = {}
         self.ban_rows: dict[str, str] = {}
         self.vpn_rows: dict[str, str] = {}
+        self.kick_rows: dict[str, dict] = {}
         self.alert_at = float("-inf")  # when the last alert came in; each station counts its own unseen ones
         self.hsetup = health or HealthSetup()
         self.mon = Monitor(self.hsetup.min_free_mb)
@@ -1309,6 +1372,7 @@ class OniApp(App):
                     with Blacklist():
                         yield Roster(id="bans", cursor_type="row", zebra_stripes=True)
                         yield Roster(id="vpn", cursor_type="row", zebra_stripes=True)
+                        yield Roster(id="kicks", cursor_type="row", zebra_stripes=True)
                         with Horizontal(classes="bar"):
                             for op, label, variant in BAN_OPS:
                                 yield Button(label, id=f"bl-{op}", variant=variant)
@@ -1355,7 +1419,7 @@ class OniApp(App):
         self.theme = "oni"
         cols = {"#players": ["#", "CALLSIGN", "TEAM", "SCORE", "K", "D", "K/D", "PING", "HEALTH", "SHIELD", "FLAGS"],
                 "#rotation": ["#", "MAP", "MODE"], "#bans": ["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"],
-                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"],
+                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"], "#kicks": ["KICKED", "PLAYER ID", "REASON", "BY", "OUT"],
                 "#listings": ["", "TYPE", "TITLE", "AUTHOR", "RATING", "RECENT", "FIT"],
                 "#versions": ["", "VERSION", "PUBLISHED", "NOTES"],
                 "#crashes": ["WHEN", "SERVER", "CLASS", "PLAYERS", "DETAIL", "RCON"],
@@ -1969,6 +2033,8 @@ class OniApp(App):
             st.past.update({f: str(pick(ev, "name", "player", default="?")) for f in id_forms(pick(ev, "id", "player_id"))
                             if len(f) >= 8})
         raw_ids = [ev.get(k) for k in ("killer", "victim")]
+        if note_kick(st.kicks, ev) and st is self.cur:
+            self.paint_bans()
         ev = resolve(ev, names, st.ident)
         kind, text = ev.get("event"), str(ev.get("text", ""))
         if kind == "kill":
@@ -2421,6 +2487,12 @@ class OniApp(App):
         t.fill(rows)
         t.border_title = Text(f"VPN ALLOWANCES · blocking {'ON' if v.get('block_vpn') else 'OFF'}"
                               + (f" · {v['ranges']} ranges" if isinstance(v.get("ranges"), int) else ""))
+        self.kick_rows = dict(reversed(self.cur.kicks.items()))
+        t = self.query_one("#kicks", Roster)
+        t.fill([(key, [Text(k["name"] or "—", AMBER if k["name"] else DIM), k["id"] or redact_addr(k["ip"], self.redact) or "—",
+                       k["reason"], k["by"], Text(left := kick_left(k), AMBER if left.endswith("m") else DIM)])
+                for key, k in self.kick_rows.items()])
+        t.border_title = Text(f"KICKED · {len(self.kick_rows)}")
         for op, *_ in BAN_OPS:
             self.query_one(f"#bl-{op}", Button).disabled = not self.cur.online or (
                 op == "unban" and not self.ban_rows or op == "vpnrevoke" and not self.vpn_rows)
@@ -2837,6 +2909,15 @@ class OniApp(App):
                                                                ("note", "Note", "")], verb="ALLOW", required=("target",)))
             if f:
                 self.send(st, "vpnallow", f["target"], *opt(f["note"]), then=("vpn",))
+        elif name == "pardon":
+            note = ("Lets them rejoin this server now, and their next kick here starts at 10 minutes again. A ban needs "
+                    "UNBAN. Needs server 0.9.16 or later.")
+            kick = self.kick_rows.get(self.query_one("#kicks", Roster).selected)  # the row under the cursor, to edit
+            f = await self.push_screen_wait(Form("PARDON A KICK", [("target", "Name they were kicked under, player ID or IP",
+                                                                    pardon_target(kick) if kick else "")],
+                                                 verb="PARDON", required=("target",), note=note))
+            if f:
+                self.send(st, "pardon", f["target"].strip())
         elif name == "vpncheck":
             f = await self.push_screen_wait(Form("CHECK AN ADDRESS", [("ip", "IP address", "")], verb="CHECK",
                                                  required=("ip",)))

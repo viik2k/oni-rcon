@@ -134,7 +134,7 @@ function useKeys(onSetup: () => void) {
           const [c, w] = x.split(":");
           return [c, () => player(w, assetsUi.selected ? assetsUi.rows.get(assetsUi.selected) : undefined)];
         })),
-        blacklist: Object.fromEntries(["n:newban", "u:unban", "a:vpnallow", "r:vpnrevoke", "p:adminadd", "d:adminremove"].map((x) => {
+        blacklist: Object.fromEntries(["n:newban", "u:unban", "a:vpnallow", "r:vpnrevoke", "p:adminadd", "d:adminremove", "o:pardon"].map((x) => {
           const [c, w] = x.split(":");
           return [c, () => bl(w, ...blSel())];
         })),

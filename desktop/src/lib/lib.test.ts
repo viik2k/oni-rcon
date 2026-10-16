@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeEvent, explain, hotReloads, idForms, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag } from "./util";
+import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -400,5 +400,28 @@ describe("hot reload", () => {
   it("is 0.9.18 and later; older, unknown and demo servers keep the restart", () => {
     for (const v of ["0.9.18", "v0.9.18", "0.9.19-rc1", "0.10.0", "1.0.0"]) expect(hotReloads(v), v).toBe(true);
     for (const v of ["0.9.17", "0.9.7-demo", "0.8.30", "", "?", undefined, null]) expect(hotReloads(v), String(v)).toBe(false);
+  });
+});
+
+describe("kicked list", () => {
+  it("adds a kick, takes a refused join's address, and drops them on a pardon", () => {
+    const kicks = new Map<string, Kick>(), t = 1_000_000;
+    expect(noteKick(kicks, { event: "kick", name: "Bravo", id: "76561198000000001", by: "RCON", reason: "spawn camping", seconds: 600 }, t)).toBe(true);
+    expect(noteKick(kicks, { event: "kick", name: "Slow", id: "x", by: "Server", seconds: 0 }, t)).toBe(false); // load_timeout: not kept out
+    noteKick(kicks, { event: "refused", name: "Bravo", id: "76561198000000001", ip: "203.0.113.4", reason: "You were kicked: 9 minutes left" }, t);
+    const k = kicks.get("76561198000000001")!;
+    expect([k.ip, kickLeft(k, t + 61_000), kickLeft(k, t + 600_000), pardonTarget(k)]).toEqual(["203.0.113.4", "9m", "over", "76561198000000001"]);
+    // turned away for a kick from before we connected: listed, time unknown; a ban's refusal isn't
+    noteKick(kicks, { event: "refused", name: "Charlie", id: "c1", ip: "198.51.100.7", reason: "Kicked by an admin" }, t);
+    expect(noteKick(kicks, { event: "refused", name: "Delta", id: "d1", reason: "You are banned" }, t)).toBe(false);
+    expect(kickLeft(kicks.get("c1")!)).toBe("?");
+    expect(noteKick(kicks, { event: "pardon", target: "198.51.100.7", name: ["Charlie"], by: "RCON" })).toBe(true);
+    expect(noteKick(kicks, { event: "pardon", target: "Bravo", name: "Bravo", by: "RCON" })).toBe(true);
+    expect(kicks.size).toBe(0);
+  });
+
+  it("shows a pardon as one line", () => {
+    expect(plain(describeEvent({ event: "pardon", target: "76561198000000001", name: ["Bravo", "Bravo2"], by: "Alice (RCON)" })))
+      .toBe("PARDON  Bravo, Bravo2  may rejoin  by Alice (RCON)");
   });
 });
