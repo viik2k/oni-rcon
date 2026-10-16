@@ -286,6 +286,14 @@ const EXPLAIN: [string[], string, string][] = [
   [["connection closed", "connection lost", "no close frame", "connection reset", "broken pipe", "already closed"], "CONNECTION DROPPED", "The connection dropped."],
 ];
 
+/** Server 0.9.18 and later apply dedicated.toml edits without a restart, and `reload` says what changed. */
+export function hotReloads(version: unknown): boolean {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version ?? "").trim());
+  if (!m) return false;
+  const [major, minor, patch] = m.slice(1).map(Number);
+  return major > 0 || minor > 9 || (minor === 9 && patch >= 18);
+}
+
 /** Why a station isn't online, for someone who has never seen a socket error. */
 export function explain(detail: string, state = "offline", short = false): string {
   const d = (detail || "").replace(/;?\s*retry in \d+s$/, "").trim();

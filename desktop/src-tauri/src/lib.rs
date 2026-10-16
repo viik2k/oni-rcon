@@ -548,7 +548,8 @@ async fn save_game_type(index: usize, name: String, mode: String, score_to_win: 
     Ok(json!({"path": path, "exists": false}))
 }
 
-/// A setting in the server's own dedicated.toml, the one beside its content_dir: it takes effect at the next start.
+/// A setting in the server's own dedicated.toml, the one beside its content_dir: server 0.9.18 or later reloads it
+/// when told (the console sends `reload`), an older one takes it up at the next start.
 #[tauri::command]
 async fn server_setting(index: usize, key: String, value: Value, app: State<'_, App>) -> Result<(), String> {
     let h = hub_of(&app)?;
