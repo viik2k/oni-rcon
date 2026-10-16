@@ -6,13 +6,13 @@ import { oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
+import { hotReloads, num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
 export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke", "mute", "unmute",
   "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername", "password", "maxping", "teamcount", "shuffle", "team",
-  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "help"];
+  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "help"];
 
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
@@ -43,9 +43,9 @@ export const TIPS: Record<string, string> = {
   "op-servername": "Change the name in the server browser, until the server restarts.",
   "op-password": "Make players type a password to join (or remove it).",
   "op-maxping": "Stop players with a high ping from joining.",
-  "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart and needs one.",
+  "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart. Server 0.9.18 or later applies it at once; an older one needs a restart.",
   "op-reconnect": "Drop this connection and sign in again.",
-  "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml, so it needs a restart.",
+  "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml: server 0.9.18 or later takes it up without a restart; an older one needs one.",
   "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
@@ -150,17 +150,26 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
     return;
   }
   const scope = await oni.pick(`MAKE ${name} AN ADMIN OF`, [["EVERY SERVER sharing this ban list · at once", "all"],
-    ["THIS SERVER ONLY · dedicated.toml, after a restart", "one"]]);
+    [`THIS SERVER ONLY · dedicated.toml, ${takesEffect(st)}`, "one"]]);
   if (scope === "all") oni.send(st, "admin", ["add", target], ["admins", "players"]);
   else if (scope === "one") return saveSetting(st, "admin_add", target, "ADMIN", `${name} as an admin of this server`);
 }
 
-/** A dedicated.toml setting saved, then the restart it needs offered. */
+/** When a dedicated.toml edit takes effect on this server. */
+const liveReload = (st: Station) => st.online && hotReloads(st.info.version);
+const takesEffect = (st: Station) => (liveReload(st) ? "at once, no restart" : "after a restart");
+
+/** A dedicated.toml setting saved. Server 0.9.18 or later is told to reload, and its reply says what changed;
+ *  an older one needs the restart, offered when there's a way to do it. */
 async function saveSetting(st: Station, key: string, value: unknown, what: string, saved: string): Promise<void> {
   try {
     await invoke("server_setting", { index: st.index, key, value });
   } catch (e) {
     return oni.notify(String(e), `${what} NOT SAVED · ${st.label}`, "error", 15);
+  }
+  if (liveReload(st)) {
+    await oni.send(st, "reload", [], ["status", "admins", "players"]);
+    return;
   }
   if (st.canRestart) return op("restart");
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
@@ -320,7 +329,7 @@ export async function op(name: string) {
   }
   if (name === "capacity") {
     const f = await oni.form("PLAYER CAPACITY", [["n", "Most players at once (1 to 63)", String(s.max_players ?? "")]], { verb: "SAVE", required: ["n"],
-      note: "Saved in the server's dedicated.toml: it takes effect when the server restarts." });
+      note: `Saved in the server's dedicated.toml: it takes effect ${takesEffect(st)}.` });
     if (f) return saveSetting(st, "max_players", Number(f.n), "CAPACITY", `${f.n} players`);
     return;
   }
@@ -426,7 +435,7 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null,
   } else if (name === "adminremove") {
     if (!admin) return oni.notify("Select an admin first.", "", "warning");
     if (fixed) {
-      if (await oni.confirm(`REMOVE ADMIN  ${admin}`, "Written in dedicated.toml: taken out of this server's admins there, from the next restart.", "REMOVE"))
+      if (await oni.confirm(`REMOVE ADMIN  ${admin}`, `Written in dedicated.toml: taken out of this server's admins there, ${takesEffect(st)}.`, "REMOVE"))
         return saveSetting(st, "admin_remove", admin, "ADMIN", `${admin} no longer an admin of this server`);
       return;
     }

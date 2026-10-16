@@ -461,7 +461,11 @@ async fn restart_server(index: usize, app: State<'_, App>) -> Result<(), String>
     if s.restart_cmd.is_empty() {
         return Err("no restart_cmd for this server in the config".into());
     }
-    health::run(&s.restart_cmd, &s.ssh, 180.0).await.map(|_| ())
+    let out = health::run(&s.restart_cmd, &s.ssh, 180.0).await?;
+    match out.trim().strip_prefix("NOT RESTARTED") {
+        Some(_) => Err(out.trim().to_string()), // the servers are still up on their old settings
+        None => Ok(()),
+    }
 }
 
 /// The playlists in the server folder's playlists/, as dedicated.toml names them.
@@ -544,7 +548,8 @@ async fn save_game_type(index: usize, name: String, mode: String, score_to_win: 
     Ok(json!({"path": path, "exists": false}))
 }
 
-/// A setting in the server's own dedicated.toml, the one beside its content_dir: it takes effect at the next start.
+/// A setting in the server's own dedicated.toml, the one beside its content_dir: server 0.9.18 or later reloads it
+/// when told (the console sends `reload`), an older one takes it up at the next start.
 #[tauri::command]
 async fn server_setting(index: usize, key: String, value: Value, app: State<'_, App>) -> Result<(), String> {
     let h = hub_of(&app)?;
@@ -645,6 +650,16 @@ async fn forge_mine(app: State<'_, App>) -> Result<Value, String> {
         Ok(items) => json!({"items": items, "status": h.forge_status()}),
         Err(e) => forge_err(e),
     })
+}
+
+/// HOST A SERVER's playlist: a .json picked in a dialog of the backend's own; its path, or null if none was picked.
+#[tauri::command]
+async fn pick_playlist(handle: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || handle.dialog().file().set_title("Pick a playlist").add_filter("Playlist", &["json"]).blocking_pick_file())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
 }
 
 /// The operator picks what to publish in a dialog of the backend's own, so the window can't upload any file it names.
@@ -898,7 +913,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,

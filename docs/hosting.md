@@ -39,11 +39,11 @@ Then **CREATE & START**:
    untick **Remember the password**).
 
 When it's up, it tells you how players get in ("find *Friday Night* in the server browser", or the address to join a
-hidden one) and the firewall commands for your ports, to run in an admin PowerShell:
+hidden one) and the firewall command for your ports. Paste it into any PowerShell: it opens a second window that asks
+for administrator, which the rules need (run plain, `New-NetFirewallRule` fails with "Access is denied"):
 
 ```
-New-NetFirewallRule -DisplayName "Reclaimer games" -Direction Inbound -Protocol UDP -LocalPort 49176 -Action Allow
-New-NetFirewallRule -DisplayName "Reclaimer browser" -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command','New-NetFirewallRule -DisplayName ''Reclaimer games'' -Direction Inbound -Protocol UDP -LocalPort 49176 -Action Allow; New-NetFirewallRule -DisplayName ''Reclaimer browser'' -Direction Inbound -Protocol TCP -LocalPort 49175 -Action Allow'
 ```
 
 The same ports must be forwarded on your router for players outside your home, unless you chose UPnP. The remote
@@ -108,7 +108,8 @@ password_command = ["ssh", "-o", "BatchMode=yes", "admin@game-box", "docker insp
 ```
 
 so **the password is never written on your machine**: it's read on the box each time the console starts, from the
-container's environment or the folder's `dedicated.toml`. Change it on the box and the console follows.
+container's environment or the folder's `dedicated.toml`. Change it on the box and the console follows. A server
+with its own `rcon_password` in its `[[server]]` block gets that one, found by its RCON port.
 
 When every server it adds is in a container, it also sets `ping_log` and `health_cmd` (if your config has none), so the
 PING column and the F7 Health tab work at once. Each picks the right container by the server's port.
@@ -117,7 +118,6 @@ What it can't do yet, and what to do instead:
 
 | | |
 |---|---|
-| A server with its own `rcon_password` | Listed but not added. Add it by hand with `password_env` or `password`. |
 | A server with its remote console off | Listed but not added. Set `[rcon] password` in its `dedicated.toml` and restart it. |
 | Servers not in containers | Added, but with no `ping_log` or `health_cmd`: write those for your setup ([README](../README.md#player-ping)). |
 | A Windows game box | Not searched. Add its servers with the form and the SSH box filled in. |

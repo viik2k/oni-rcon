@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeEvent, explain, idForms, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag } from "./util";
+import { describe as describeEvent, explain, hotReloads, idForms, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -393,5 +393,12 @@ describe("playlists", () => {
     expect(gameLabel({ map: "Guardian", game: "Team Slayer", weight: 3 })).toBe("Team Slayer on Guardian  ×3");
     expect(gameLabel({ map: "a", game: "b", name: "Mine" })).toBe("Mine");
     expect(slug(" Friday Night! ")).toBe("friday-night");
+  });
+});
+
+describe("hot reload", () => {
+  it("is 0.9.18 and later; older, unknown and demo servers keep the restart", () => {
+    for (const v of ["0.9.18", "v0.9.18", "0.9.19-rc1", "0.10.0", "1.0.0"]) expect(hotReloads(v), v).toBe(true);
+    for (const v of ["0.9.17", "0.9.7-demo", "0.8.30", "", "?", undefined, null]) expect(hotReloads(v), String(v)).toBe(false);
   });
 });

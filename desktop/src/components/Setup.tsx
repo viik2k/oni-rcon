@@ -9,7 +9,7 @@ import { Check, Pixel, useSize } from "./ui";
 
 interface Spec { address: string; port: string; password: string; name: string; ssh: string }
 // what the operator picks for a server made here: the backend's host::Settings
-interface Plan { name: string; host: string; password: string; max: string; listed: boolean; internet: boolean; auto: boolean }
+interface Plan { name: string; host: string; password: string; max: string; listed: boolean; internet: boolean; auto: boolean; playlist: string }
 type Mode = "start" | "host" | "connect";
 const SPIN = "◐◓◑◒";
 
@@ -17,7 +17,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
   const s = info.setup;
   const [mode, setMode] = useState<Mode>("start");
   const [f, setF] = useState<Spec>({ address: "127.0.0.1", port: "49176", password: "", name: "", ssh: "" });
-  const [plan, setPlan] = useState<Plan>({ name: "", host: s.by ?? "", password: "", max: "", listed: true, internet: false, auto: false });
+  const [plan, setPlan] = useState<Plan>({ name: "", host: s.by ?? "", password: "", max: "", listed: true, internet: false, auto: false, playlist: "" });
   const [hs, setHs] = useState<Dict | null>(null); // where a server made here goes, and what's missing for it
   const [by, setBy] = useState(s.by);
   const [remember, setRemember] = useState(true);
@@ -108,7 +108,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
         setStatus([false, "Max players is a number from 1 to 63, or empty for the default."]);
         return;
       }
-      settings = { name: plan.name, host: plan.host, password: plan.password, max_players: max, hidden: !plan.listed, internet: plan.internet, auto_update: plan.auto };
+      settings = { name: plan.name, host: plan.host, password: plan.password, max_players: max, hidden: !plan.listed, internet: plan.internet, auto_update: plan.auto, playlist: plan.playlist };
     }
     setBusy(true);
     setStatus([null, what === "setup_host" ? "Setting up a server on this computer…" : `Looking on ${f.ssh.trim()}…`]);
@@ -193,6 +193,14 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 16 }}>
                 <div><label className="lbl">Join password</label><input className="input" value={plan.password} onChange={plant("password")} placeholder="empty lets anyone in" disabled={busy} /></div>
                 <div><label className="lbl">Max players</label><input className="input" value={plan.max} onChange={plant("max")} placeholder="default" disabled={busy} /></div>
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <label className="lbl">Playlist</label>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <button className="btn" disabled={busy} onClick={async () => { const p = await invoke<string | null>("pick_playlist"); if (p) setPlan({ ...plan, playlist: p }); }}>CHOOSE A FILE…</button>
+                  <span className="hint">{plan.playlist ? plan.playlist.split(/[\\/]/).pop() : "none: the server's default rotation (Guardian Slayer)"}</span>
+                  {plan.playlist ? <span className="hint" style={{ cursor: "pointer" }} onClick={() => setPlan({ ...plan, playlist: "" })}>✕ clear</span> : null}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 22, flexWrap: "wrap", marginTop: 14 }}>
                 <Check label="Show in the server browser" on={plan.listed} onChange={(listed) => setPlan({ ...plan, listed })} title="Off: nobody sees it listed, and players join by its address." />
