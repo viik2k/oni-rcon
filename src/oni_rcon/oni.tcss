@@ -81,6 +81,7 @@ Assets { height: 1fr; }
 Blacklist { height: 1fr; }
 #bans { height: 2fr; }
 #vpn { height: 1fr; }
+#kicks { height: 1fr; }
 .bar { height: auto; padding: 0 1; }
 .bar Button { margin-right: 1; min-width: 0; }
 

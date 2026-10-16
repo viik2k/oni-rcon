@@ -37,6 +37,7 @@ pub struct Fake {
     pub players: Vec<Value>,
     bans: Value,
     allowed: Vec<Value>,
+    kicked: Vec<(String, String)>, // (player ID, name) until a pardon
     vote: Value,
     admins: Vec<Value>, // {player_id, name, source}: the "dedicated.toml" ones can't be removed over RCON
     vote_at: Instant,
@@ -65,6 +66,7 @@ impl Fake {
             bans: json!({"players": [{"id": format!("9f3a{}", "0".repeat(28)), "name": "Griefer", "reason": "team killing", "expires": null, "banned_by": "Admin"}],
                 "ips": [{"ip": "198.51.100.0/24", "reason": "ban evasion", "expires": crate::util::now() + 86400.0 * 6.0}], "devices": []}),
             allowed: vec![json!({"target": "192.0.2.44", "note": "mobile hotspot"})],
+            kicked: Vec::new(),
             vote: Value::Null,
             admins: ["Overseer", "Bravo"].iter().map(|n| json!({"player_id": hex128(), "name": n, "source": "dedicated.toml"})).collect(),
             vote_at: Instant::now(),
@@ -201,8 +203,12 @@ impl Fake {
                         let p = self.players.remove(i);
                         if cmd == "ban" {
                             self.bans["players"].as_array_mut().unwrap().push(json!({"id": p["player_id"], "name": name, "reason": rest, "banned_by": by, "expires": null}));
+                            self.emit(cmd, json!({"player": name, "by": by, "reason": rest}));
+                        } else {
+                            let id = p["player_id"].as_str().unwrap_or_default().to_string();
+                            self.emit(cmd, json!({"name": name, "id": id, "by": by, "reason": rest, "seconds": 600}));
+                            self.kicked.push((id, name.clone()));
                         }
-                        self.emit(cmd, json!({"player": name, "by": by, "reason": rest}));
                         ok(format!("{name} was {}ed by {by}.", if cmd == "ban" { "bann" } else { "kick" }), None)
                     }
                     "mute" | "unmute" => {
@@ -223,6 +229,14 @@ impl Fake {
                         ok(format!("{name} may join through a VPN."), None)
                     }
                 }
+            }
+            "pardon" => {
+                let Some(i) = self.kicked.iter().position(|(id, n)| *id == a0 || *n == a0) else {
+                    return no(format!("Nobody kicked here matches '{a0}'."));
+                };
+                let (_, name) = self.kicked.remove(i);
+                self.emit("pardon", json!({"target": a0, "name": [name], "by": by}));
+                ok(format!("{name} may rejoin now."), None)
             }
             "unban" | "vpnrevoke" => {
                 let matches = |e: &Value| ["id", "ip", "name", "target"].iter().any(|k| e[*k].as_str() == Some(a0.as_str()));

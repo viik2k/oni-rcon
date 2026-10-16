@@ -640,3 +640,52 @@ def test_a_late_reply_is_reported():
         task.cancel()
 
     asyncio.run(go())
+
+
+def test_kicked_list_follows_kick_refused_and_pardon():
+    from oni_rcon.app import kick_left, note_kick, pardon_target
+    kicks, t = {}, 1_000_000.0
+    assert note_kick(kicks, {"event": "kick", "name": "Bravo", "id": "76561198000000001", "by": "RCON",
+                             "reason": "spawn camping", "seconds": 600}, t)
+    assert not note_kick(kicks, {"event": "kick", "name": "Slow", "id": "x", "by": "Server", "seconds": 0}, t)
+    note_kick(kicks, {"event": "refused", "name": "Bravo", "id": "76561198000000001", "ip": "203.0.113.4",
+                      "reason": "You were kicked: 9 minutes left"}, t)
+    k = kicks["76561198000000001"]
+    assert (k["ip"], kick_left(k, t + 61), kick_left(k, t + 600), pardon_target(k)) == \
+        ("203.0.113.4", "9m", "over", "76561198000000001")
+    note_kick(kicks, {"event": "refused", "name": "Charlie", "id": "c1", "ip": "198.51.100.7",
+                      "reason": "Kicked by an admin"}, t)  # a kick from before we connected
+    assert not note_kick(kicks, {"event": "refused", "name": "Delta", "id": "d1", "reason": "You are banned"}, t)
+    assert kick_left(kicks["c1"]) == "?"
+    assert note_kick(kicks, {"event": "pardon", "target": "198.51.100.7", "name": ["Charlie"], "by": "RCON"})
+    assert note_kick(kicks, {"event": "pardon", "target": "Bravo", "name": "Bravo", "by": "RCON"}) and not kicks
+    assert appmod.describe({"event": "pardon", "target": "x", "name": ["Bravo", "Bravo2"], "by": "Alice (RCON)"}, {}).plain \
+        == "PARDON  Bravo, Bravo2  may rejoin  by Alice (RCON)"
+
+
+def test_f4_pardons_a_kick():
+    async def go():
+        ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])
+        app = OniApp([Server(port=ports[0], password="demo")], by="pytest", intro=False)
+        async with app.run_test(size=(160, 48)) as pilot:
+            await settle(app, pilot, "players")
+            st, victim = app.stations[0], keep[0].players[0]
+            app.send(st, "kick", victim["name"], "camping")
+            for _ in range(60):
+                await pilot.pause(0.05)
+                if app.kick_rows:
+                    break
+            kicks = app.query_one("#kicks")
+            assert [str(c) for c in kicks.get_row_at(0)][:4] == [victim["name"], victim["player_id"], "camping", "pytest"]
+            app.action_tab("blacklist")
+            app.bl("pardon")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, Form) and app.screen.query_one("#field-target").value == victim["player_id"]
+            await pilot.press("enter")
+            for _ in range(60):
+                await pilot.pause(0.05)
+                if not app.kick_rows:
+                    break
+            assert not st.kicks and kicks.row_count == 0 and not keep[0].kicked
+
+    asyncio.run(go())
