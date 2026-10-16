@@ -5,7 +5,7 @@ import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
-import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
+import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
 import { num, pick, redactText, targetOf, type Dict, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
@@ -688,21 +688,31 @@ const ADD = "\0add", HELP = "\0help", AGAIN = "\0again", TYPE = "\0type"; // non
 async function telegramAdd() {
   const t = await oni.form("ADD A TELEGRAM CHAT", [["token", "Bot token (from @BotFather)", ""]], { verb: "NEXT", required: ["token"], secret: ["token"] });
   if (!t) return;
-  let chat: string | null = null;
-  while (chat === null) {
-    const found = await invoke<{ bot: string; chats: { id: string; label: string }[] }>("telegram_find_chats", { token: t.token });
-    const got = await oni.pick(found.chats.length ? `${found.bot} · WHICH CHAT?` : `${found.bot} · NO CHATS YET: message the bot, then look again`,
+  const look = () => invoke<{ bot: string; chats: { id: string; label: string }[] }>("telegram_find_chats", { token: t.token });
+  let found = await look(), chat = "";
+  while (!chat) {
+    // anyone who can message the bot shows up here under a name they chose; the kind of chat leading each line is Telegram's
+    const got = await oni.pick(found.chats.length ? `${found.bot} · WHICH CHAT? (anyone can message a bot: check the kind)` : `${found.bot} · NO CHATS YET: message the bot, then look again`,
       [...found.chats.map((c) => [`${c.label}  ${c.id}`, c.id] as [string, string]), ["Look again (after messaging the bot)", AGAIN], ["Type a chat ID or @channelname", TYPE]]);
     if (got === null) return;
-    if (got === TYPE) {
+    if (got === AGAIN) found = await look();
+    else if (got !== TYPE) chat = got;
+    else {
       const f = await oni.form("CHAT", [["chat", "Chat ID, or @channelname for a public channel", ""]], { verb: "NEXT", required: ["chat"] });
       if (!f) return;
-      chat = f.chat;
-    } else if (got !== AGAIN) chat = got;
+      if (chatOk(f.chat)) chat = f.chat.trim();
+      else oni.notify("A chat is its number (like -1001234567890) or a public channel's @name.", "TELEGRAM", "warning", 10);
+    }
   }
-  const n = await oni.form("NAME IT", [["name", "Name (letters, numbers, - _), like alerts", "alerts"]], { verb: "ADD", required: ["name"] });
+  // a name already in use is replaced only on purpose: rules that post to it would post here instead
+  const taken = Object.keys(oni.runner.chats);
+  let fresh = "alerts";
+  for (let i = 2; taken.includes(fresh); i++) fresh = `alerts-${i}`;
+  const n = await oni.form("NAME IT", [["name", "Name (letters, numbers, - _), like alerts", fresh]], { verb: "ADD", required: ["name"] });
   if (!n) return;
-  await invoke("telegram_add", { name: n.name, token: t.token, chat });
+  const name = n.name.trim().toLowerCase();
+  if (taken.includes(name) && !(await oni.confirm("REPLACE CHAT", `${name} is already set up (${oni.runner.chats[name]}). Rules that post to it will post to this chat instead.`, "REPLACE", true))) return;
+  await invoke("telegram_add", { name, token: t.token, chat });
   await oni.loadAutomation();
   oni.notify("Added: pick it and SEND A TEST to see it arrive.", "TELEGRAM");
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Runner } from "./runner";
-import { TELEGRAM_GAP, validate } from "./rules";
+import { MAX_QUEUED, TELEGRAM_GAP, validate } from "./rules";
 
 const setup = (phase = "playing") => {
   const calls: string[] = [], posts: string[] = [], tele: string[] = [];
@@ -72,5 +72,47 @@ describe("runner", () => {
     expect(sent).toEqual([0, TELEGRAM_GAP, TELEGRAM_GAP * 2]);
     expect(slept).toEqual([TELEGRAM_GAP, TELEGRAM_GAP]);
     expect(r.history.map((n) => n.result)[0]).toMatch(/Telegram could not be reached/);
+  });
+
+  const burst = (io: Partial<ConstructorParameters<typeof Runner>[0]> = {}) => {
+    const sent: string[] = [];
+    const r = new Runner({ call: async () => ({ ok: true }), discord: async () => 204, telegram: async (_n, t) => { sent.push(t); return 200; }, changed() {}, ...io }, () => 0, async () => {});
+    r.chats = { alerts: "x" };
+    const f = { rule: { id: "r", name: "t" } } as any;
+    const post = (text: string) => r.steps(f, [{ kind: "telegram", chat: "alerts", text }]);
+    return { r, sent, post };
+  };
+
+  it("holds at most MAX_QUEUED posts for a service, drops the rest, and catches up afterwards", async () => {
+    const { r, sent, post } = burst();
+    await Promise.all(Array.from({ length: MAX_QUEUED + 5 }, (_, i) => post(`m${i}`)));
+    expect(sent).toHaveLength(MAX_QUEUED);
+    expect(sent[0]).toBe("m0");
+    const said = r.history.map((n) => n.result);
+    expect(said.filter((x) => /skipped, \d+ posts are already waiting/.test(x))).toHaveLength(5);
+    await post("later");
+    expect(sent.at(-1)).toBe("later"); // the line drained, so the next one goes
+  });
+
+  it("a post that throws, even before it returns a promise, doesn't wedge the line", async () => {
+    let n = 0;
+    const { r, post } = burst({ telegram: (() => { if (n++ < 2) throw new Error("boom"); return Promise.resolve(200); }) as any });
+    await post("one");
+    await post("two");
+    await post("three");
+    expect(n).toBe(3);
+    expect(r.history.map((x) => x.result).filter((x) => /could not be reached/.test(x))).toHaveLength(2);
+    expect(r.history.at(-1)!.result).toMatch(/: done$/);
+  });
+
+  it("a name that is only on the object prototype is not a saved chat or webhook, and an empty text is not sent", async () => {
+    const { r, sent, post } = burst();
+    const f = { rule: { id: "r", name: "t" } } as any;
+    await r.steps(f, [{ kind: "telegram", chat: "constructor", text: "x" }, { kind: "telegram", chat: "__proto__", text: "x" }, { kind: "discord", webhook: "toString", text: "x" }]);
+    await post("   ");
+    expect(sent).toEqual([]);
+    const said = r.history.map((x) => x.result).join("\n");
+    expect(said).toMatch(/no chat called constructor.*no chat called __proto__.*no webhook called toString/);
+    expect(said).toMatch(/skipped, nothing to say/);
   });
 });

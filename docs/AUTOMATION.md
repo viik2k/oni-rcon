@@ -61,9 +61,26 @@ The token is kept by the app in `telegram.json` beside the config (readable only
 the bot's number and the chat. Rules post to it by name; **SEND A TEST MESSAGE** checks it, and a refusal says why (a
 revoked token, a bot removed from the chat). Posts are plain text, never previewed, and at least 3 seconds apart, inside
 Telegram's limit of 20 a minute to a group. Anyone with the token can post as the bot: send `/revoke` to @BotFather to
-cancel it. A bot with a webhook set elsewhere can't have its messages read to find the chat; type the chat's number instead.
+cancel it. If something else is already reading the bot's messages (a webhook, or another program), they can't be listed
+to find the chat; type the chat's number instead.
 
-The ready-made templates that post to Discord post to Telegram instead when a chat is all you've set up.
+**Check the kind of chat you pick.** Anyone can message a bot, or add it to a group, and then appears in the list under a
+name they chose. The line starts with the kind (`PRIVATE`, `GROUP` or `CHANNEL`), which is Telegram's and can't be set by
+them, and invisible or direction-changing characters in names are dropped. SEND A TEST MESSAGE shows where it lands. To
+stop strangers adding the bot to groups at all, send `/setjoingroups` to @BotFather and choose Disable.
+
+**What gets sent.** The words you wrote go as written. An `@` in a player's name or in their `!admin` text is replaced with a
+look-alike (`＠`) so it can't become a mention that pings someone. Everything else players type is relayed as typed, and
+Telegram makes links in it clickable, so treat them as you would in-game chat.
+
+**When Telegram is slow.** If Telegram says it is rate limiting (it says for how long, up to 30 seconds) or its gateway
+stumbles, the post is tried once more. Any other answer, a refusal included, is final and shown in the command log.
+
+The ready-made templates that post to Discord post to Telegram instead when a chat is all you've set up, with the words
+that say "Discord" changed to "Telegram" to match.
+
+If `telegram.json` is ever damaged (a bad hand edit), the console says so and won't write over it, since that would lose
+every other token in it. Fix it or delete it and add the chats again.
 
 This is one-way: the console tells Telegram things. The bot doesn't take commands back, so nobody in the chat can reach a
 server through it.
@@ -71,6 +88,8 @@ server through it.
 ## Safety limits
 
 - Chat from rules is held to **20 lines a minute per server**, across every rule.
+- Posts to Discord or Telegram wait their turn, 2 and 3 seconds apart. At most **20 wait for one service**; past that a
+  post is skipped and the command log says so, since a backlog would only deliver stale alerts, late.
 - *Shuffle teams* only runs while a match is being played.
 - A step that fails never stops the others. Each run, and what happened to each step, is written to the command log
   as `AUTO` and shown under RECENT in the list.

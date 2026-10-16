@@ -1,7 +1,7 @@
 // Carries out what the rules engine decides: the rcon commands, the Discord and Telegram posts and the waits, with the limits that
 // keep a misjudged rule from flooding a server. The console feeds it events; it hands every command to the IO it was
 // given, so it runs the same under test. From ibigs/oni-rcon's rules_run.py, by RifleJock.
-import { DISCORD_GAP, Engine, HISTORY, SAY_PER_MINUTE, TELEGRAM_GAP, VIP_GUARD, plan, stepWords, telegramWhy, validate, type Firing, type Roles, type Step } from "./rules";
+import { DISCORD_GAP, Engine, HISTORY, MAX_QUEUED, SAY_PER_MINUTE, TELEGRAM_GAP, VIP_GUARD, plan, stepWords, telegramWhy, validate, type Firing, type Roles, type Step } from "./rules";
 import type { Dict } from "./util";
 
 export interface IO {
@@ -26,7 +26,7 @@ export class Runner {
   /** Telegram chat name -> the bot and chat with the token hidden. */
   chats: Record<string, string> = {};
   private said = new Map<string, number[]>();
-  private lanes = new Map<string, { at: number; line: Promise<unknown> }>();
+  private lanes = new Map<string, { at: number; line: Promise<number>; waiting: number }>();
 
   constructor(private io: IO, private clock: () => number = () => Date.now() / 1000, private sleep = (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000))) {
     this.engine = new Engine([], {}, clock);
@@ -76,16 +76,25 @@ export class Runner {
     this.note(f.rule.id, f.server, results.join("; ") || "Nothing to do (nobody to tell).", f.rule.name);
   }
 
-  /** Posts to one service go out one at a time, `gap` seconds apart, so a burst of firings can't trip its rate limit. A failed post is 0. */
-  private async paced(service: string, gap: number, send: () => Promise<number>): Promise<number> {
-    const lane = this.lanes.get(service) ?? { at: -Infinity, line: Promise.resolve() };
+  /** Posts to one service go out one at a time, `gap` seconds apart, so a burst of firings can't trip its rate limit. A post
+   *  that fails, or throws, is 0 and the line carries on. With MAX_QUEUED already waiting the post is dropped (null). */
+  private paced(service: string, gap: number, send: () => Promise<number>): Promise<number | null> {
+    const lane = this.lanes.get(service) ?? { at: -Infinity, line: Promise.resolve(0), waiting: 0 };
     this.lanes.set(service, lane);
-    return (await (lane.line = lane.line.then(async () => {
-      const wait = gap - (this.clock() - lane.at);
-      if (wait > 0) await this.sleep(wait);
-      lane.at = this.clock();
-      return send().catch(() => 0);
-    }))) as number;
+    if (lane.waiting >= MAX_QUEUED) return Promise.resolve(null);
+    lane.waiting++;
+    return (lane.line = lane.line.then(async () => {
+      try {
+        const wait = gap - (this.clock() - lane.at);
+        if (wait > 0) await this.sleep(wait);
+        lane.at = this.clock();
+        return await send();
+      } catch {
+        return 0;
+      } finally {
+        lane.waiting--;
+      }
+    }));
   }
 
   private async step(s: Step): Promise<string> {
@@ -95,13 +104,16 @@ export class Runner {
       return words;
     }
     if (s.kind === "discord") {
-      if (!this.webhooks[s.webhook!]) return `${words}: no webhook called ${s.webhook}`;
+      if (!Object.hasOwn(this.webhooks, s.webhook!)) return `${words}: no webhook called ${s.webhook}`;
       const code = await this.paced("discord", DISCORD_GAP, () => this.io.discord(s.webhook!, s.text!));
+      if (code === null) return `${words}: skipped, ${MAX_QUEUED} posts are already waiting`;
       return words + (code >= 200 && code < 300 ? ": done" : code ? `: Discord answered ${code}` : ": Discord could not be reached");
     }
     if (s.kind === "telegram") {
-      if (!this.chats[s.chat!]) return `${words}: no chat called ${s.chat}`;
-      return `${words}: ${telegramWhy(await this.paced("telegram", TELEGRAM_GAP, () => this.io.telegram(s.chat!, s.text!)))}`;
+      if (!Object.hasOwn(this.chats, s.chat!)) return `${words}: no chat called ${s.chat}`;
+      if (!s.text!.trim()) return `${words}: skipped, nothing to say`;
+      const code = await this.paced("telegram", TELEGRAM_GAP, () => this.io.telegram(s.chat!, s.text!));
+      return `${words}: ${code === null ? `skipped, ${MAX_QUEUED} posts are already waiting` : telegramWhy(code)}`;
     }
     const [cmd, ...rest] = s.args!;
     if (cmd === "say" || cmd === "tell") {

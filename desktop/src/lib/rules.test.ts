@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, describe as describeRule, fill, plan, relay, sample, telegramWhy, validate, zoned } from "./rules";
+import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, chatOk, describe as describeRule, fill, plan, relay, sample, telegramWhy, validate, zoned } from "./rules";
 
 const rule = (o: Record<string, any>) => validate({ name: "t", ...o });
 const lobby = (e: Engine, key = "s1") => {
@@ -57,6 +57,25 @@ describe("rules", () => {
     expect(telegramWhy(0)).toBe("Telegram could not be reached");
     expect(telegramWhy(403)).toMatch(/\(403\): the bot was removed/);
     expect(telegramWhy(418)).toBe("Telegram refused it (418)");
+    expect(telegramWhy(503)).toMatch(/^Telegram failed \(503\)/);
+  });
+
+  it("a player can't turn their name or !admin text into a Telegram mention, and the rule's own words are untouched", () => {
+    const e = new Engine([]);
+    lobby(e);
+    const make = (then: object) => rule({ when: { type: "join" }, then: [then] });
+    const f = (r: any) => { const x = sample(e, r, "s1"); x.ctx.player = "@admin_bob"; x.ctx.args = "hey @all and @ops"; return x; };
+    const tg = make({ type: "telegram", chat: "alerts", message: "{player} says {args} (cc @ops)" });
+    expect(plan(e, f(tg))[0].text).toBe("\uFF20admin_bob says hey \uFF20all and \uFF20ops (cc @ops)");
+    expect(plan(e, f(tg))[0].text).not.toMatch(/(?<!cc )@/);
+    // Discord blocks pings itself (allowed_mentions), so its text is as filled; in-game chat has no mentions
+    expect(plan(e, f(make({ type: "discord", webhook: "h", message: "{player} says {args}" })))[0].text).toBe("@admin_bob says hey @all and @ops");
+  });
+
+  it("a chat is a number or a public @channel, as the Rust side holds it", () => {
+    // a chat is trimmed before it is checked, as the Rust side does when it saves one
+    for (const ok of ["-1001234567890", "123456789", "@oni_alerts", "123456789012345678", " -100 ", "@oni_alerts\n"]) expect(chatOk(ok), ok).toBe(true);
+    for (const bad of ["", "-", "12a", "@a", "@1abcdef", "oni_alerts", "@oni alerts", "-100 1", "@oni_alerts/../x", "1234567890123456789", "-1234567890123456789", 5, null]) expect(chatOk(bad), String(bad)).toBe(false);
   });
 
   it("fills placeholders on one line", () => {

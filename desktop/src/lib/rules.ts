@@ -16,6 +16,7 @@ export const MAX_LINE = 240;
 export const SAY_PER_MINUTE = 20; // per server, across every rule: a misjudged rule can't flood the chat
 export const DISCORD_GAP = 2; // seconds between Discord posts (Discord allows about 30 a minute per webhook)
 export const TELEGRAM_GAP = 3; // seconds between Telegram posts (a group allows 20 a minute, a single chat about 1 a second)
+export const MAX_QUEUED = 20; // posts waiting to go to one service; past that a misfiring rule would only deliver stale alerts, late
 export const HISTORY = 200;
 export const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 // moments (a medal, a join) aren't held back by default; states and alerts get a breather
@@ -151,10 +152,15 @@ export const TELEGRAM_STEPS = [
   "Anyone with the token can post as the bot, so keep it private. Send /revoke to @BotFather to cancel it.",
 ].join("\n");
 
+/** A chat Telegram takes: its number (negative for a group or channel) or a public channel's @name. The Rust side holds the same line. */
+export const CHAT = /^(?:-?\d{1,18}|@[A-Za-z][A-Za-z0-9_]{4,31})$/;
+export const chatOk = (c: unknown) => typeof c === "string" && CHAT.test(c.trim());
+
 /** What Telegram's HTTP status means for a post, in words (also what TEST says). */
 export function telegramWhy(code: number): string {
   if (code >= 200 && code < 300) return "done";
   if (!code) return "Telegram could not be reached";
+  if (code >= 500) return `Telegram failed (${code}): a problem on its side, it may work again soon`;
   const why: Record<number, string> = { 400: "check the chat, and that the bot is in it", 401: "the bot token is wrong or was revoked", 403: "the bot was removed from the chat or blocked", 404: "the bot token is wrong or was revoked", 429: "too many messages, slow down" };
   return `Telegram refused it (${code})` + (why[code] ? `: ${why[code]}` : "");
 }
@@ -756,6 +762,10 @@ export class Engine {
 }
 
 // --- what a firing does -----------------------------------------------------------------------------------------
+/** The facts a message is filled from, with each @ made a look-alike: a player's name or `!admin` text then can't become a
+ *  Telegram @mention that pings someone. The words an admin wrote into the rule itself are left alone. */
+const unmention = (ctx: Dict): Dict => Object.fromEntries(Object.entries(ctx).map(([k, v]) => [k, typeof v === "string" ? v.replace(/@/g, "\uFF20") : v]));
+
 /** One concrete thing to do: an RCON command on a server, a wait, or a Discord or Telegram post. */
 export interface Step { kind: "rcon" | "discord" | "telegram" | "wait"; server?: string; args?: string[]; webhook?: string; chat?: string; text?: string; seconds?: number }
 
@@ -791,7 +801,7 @@ export function plan(e: Engine, f: Firing): Step[] {
       case "cancel_vote": steps.push({ kind: "rcon", server: here, args: ["cancelvote"] }); break;
       case "shuffle": steps.push({ kind: "rcon", server: here, args: ["shuffle"] }); break;
       case "discord": steps.push({ kind: "discord", webhook: a.webhook, text: msg }); break;
-      case "telegram": steps.push({ kind: "telegram", chat: a.chat, text: msg }); break;
+      case "telegram": steps.push({ kind: "telegram", chat: a.chat, text: fill(a.message, unmention(f.ctx)) }); break;
       case "wait": steps.push({ kind: "wait", seconds: a.seconds }); break;
     }
   }
