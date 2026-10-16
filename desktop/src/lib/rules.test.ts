@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, fill, plan, sample, validate, zoned } from "./rules";
+import { Engine, MatchEvents, STARTERS, VIP_GUARD, cronDue, cronFields, describe as describeRule, fill, plan, relay, sample, telegramWhy, validate, zoned } from "./rules";
 
 const rule = (o: Record<string, any>) => validate({ name: "t", ...o });
 const lobby = (e: Engine, key = "s1") => {
@@ -24,6 +24,39 @@ describe("rules", () => {
     expect(() => rule({ when: { type: "join" }, then: [{ type: "say", to: "this", message: "hi {nobody}" }] })).toThrow(/unknown placeholder/);
     expect(() => rule({ when: { type: "join" }, then: [] })).toThrow(/1 to 8/);
     expect(() => rule({ when: { type: "at", cron: "61 * * * *" }, then: [{ type: "cancel_vote" }] })).toThrow();
+  });
+
+  it("a Telegram step needs a chat, plans a post, and reads back in words", () => {
+    expect(() => rule({ when: { type: "join" }, then: [{ type: "telegram", message: "hi" }] })).toThrow(/choose a Telegram chat/);
+    expect(() => rule({ when: { type: "join" }, then: [{ type: "telegram", chat: "alerts", message: "hi {nobody}" }] })).toThrow(/unknown placeholder/);
+    const r = rule({ when: { type: "join" }, then: [{ type: "telegram", chat: "alerts", message: "{player} joined {server}" }] });
+    const e = new Engine([r]);
+    lobby(e);
+    expect(plan(e, sample(e, r, "s1"))).toEqual([{ kind: "telegram", chat: "alerts", text: "ExamplePlayer joined Server One" }]);
+    expect(describeRule(r)).toContain('THEN  Post to Telegram: alerts, "{player} joined {server}"');
+  });
+
+  it("a template relays to Telegram when no Discord webhook is set up, and says so to the player", () => {
+    let posts = 0;
+    for (const s of STARTERS) {
+      const viaTelegram = relay(s, undefined, "alerts"), viaDiscord = relay(s, "hook", "alerts");
+      expect(JSON.stringify(viaTelegram)).not.toMatch(/Discord|"webhook"/);
+      expect(viaTelegram.then.filter((a: any) => a.type === "telegram").length).toBe(s.then.filter((a: any) => a.type === "discord").length);
+      expect(JSON.stringify(viaDiscord)).not.toMatch(/"telegram"/); // a webhook wins when both exist
+      if (!s.then.some((a: any) => a.type === "discord")) expect(viaTelegram).toBe(s);
+      else posts++;
+      expect(() => validate(viaTelegram)).not.toThrow();
+    }
+    expect(posts).toBeGreaterThanOrEqual(3);
+    const admin = relay(STARTERS.find((s) => s.name === "!admin with nobody on")!, undefined, "alerts");
+    expect(admin.then).toEqual([{ type: "telegram", chat: "alerts", message: "{player} on {server} asked for an admin: {args}" }, { type: "tell_player", message: "No admin is online; we've pinged Telegram." }]);
+  });
+
+  it("explains a Telegram status in words", () => {
+    expect(telegramWhy(200)).toBe("done");
+    expect(telegramWhy(0)).toBe("Telegram could not be reached");
+    expect(telegramWhy(403)).toMatch(/\(403\): the bot was removed/);
+    expect(telegramWhy(418)).toBe("Telegram refused it (418)");
   });
 
   it("fills placeholders on one line", () => {

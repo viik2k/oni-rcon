@@ -175,6 +175,7 @@ class Oni {
       return st?.online ? this.call(st, command, args) : Promise.resolve(null);
     },
     discord: (name, text) => invoke<number>("discord_post", { name, text }),
+    telegram: (name, text) => invoke<number>("telegram_post", { name, text }),
     changed: () => bump("auto"),
     noted: (n) => this.noteAutomation(n),
   });
@@ -232,7 +233,7 @@ class Oni {
   async loadAutomation() {
     try {
       const f = await invoke<Dict>("automation_load");
-      [this.rules, this.roles, this.runner.webhooks] = [f.rules, f.roles, f.webhooks];
+      [this.rules, this.roles, this.runner.webhooks, this.runner.chats] = [f.rules, f.roles, f.webhooks, f.telegram ?? {}];
       this.runner.load(this.rules, this.roles);
     } catch (e) {
       this.notify(String(e), "AUTOMATION", "error", 10);

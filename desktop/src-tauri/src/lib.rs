@@ -901,7 +901,8 @@ pub fn run() {
             launch_info, setup_probe, setup_check, setup_save, setup_host, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install,
-            automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post
+            automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
+            automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::Destroyed = e {
