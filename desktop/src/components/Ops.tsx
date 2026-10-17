@@ -5,7 +5,7 @@ import { oni, SPREE, useV } from "../engine";
 import { BAN_OPS, OPS, OP_GROUPS, TIPS, bl, op } from "../actions";
 import { norm, refsOf } from "../lib/forge";
 import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
-import { kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
+import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
 import { Btn, L, Panel, Table, useSize, type Row } from "./ui";
 
 const QUIET = new Set(["", "unknown", "none"]);
@@ -63,11 +63,12 @@ export function Operations() {
   useV((s) => s.forge);
   const [tref, { w: tw }] = useSize<HTMLDivElement>();
   const st = oni.cur, s: Dict = st.data.status ?? {}, vote: Dict = st.data.vote ?? {}, info = st.info ?? {};
+  const old = st.online ? behind(info.version, oni.reclaimer) : "";
   const credit = playing(st.where, s.map, s.mode);
   const fr: Dict | undefined = oni.health.frames?.[String(st.index)];
   const rows: [string, Line | string][] = [
     ["STATION", [[String(s.name || info.server || st.label), AMBER]]],
-    ["UPLINK", `${st.where}   v${info.version ?? "?"}`],
+    ["UPLINK", old ? [[`${st.where}   v${info.version}`, WHITE], [`   ${old} out: only players on v${info.version} can join`, AMBER]] : `${st.where}   v${info.version ?? "?"}`],
     ["PUBLIC ADDRESS", [[redactAddr(s.address, oni.redact), oni.redact ? RED : WHITE]]],
     ["PHASE", QUIET.has(String(s.phase ?? "").toLowerCase()) ? [["—", DIM]] : [[String(s.phase).replace(/_/g, " ").toUpperCase(), CYAN]]],
     ["MAP", String(s.map || "—")], ["MODE", String(s.mode || "—")],
