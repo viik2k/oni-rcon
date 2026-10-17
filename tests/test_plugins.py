@@ -277,6 +277,7 @@ def test_actions_confirm_first_and_send_only_permitted_rcon():  # 15, 17, 18, 19
                 return [c for c in src.calls if c["type"] == "action"]
             app.plugin_action(pg, acts["go-live"])  # 19: Esc sends nothing
             assert await until(pilot, lambda: bool(app.screen.query("#no")))
+            assert await until(pilot, lambda: app.screen.focused is not None)  # on_mount focuses it a beat after the push
             assert app.screen.focused.id == "no"  # ABORT is the default
             await pilot.press("escape")
             app.plugin_action(pg, acts["go-live"])  # nor does ABORT

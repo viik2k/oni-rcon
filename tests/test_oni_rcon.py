@@ -127,6 +127,7 @@ def test_app_against_fakes():
             assert app.query_one("#players").row_count == len(app.stations[0].players) > 0
             assert app.query_one("#op-passvote").disabled  # no vote under way
 
+            await until(pilot, lambda: app.query_one("#player-actions").display)  # shown once a player is selected
             await pilot.click("#pl-tell")  # the player file's buttons open the same dialogs as the keys
             await until(pilot, lambda: isinstance(app.screen, Form))
             assert isinstance(app.screen, Form)
