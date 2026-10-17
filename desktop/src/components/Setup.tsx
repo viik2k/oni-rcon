@@ -104,7 +104,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
     }
     if (what === "setup_host" && !hs?.exists) {
       const max = plan.max.trim() ? Number(plan.max) : 0;
-      if (!Number.isInteger(max) || max < 0 || max > 63) {
+      if (!Number.isInteger(max) || max < (plan.max.trim() ? 1 : 0) || max > 63) {
         setStatus([false, "Max players is a number from 1 to 63, or empty for the default."]);
         return;
       }

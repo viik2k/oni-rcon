@@ -226,6 +226,9 @@ class Oni {
     this.sel = 0;
     this.feed = [];
     this.log = [];
+    this.banner = null;
+    this.alertAt = -Infinity;
+    this.toasts = [];
     this.findings.clear();
     this.runner.history = [];
     this.runner.engine = new Engine();
@@ -573,6 +576,7 @@ class Oni {
 
   logJson(v: unknown) {
     this.log.push({ id: ++this.ids, json: v });
+    if (this.log.length > 5000) this.log.splice(0, this.log.length - 5000);
     bump("log");
   }
 
@@ -695,6 +699,7 @@ class Oni {
     if (i === this.sel || i < 0 || i >= this.stations.length) return;
     this.sel = i;
     this.cur.alerts = 0;
+    this.plugins.forEach((p) => (p.due = 0)); // their views are per server: ask again for this one
     this.fetch(this.cur, "status", "players", "nextmap", "vote", "bans", "vpn", "admins");
     bump("cards", "roster", "ops", "bans", "forge", "mast", "ui", ...(this.localOnly ? ["feed" as const] : []));
   }
@@ -758,15 +763,17 @@ class Oni {
   async pluginView(p: Plugin) {
     p.busy = true;
     bump("plugins");
+    const server = this.serverName(this.cur);
     try {
-      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server: this.serverName(this.cur) });
+      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server });
       if (v.error) p.error = v.error;
       else [p.view, p.error] = [v, ""];
     } catch (e) {
       p.error = String(e);
     }
     [p.busy, p.asked] = [false, true];
-    p.due = performance.now() + (this.tab === "plugins" ? PLUGIN_EVERY : PLUGIN_BADGE_EVERY);
+    // the server changed while it was asked: ask again for the one selected now
+    p.due = server !== this.serverName(this.cur) ? 0 : performance.now() + (this.tab === "plugins" ? PLUGIN_EVERY : PLUGIN_BADGE_EVERY);
     bump("plugins", "mast");
   }
 

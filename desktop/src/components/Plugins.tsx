@@ -98,8 +98,10 @@ function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) 
   if (b.type === "log") return <><div style={{ whiteSpace: "pre-wrap", color: DIM }}>{b.lines.length ? b.lines.map(rt).join("\n") : "—"}</div>{more}</>;
   if (b.type !== "table") return <div style={{ color: GREY }}>this version of Oni can't draw a '{b.name}' block</div>;
   const width = b.columns.length || Math.max(1, ...b.rows.map((r: Dict) => r.cells.length));
-  const rows: Row[] = b.rows.map((r: Dict, j: number) => ({ id: String(j), cells: Array.from({ length: width }, (_, k) => rt(r.cells[k] ?? "")) }));
-  const row = b.rows[Number(sel ?? 0)]?.id ?? null;
+  // selected by the plug-in's row id, so a refresh that moves the rows can't point an action at a different one
+  const key = (r: Dict, j: number) => r.id || `#${j}`;
+  const rows: Row[] = b.rows.map((r: Dict, j: number) => ({ id: key(r, j), cells: Array.from({ length: width }, (_, k) => rt(r.cells[k] ?? "")) }));
+  const row = sel === null ? b.rows[0]?.id ?? null : b.rows.find((r: Dict, j: number) => key(r, j) === sel)?.id ?? null;
   return (
     <>
       <div style={{ maxHeight: 360, display: "flex", flexDirection: "column" }}>

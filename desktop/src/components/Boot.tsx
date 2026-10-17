@@ -6,7 +6,7 @@ import { AMBER, DIM, GREEN, RED, WHITE } from "../art/palette";
 import { FILES, TOTAL, emblem, frame } from "../art/archive";
 import { paint } from "../art/pixels";
 import { decrypt } from "../art/palette";
-import { oni, TABS } from "../engine";
+import { fkey, oni, TABS } from "../engine";
 import { explain, gauge, type Line } from "../lib/util";
 import { L } from "./ui";
 
@@ -22,8 +22,8 @@ function useSkip(onDone: () => void) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       e.preventDefault();
-      const fn = /^F([1-7])$/.exec(e.key);
-      if (fn) oni.setTab(TABS[Number(fn[1]) - 1]); // straight to that tab
+      const tab = TABS.find((t) => fkey(t) === e.key);
+      if (tab) oni.setTab(tab); // straight to that tab
       onDone();
     };
     const t = setTimeout(() => window.addEventListener("keydown", key), 150);
