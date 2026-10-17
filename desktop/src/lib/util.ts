@@ -201,6 +201,12 @@ export function pluginSnapshot(status: Dict, players: Dict[], addresses: boolean
     score: sides(players).map(([team, players, score]) => ({ team, players, score })) };
 }
 
+/** What a plug-in hears back from one RCON command it had Oni send: the server's answer, with addresses blanked
+ *  unless its manifest grants them. */
+export function pluginReply(x: Dict, r: { ok: boolean | null; text?: string; data?: unknown }, addresses: boolean): Dict {
+  return { server: x.server, command: x.command, args: x.args, ok: r.ok, text: redactText(String(r.text ?? ""), !addresses), data: redactData(r.data ?? null, !addresses) };
+}
+
 /** A plug-in action's form answers (keyed p0, p1, ... in its params' order) as the contract types them: number as a
  *  JSON number, bool as true/false, the rest strings. A number that isn't one gives the words to say, and nothing is sent. */
 export function typedParams(params: Dict[], got: Dict): Dict | string {

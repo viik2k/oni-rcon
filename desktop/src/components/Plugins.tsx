@@ -2,7 +2,7 @@
 // and shapes them; this draws what they sent. Every string here is the plug-in's data, drawn as plain text (never
 // markup) and redacted like the rest of the console. The one exception is an html block: the plug-in's own page, in a
 // sandboxed frame with no network and no way into the app but the messages below.
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, GREEN, GREY, INK, RED, WHITE } from "../art/palette";
 import { badgeOf, oni, useV, type Plugin } from "../engine";
@@ -13,11 +13,11 @@ const BADGE: Record<string, string> = { ok: GREEN, warn: AMBER, alert: RED, off:
 
 /** Its entry in the list: a light, its name, and its badge or what's wrong. */
 function entry(p: Plugin): Row {
-  const why = p.m.state, b = badgeOf(p);
+  const why = p.m.state, b = badgeOf(p), down = p.m.mode === "session" && p.session?.state !== "running";
   const light: [string, string] = p.busy ? ["◌", AMBER] : why && why !== "needs approval" ? ["⊘", RED] : why ? ["?", AMBER]
-    : p.error ? ["○", RED] : !p.view ? ["○", DIM] : ["●", b ? BADGE[b.level] : GREEN];
+    : down ? ["○", p.session ? RED : DIM] : p.error ? ["○", RED] : !p.view ? ["○", DIM] : ["●", b ? BADGE[b.level] : GREEN];
   const tail: Line = why ? [[why === "needs approval" ? "NEEDS APPROVAL" : "DISABLED", why === "needs approval" ? AMBER : RED]]
-    : p.error ? [["NO ANSWER", RED]] : b?.text ? [[b.text, BADGE[b.level]]] : [];
+    : down ? [[p.session ? "RESTARTING" : "STARTING", AMBER]] : p.error ? [["NO ANSWER", RED]] : b?.text ? [[b.text, BADGE[b.level]]] : [];
   return { id: p.m.id, cells: [[light], [[p.m.name || p.m.id, why ? DIM : WHITE]], tail] };
 }
 
@@ -55,7 +55,9 @@ function Gate({ p }: { p: Plugin }) {
 const THEME = ["ink", "surface", "panel", "panel-2", "line", "amber", "cyan", "red", "green", "warn", "white", "grey", "dim"];
 
 /** An html block: the page from oniplugin:, sent its `data` (redacted) and the theme; it may ask back for one of the
- * view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}) or a height ({oni:"height", px}). */
+ * view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}), a height ({oni:"height", px}),
+ * RCON within its permissions ({oni:"rcon", id, server?, command, args}) or its own program ({oni:"call", ref, data}).
+ * It also hears the events its manifest asks for ({oni:"event"}) and what servers answered its actions' RCON. */
 function Frame({ p, b }: { p: Plugin; b: Dict }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [h, setH] = useState<number>(b.height || 420);
@@ -66,12 +68,25 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
   };
   useEffect(post, [b.data, oni.redact]);
   useEffect(() => {
+    const f = (m: Dict) => ref.current?.contentWindow?.postMessage(m, "*");
+    p.pages.add(f);
+    return () => void p.pages.delete(f);
+  }, [p]);
+  useEffect(() => {
+    const send = (m: Dict) => ref.current?.contentWindow?.postMessage(m, "*");
     const on = (e: MessageEvent) => {
       const m = e.data;
       if (e.source !== ref.current?.contentWindow || !m || typeof m !== "object") return;
       if (m.oni === "ready") post();
       else if (m.oni === "refresh") oni.pluginView(p);
       else if (m.oni === "height" && Number.isFinite(m.px)) setH(Math.max(40, Math.min(4000, m.px)));
+      // ponytail: no rate limit on a page's RCON or calls; each is logged, and only its permitted commands go out
+      else if (m.oni === "rcon" && typeof m.command === "string") oni.pluginPageRcon(p, m).then((r) => send({ oni: "rcon-reply", id: m.id ?? null, ...r }));
+      else if (m.oni === "call") {
+        const r = { oni: "reply", ref: m.ref ?? null };
+        invoke("plugin_call", { id: p.m.id, data: m.data ?? null, server: oni.serverName(oni.cur) })
+          .then((data) => send({ ...r, ok: true, data }), (err) => send({ ...r, ok: false, error: String(err) }));
+      }
       else if (m.oni === "action" && !oni.dialogs.length) { // only the actions its view declared, with their confirms
         const a = (p.view?.actions ?? []).find((x: Dict) => x.id === String(m.id));
         if (!a) return oni.notify(`Its page asked for '${String(m.id).slice(0, 40)}', which its view doesn't offer.`, (p.m.name || p.m.id).toUpperCase(), "warning");
@@ -131,6 +146,9 @@ function View({ p }: { p: Plugin }) {
         <span style={{ color: AMBER }}>{v.title || p.m.name}</span><span style={{ color: DIM }}>  {p.m.version}</span>
         {b?.text ? <span style={{ marginLeft: 12, padding: "0 6px", color: INK, background: BADGE[b.level] }}>{b.text}</span> : null}
       </div>
+      {p.m.mode === "session" && p.session?.state !== "running" ? (
+        <div style={{ color: AMBER }}>{p.session ? redactText(`stopped: ${p.session.detail} · restarting in ${p.session.retry_in}s`, oni.redact) : "starting…"}</div>
+      ) : null}
       {p.error ? <div style={{ color: RED }}>⚠ {redactText(p.error, oni.redact)}{p.view ? "   ·   showing its last answer" : ""}</div> : null}
       {p.note ? <div style={{ color: DIM }}>{redactText(p.note, oni.redact)}</div> : null}
       {!p.view && !p.error ? <div style={{ color: DIM }}>asking…</div> : null}

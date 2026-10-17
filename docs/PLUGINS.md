@@ -1,8 +1,9 @@
 # Plug-ins (design draft)
 
-Status: **service mode built in the desktop app** (`plugins.rs`, `Plugins.tsx`: the F10 tab, palette entries, the
-CONDITION badge; `--demo` has one, and [examples/plugins/hello](../examples/plugins/hello) is a real one). Not yet:
-session mode (a session manifest is listed, disabled). First plug-in: [Gryphon](../../gryphon) (automated moderation).
+Status: **service and session mode built in the desktop app** (`plugins.rs`, `session.rs`, `Plugins.tsx`: the F10 tab,
+palette entries, the CONDITION badge; `--demo` has one). Examples: [hello](../examples/plugins/hello) (service) and
+[greeter](../examples/plugins/greeter) (session). The terminal console has service mode only. First plug-in:
+[Gryphon](../../gryphon) (automated moderation).
 
 ## Why this shape
 
@@ -31,10 +32,10 @@ description = "Automated hate-speech moderation."
 [run]
 mode = "service"                      # service: runs elsewhere, Oni asks it things.  session: Oni starts it with the console.
 exec = "gryphon oni -c /etc/gryphon/gryphon.toml"   # a shell string, run the way health_cmd is (service: once per request; session: once)
-host = ""                             # service only: an ssh destination ("" = this machine), same as ping_log/health_cmd
+host = ""                             # an ssh destination ("" = this machine), same as ping_log/health_cmd
 
 [permissions]
-events = []                           # event kinds it wants pushed to it (session mode only): "chat", "join", "kill", ...
+events = []                           # event kinds pushed to its session process and its pages: "chat", "join", "kill", ...
 rcon   = ["pardon", "unban", "unmute"]  # RCON commands it may ask Oni to send for it (an action's `rcon` reply, or session mode)
 addresses = false                     # true = sees player IPs unredacted (redaction is on by default everywhere)
 ```
@@ -58,14 +59,22 @@ request to stdin and reads one JSON reply from stdout. Nothing stays connected, 
 session. Timeouts: 10 s for `view`, 30 s for `action`.
 
 **session**: for a plug-in that wants the live feed (a rules engine, a recorder). Oni starts `exec` with the console and
-stops it on quit, restarts it with backoff if it dies, and talks JSON lines over stdin/stdout. Only the event kinds in
-`permissions.events` are pushed; RCON goes through Oni's own links, so a plug-in costs no extra RCON slot.
+stops it on quit, restarts it with backoff if it dies (1 s, doubling to 60 s; back to 1 s after a minute's run), and
+talks JSON lines over stdin/stdout. Only the event kinds in `permissions.events` are pushed; RCON goes through Oni's own
+links, so a plug-in costs no extra RCON slot. Oni stops it by closing its stdin, then killing it 2 s later: **exit when
+stdin closes** (on Windows a process the plug-in starts itself outlives the kill).
 
 ## Protocol (api 1)
 
 Every message is one JSON object. Unknown keys are ignored.
 
-**view**: Oni → plug-in `{"type":"view","server":"3","snapshot":{...}}` (the selected server; `null` for none). Reply below.
+**view**: Oni → plug-in `{"type":"view","server":"3","snapshot":{...},"replies":[...]}` (the selected server; `null` for
+none). Reply below.
+
+`replies` (desktop app after 1.7.6) are what the servers answered the RCON its actions asked for since its last view
+(the last 20): `{"server", "command", "args", "ok", "text", "data"}`, with `ok` `null` for no reply and addresses
+blanked unless `permissions.addresses` is true. A view is asked for straight after an action that sent RCON, so a
+plug-in can query (`status`, a ban check) and draw the answer.
 
 `snapshot` (desktop app after 1.7.6; `null` while the server is offline, absent from the terminal console) is the selected
 server as the console sees it: `{"players": [...], "map": "guardian", "mode": "slayer", "score": [{"team": "red",
@@ -121,6 +130,13 @@ can be the terminal console's fallback without drawing twice.
   (any other id is refused), with its `confirm`/`danger` dialog, skipping the form when `params` is given;
   `{"oni": "refresh"}` asks for a new view; `{"oni": "height", "px": 300}` resizes the frame (40–4000);
   `{"oni": "ready"}` asks for the data again.
+- Also (desktop app after 1.7.6): `{"oni": "rcon", "id": 1, "server": "3", "command": "say", "args": ["hi"]}` sends one
+  RCON command, filtered like an action's (`server` defaults to the selected one), and is answered
+  `{"oni": "rcon-reply", "id": 1, "ok": true, "text": "…", "data": …}`. `{"oni": "call", "ref": 1, "data": {...}}` runs its
+  `exec` with `{"type": "call", "data": {...}, "server": "3"}` (a session plug-in answers with the request's `ref`) and is
+  answered `{"oni": "reply", "ref": 1, "ok": true, "data": <its reply>}` or `{… "ok": false, "error": "…"}`: the page's
+  way to fetch, store or compute without a view round trip. The page hears `{"oni": "event", "server", "ev"}` for each
+  event kind in `permissions.events`, and `{"oni": "rcon-reply", "replies": [...]}` after an action's RCON.
 
 **action**: Oni → plug-in `{"type":"action","id":"undo","params":{},"row":"<row id>","server":"3","snapshot":{...}}`. Reply:
 
@@ -134,8 +150,17 @@ logs each to the command log as `plug-in gryphon ▸ unmute …`, and drops the 
 the config; one that isn't there is dropped too. So a *service* plug-in can
 still move a player without holding an RCON slot or a password.
 
-**session mode adds**: Oni → plug-in `hello {api, servers:[{index,name}], granted}`, `event {server, ev}`, `rcon-reply {id, ok, text}`;
-plug-in → Oni `rcon {id, server, command, args}`, `view {…}` (push, replaces the panel), `notify {level, text}`, `log {text}`.
+**session mode adds** (each a JSON line with `type`):
+
+- Oni → plug-in: `hello {api, servers:[{index,name}], granted:{events, rcon, addresses}}` first;
+  `event {server, ev}` (`ev` the server's own event object, addresses blanked unless granted);
+  `rcon-reply {id, ok, text, data}` for each `rcon` it sent (`id` is its own);
+  and `view`, `action` and `call` requests as above, each with a `ref` number.
+- plug-in → Oni: the answer to a request, as for a service plug-in but carrying the request's `ref` (no answer in 10 s for
+  a view or 30 s for an action is an error; requests made while it's down fail with "it isn't running");
+  `rcon {id, server, command, args}` (filtered like an action's; one refused is answered `rcon-reply` with `ok: false`);
+  `view {…}` (pushed: replaces the panel at once); `notify {level: info | warning | error, text}` (a toast);
+  `log {text}` (the command log). A line over 1 MiB, or that isn't a JSON object, is ignored.
 
 ## Wire rules (both hosts must follow these exactly)
 
@@ -191,7 +216,7 @@ plug-in → Oni `rcon {id, server, command, args}`, `view {…}` (push, replaces
 2. **Host in the terminal console** (first: Python iterates fastest, and it proves the protocol): `plugins.py` and a Textual
    panel, service mode only, plus Gryphon's `gryphon oni`.
 3. **Host in the desktop app**: `plugins.rs` (discovery, trust, run, ssh reuse) and a React `PluginPanel`, against the same fixtures.
-4. **Session mode** and the palette/CONDITION hooks.
+4. **Session mode** and the palette/CONDITION hooks. Done in the desktop app.
 5. Later, maybe: automation rules (F9) that call a plug-in action, and moving Health's `health_cmd` onto the same path.
 
 ## Gryphon's side (independent of Oni; can be built now)

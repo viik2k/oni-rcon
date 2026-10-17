@@ -111,8 +111,6 @@ pub fn load(folder: &Path) -> Manifest {
         "the manifest has no name".into()
     } else if m.mode != "service" && m.mode != "session" {
         "run.mode must be \"service\" or \"session\"".into()
-    } else if m.mode == "session" {
-        "session plug-ins aren't supported by this version of Oni yet".into()
     } else if exec.is_none_or(|e| e.trim().is_empty()) {
         "run.exec must be the command line to run".into()
     } else if host.is_some_and(|h| h.is_none()) {
@@ -161,9 +159,8 @@ pub fn state(m: &Manifest, trusted: &Value) -> String {
 }
 
 // --- running one ---------------------------------------------------------------------------------------------------
-/// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
-/// otherwise the last stderr line, scrubbed of addresses.
-pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
+/// Its `exec`, here in its folder or over ssh, with all three pipes. Killed when dropped.
+pub fn command(m: &Manifest) -> Result<tokio::process::Command, String> {
     let mut c = if m.host.is_empty() {
         let mut c = crate::util::shell(&m.exec);
         if let Some(f) = &m.folder {
@@ -177,22 +174,39 @@ pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, 
         c
     };
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    Ok(c)
+}
+
+/// Read a pipe to its end, keeping the last 4 KiB, so a chatty stderr never blocks the process.
+pub fn tail(mut r: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> tokio::task::JoinHandle<Vec<u8>> {
+    tokio::spawn(async move {
+        let (mut tail, mut buf) = (Vec::new(), [0u8; 65536]);
+        while let Ok(n) = r.read(&mut buf).await {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&buf[..n]);
+            let cut = tail.len().saturating_sub(4096);
+            tail.drain(..cut);
+        }
+        tail
+    })
+}
+
+/// Its last stderr line, scrubbed of addresses, else `fallback`.
+pub fn last_err(err: &[u8], fallback: String) -> String {
+    String::from_utf8_lossy(err).trim().lines().last().map(|l| scrub(&cut(l, 300))).unwrap_or(fallback)
+}
+
+/// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
+/// otherwise the last stderr line, scrubbed of addresses.
+pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
+    let mut c = command(m)?;
     let mut child = c.spawn().map_err(|e| scrub(&e.to_string()))?; // killed on drop: a timeout leaves nothing running
-    let (mut stdin, mut stdout, mut stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let (mut stdin, mut stdout, stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let line = format!("{request}\n");
     let exchange = async {
-        let errs = tokio::spawn(async move { // read to the end so a chatty stderr never blocks it; keep the tail
-            let (mut tail, mut buf) = (Vec::new(), [0u8; 65536]);
-            while let Ok(n) = stderr.read(&mut buf).await {
-                if n == 0 {
-                    break;
-                }
-                tail.extend_from_slice(&buf[..n]);
-                let cut = tail.len().saturating_sub(4096);
-                tail.drain(..cut);
-            }
-            tail
-        });
+        let errs = tail(stderr);
         let _ = stdin.write_all(line.as_bytes()).await; // one that doesn't read its request can still answer
         drop(stdin);
         let mut out = Vec::new();
@@ -209,16 +223,11 @@ pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, 
     if let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(&text) {
         return Ok(v);
     }
-    let err = String::from_utf8_lossy(&err);
-    Err(match err.trim().lines().last() {
-        Some(last) => scrub(&cut(last, 300)),
-        None if !text.is_empty() && code == 0 => "its reply isn't JSON".into(),
-        None => format!("exited {code}"),
-    })
+    Err(last_err(&err, if !text.is_empty() && code == 0 { "its reply isn't JSON".into() } else { format!("exited {code}") }))
 }
 
 // --- shaping what it sent ------------------------------------------------------------------------------------------
-fn cut(s: &str, n: usize) -> String {
+pub(crate) fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
@@ -231,7 +240,7 @@ fn s(v: Option<&Value>) -> String {
     }
 }
 
-fn sn(v: Option<&Value>, n: usize) -> String {
+pub(crate) fn sn(v: Option<&Value>, n: usize) -> String {
     cut(&s(v), n)
 }
 
@@ -520,7 +529,7 @@ mod tests {
         assert_eq!((got[0].name.as_str(), got[0].rcon.clone()), ("Echo", vec!["say".to_string()]));
         assert!(got[1].error.contains("needs plug-in api 2"));
         assert!(got[2].error.contains("isn't valid TOML"));
-        assert!(got[3].error.contains("session plug-ins"));
+        assert_eq!((got[3].error.as_str(), got[3].mode.as_str()), ("", "session"));
         assert!(got[4].error.contains("lower-case"));
         assert!(got[5].error.contains("no oni-plugin.toml"));
     }
