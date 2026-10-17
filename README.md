@@ -34,6 +34,7 @@ resolution, and lighter on a big fleet. Installers are on the [releases page](ht
 | **F5 Console** | Type any RCON command (`help` lists them) with ↑/↓ history. The command log records everything sent from this session and its replies. The message in `say`, `tell`, `kick` and `servername` is the rest of the line as typed, sent as one argument, so it needs no quotes |
 | **F6 Forge** | The [ReclaimerForge](https://www.reclaimerforge.net) catalog of community maps, gametypes and playlists, read with your own API key. Order it by trending, rising, latest, updated, downloads, rated, unrated or overlooked (trending and rising over the last 24 hours, 7 days or 30 days), or see the collections ReclaimerForge is featuring now, and search it. Each listing shows its type, authors, thumbs up and down, recent downloads, and whether it runs on the selected server's version; its file lists every version, and any of them installs on the selected server, every file checked against Forge's manifest. In the desktop app, `p` publishes your own files to Forge, and MINE lists your listings to update, edit, withdraw or delete. `i` install on this server · `l` load it now · `s` sort · `w` window · `/` search · `n` more · `k` key · `y` copy ID · `p` publish · `u` new version · `e` edit · `x` withdraw (desktop) |
 | **F7 Health** | Whether the servers are crashing and the box is coping. CRASHES lists each server's latest crashes read from its log (time, server, class, how many players were on, whether the RCON connection dropped with it); HOST shows free memory, swap, the kernel's `oom_kill` counter and each container's start time and OOMKilled flag; WORKAROUND shows whether an optional systemd service is running. A new crash, an OOM kill or memory falling under your limit flashes a banner over every tab, goes in the feed and beeps. Needs `health_cmd` in the config: [see below](#health-watch) |
+| **F10 Plug-ins** | Panels drawn by programs you add, such as Gryphon's moderation log: each one's status, tables and buttons, and a badge that can turn CONDITION amber or red. Off until you name one in the config and approve it: [see below](#plug-ins) |
 
 Also:
 
@@ -453,6 +454,22 @@ oni-rcon keeps to the key's quota (120 requests a minute): it reads the rate-lim
 `429` for as long as Forge asks, and keeps recent replies so it doesn't ask twice. Those replies and every verified
 download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` elsewhere.
 
+## Plug-ins
+
+A plug-in is a separate program that draws its own panel on F10, in any language: Oni runs it once per request (on
+this machine, or over ssh like `health_cmd`), sends one line of JSON and reads one back. Its actions show up as buttons
+and in the palette, and it can ask Oni to send RCON commands for it, but only the ones its manifest lists.
+
+Put its folder in `plugins/` next to your config file and name it at the top of the config, above the first `[table]`:
+
+```toml
+plugins = ["hello"]
+```
+
+The first time, F10 shows what it runs, where, and what it may send, and asks you to approve it; any change to its
+`oni-plugin.toml` asks again. [`examples/plugins/hello`](examples/plugins/hello) is a working one in a single Python
+file. [docs/PLUGINS.md](docs/PLUGINS.md) is the protocol.
+
 ## Security
 
 - **RCON is plain text.** Keep the server's `[rcon] address` on `127.0.0.1` and reach it with `--ssh` (or a VPN). Never
@@ -462,6 +479,8 @@ download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` else
 - **F7 only reads.** `health_cmd` is your command, run as you on your host: keep it to `docker logs`, `docker inspect`
   and the like. oni-rcon adds only `systemctl is-active` and `journalctl` for `health_service`. Player IDs and addresses
   in logs are stripped before anything is shown or kept.
+- **A plug-in runs as you.** Oni doesn't sandbox it: approve only one you'd run yourself. What it sends is shown as
+  plain text, with addresses redacted, and the only RCON it can have sent is what its manifest lists.
 - **Mind the tool limit.** A server admits 4 RCON tools at once, and oni-rcon uses one connection per server.
 - **Kicks and bans name you.** They go into the server's admin log under your `--by` name.
 - **Your Forge key goes to reclaimerforge.net and nowhere else.** It travels in the `Authorization` header over HTTPS:
@@ -475,12 +494,13 @@ download sit in `%LOCALAPPDATA%\oni-rcon` on Windows or `~/.cache/oni-rcon` else
 | Key | Action |
 |---|---|
 | `F1`–`F7` | Assets · Intercepts · Operations · Blacklist · Console · Forge · Health |
+| `F10` | Plug-ins |
 | `1`–`9` | select server |
 | `g` | go to any server: the list puts the busiest first and filters as you type |
 | `Ctrl+F` | find a player on any server |
 | `F8` | the Superintendent's findings (the desktop app) |
 | `Ctrl+B` | broadcast |
-| `Ctrl+R` | refresh now (on F7, read every health report now) |
+| `Ctrl+R` | refresh now (on F7, read every health report now; on F10, ask every plug-in) |
 | `Ctrl+P` | command palette |
 | `?` | the field manual: what everything does, in plain words |
 | `x` | show or hide player addresses |

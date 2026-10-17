@@ -1,6 +1,8 @@
 # Plug-ins (design draft)
 
-Status: **draft, nothing built yet.** First plug-in: [Gryphon](../../gryphon) (automated moderation).
+Status: **service mode built in the terminal console** (`plugins.py`, the F10 tab, palette entries, the CONDITION badge;
+`oni-rcon --demo` has one, and [examples/plugins/hello](../examples/plugins/hello) is a real one). Not yet: the desktop app
+and session mode (a session manifest is listed, disabled). First plug-in: [Gryphon](../../gryphon) (automated moderation).
 
 ## Why this shape
 
@@ -106,21 +108,26 @@ plug-in → Oni `rcon {id, server, command, args}`, `view {…}` (push, replaces
 
 - **Running a service plug-in.** `exec` is a shell string. Without `host`, run it on this machine through the platform shell;
   with `host`, run `ssh -o BatchMode=yes -o ConnectTimeout=15 <host> "<exec>"`. Same as `health.run`, except stdin is a pipe:
-  write the request as one JSON line, then close stdin.
+  write the request as one JSON line, then close stdin. A local plug-in runs with its own folder as the working directory.
 - **Reading the reply.** The whole of stdout is one JSON object. If it parses, it wins even when the exit code is non-zero.
-  If it doesn't parse, or nothing was printed, show an error: the last stderr line (scrubbed of addresses), or "exited N".
+  If it doesn't parse, or nothing was printed, show an error: the last stderr line (scrubbed of addresses), or "exited N",
+  or "its reply isn't JSON" when it exited 0 with no stderr.
   stderr is otherwise never shown. A timeout kills the process and shows "no answer in Ns".
 - **Failures.** A reply may be `{"error": "words"}` (view) or `{"ok": false, "error": "words"}` (action). Shown as a toast and,
   for a view, a greyed panel. Never a traceback.
-- **Caps.** stdout 1 MiB; 500 table rows (the rest dropped, with a "+N more" line); 10 000 characters per string; 20 actions;
-  10 params per action. Over the cap is truncated, never an error.
+- **Caps.** 500 table rows (the rest dropped, with a "+N more" line); 10 000 characters per string; 20 actions;
+  10 params per action. Over these caps is truncated, never an error. stdout over 1 MiB is the one exception: an error
+  ("its reply is over 1 MiB"), because cut JSON can't be read.
+- **Values.** Params arrive as: `number` a JSON number, `bool` `true`/`false`, the rest strings. A `row_actions` id not in
+  `actions` gets its id, upper-cased, as the button label.
 - **Plain text only.** Every string a plug-in sends is data, never markup: not Rich/Textual markup, not HTML, not Markdown.
   Escape or use text nodes. This is the one security rule that is easy to get wrong in the console.
 - **Redaction.** Anything shown from a plug-in goes through the same address redaction as the rest of the UI (on by default).
   `permissions.addresses` only decides whether Oni *sends* unredacted addresses to the plug-in.
 - **Ids.** A plug-in id is its folder name, `[a-z0-9-]+`. A row `id` is opaque to Oni: the plug-in chooses it and gets it
   back as `row`. An unknown `api` greater than Oni's is listed, disabled, with the reason.
-- **Selected server.** `server` is the console's selected server name, or `null`. A plug-in may ignore it.
+- **Selected server.** `server` is the console's selected server's config `name` (its address when it has none), or
+  `null`. A plug-in may ignore it.
 
 ## Config and storage
 
@@ -131,7 +138,9 @@ plug-in → Oni `rcon {id, server, command, args}`, `view {…}` (push, replaces
   only its own keys on save, so it must be changed to load, modify and write, keeping keys it doesn't know. Each front-end
   keeps its own trust record; approving in one does not approve in the other.
 - **Refresh.** On open, on Ctrl+R, after an action, and every 30 s while the tab is open. Never in the background when closed,
-  except a plug-in with a `badge` that feeds CONDITION: that one is polled every 60 s while the console is open.
+  except a plug-in with a `badge` that feeds CONDITION: that one is polled every 60 s while the console is open. Each
+  approved plug-in is asked once soon after start, to learn whether it has a badge. One whose last answer was an error
+  adds no badge. The `--demo` plug-in counts as approved.
 
 ## What the user sees
 

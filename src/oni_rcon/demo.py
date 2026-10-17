@@ -385,3 +385,64 @@ def start_in_thread(password: str = "demo", content_dirs: list | None = None, ho
     threading.Thread(target=asyncio.run, args=(main(),), daemon=True).start()
     ready.wait(10)
     return ports
+
+
+class DemoPlugin:
+    """A pretend Gryphon for --demo's F10, answered in this process: the same requests and replies a real plug-in
+    sends over stdin and stdout, so the tab works with nothing installed."""
+    WORDS = ("nazi", "slur")
+
+    def __init__(self):
+        self.live, self.log = False, ["daemon started", "word list loaded: 412 words"]
+        now = time.time()
+        self.rows = [{"id": "%032x" % random.getrandbits(128), "at": now - m * 60, "server": s, "what": w, "who": n, "why": y}
+                     for m, s, w, n, y in [(12, 0, "mute 10m", "Rook", "chat [hate] 'n***'"),
+                                           (47, 1, "kick", "Static", "name [slur]"),
+                                           (95, 0, "ban 1d", "Cinder", "chat [hate], third strike")]]
+
+    @classmethod
+    def setup(cls):
+        from .plugins import Manifest, PluginSetup
+        m = Manifest("gryphon-demo", name="Gryphon (demo)", version="0.1.0", author="Arche Labs",
+                     description="Automated moderation, pretend.", exec="(answered inside oni-rcon for --demo)",
+                     rcon=["unmute", "unban", "pardon"])
+        return PluginSetup([m], source=cls())
+
+    def view(self) -> dict:
+        return {"title": "Gryphon", "badge": {"level": "warn" if self.live else "ok", "text": "LIVE" if self.live else "DRY-RUN"},
+                "blocks": [
+                    {"type": "kv", "rows": [["Mode", "live" if self.live else "dry-run"], ["Servers online", "3 / 3"],
+                                            ["Last action", f"{int((time.time() - self.rows[0]['at']) // 60)} min ago"
+                                             if self.rows else "none"]]},
+                    {"type": "table", "id": "actions", "columns": ["Time", "Server", "Action", "Player", "Why"],
+                     "rows": [{"id": r["id"], "cells": [time.strftime("%H:%M", time.localtime(r["at"])),
+                                                        str(r["server"] + 1), r["what"], r["who"], r["why"]]}
+                              for r in self.rows], "row_actions": ["undo"]},
+                    {"type": "log", "lines": self.log[-8:]},
+                    {"type": "text", "text": "A pretend plug-in: nothing here runs as a program. See docs/PLUGINS.md "
+                                             "for how a real one is written."}],
+                "actions": [
+                    {"id": "check", "label": "Check a message", "params": [{"name": "text", "label": "Message", "type": "text"}]},
+                    {"id": "go-dry", "label": "Go dry-run"} if self.live else
+                    {"id": "go-live", "label": "Go live", "danger": True, "confirm": "Gryphon will really kick, mute and ban."}]}
+
+    async def call(self, m, request: dict, timeout: float) -> dict:
+        await asyncio.sleep(0.2)  # a real one takes a moment
+        if request.get("type") == "view":
+            return self.view()
+        act, params = request.get("id"), request.get("params") or {}
+        if act == "check":
+            text = str(params.get("text", ""))
+            hit = next((w for w in self.WORDS if w in text.lower()), None)
+            return {"ok": True, "toast": f"Would act: hate [{hit}]" if hit else "Nothing in the list matches that."}
+        if act in ("go-live", "go-dry"):
+            self.live = act == "go-live"
+            self.log.append(f"mode set to {'live' if self.live else 'dry-run'}")
+            return {"ok": True, "toast": "Gryphon is live." if self.live else "Gryphon is in dry-run.", "view": self.view()}
+        if act == "undo" and (row := next((r for r in self.rows if r["id"] == request.get("row")), None)):
+            self.rows.remove(row)
+            self.log.append(f"undid {row['what']} on {row['who']}")
+            cmd = "unmute" if row["what"].startswith("mute") else "unban" if row["what"].startswith("ban") else "pardon"
+            ask = [{"server": request["server"], "command": cmd, "args": [row["id"]]}] if request.get("server") else []
+            return {"ok": True, "toast": f"Undid {row['who']}'s {row['what'].split()[0]}.", "rcon": ask}
+        return {"ok": False, "error": "pick a row first" if act == "undo" else f"no action {act!r}"}

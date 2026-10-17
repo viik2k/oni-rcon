@@ -69,7 +69,7 @@ Write each as a test with a tiny fake plug-in script (a Python one-liner that pr
 | 10 | stdout valid JSON, exit 1 | The JSON wins |
 | 11 | No stdout, exit 3, stderr last line contains an IP | Error "<last line>" with the address scrubbed |
 | 12 | Never exits | Killed at the timeout (10 s view, 30 s action); "no answer in 10s" |
-| 13 | stdout over 1 MiB / 600 table rows / 20 000-char string | Truncated to the caps, "+100 more" line, no error |
+| 13 | 600 table rows / 20 000-char string; stdout over 1 MiB | Truncated to the caps, "+100 more" line, no error; over 1 MiB is an error ("its reply is over 1 MiB") |
 | 14 | A string containing `[bold red]x[/]` or `<b>` | Drawn literally |
 | 15 | Action reply asks for `rcon` command not in `permissions.rcon` | Dropped, toast says so; nothing sent |
 | 16 | Action reply asks for `unmute` on a server name not in the config | Dropped |
