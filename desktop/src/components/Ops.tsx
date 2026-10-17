@@ -86,11 +86,14 @@ export function Operations() {
   const here = norm(s.map);
   const pulledRefs = new Set<string>();
   for (const [lid, e] of Object.entries((oni.forgeState.servers?.[st.where] ?? {}) as Dict)) if (pulled(lid, e)) refsOf(e).forEach((r) => pulledRefs.add(r));
-  let marked = false;
-  const rot: Row[] = (st.data.nextmap?.rotation ?? []).map((e: Dict, i: number) => {
-    const mp = String(pick(e, "map", "base_map") ?? "?"), md = String(pick(e, "mode", "game") ?? "?");
-    const now = !marked && norm(mp) === here;
-    marked ||= now;
+  const entries: Dict[] = st.data.nextmap?.rotation ?? [];
+  const mapOf = (e: Dict) => String(pick(e, "map", "base_map") ?? "?"), modeOf = (e: Dict) => String(pick(e, "mode", "game") ?? "?");
+  // the entry playing: its map and mode both, else the first with its map (a map can be in the rotation twice)
+  const both = entries.findIndex((e) => norm(mapOf(e)) === here && norm(modeOf(e)) === norm(s.mode));
+  const at = both >= 0 ? both : entries.findIndex((e) => norm(mapOf(e)) === here);
+  const rot: Row[] = entries.map((e: Dict, i: number) => {
+    const mp = mapOf(e), md = modeOf(e);
+    const now = i === at;
     const flag = (v: string): Line => [[v, now ? AMBER : undefined], ...(pulledRefs.has(norm(v)) ? [["  ⚠ WITHDRAWN", RED]] as Line : [])];
     return { id: String(i), cells: [[[now ? "▶" : String(i + 1), now ? AMBER : undefined]], flag(mp), flag(md)] };
   });

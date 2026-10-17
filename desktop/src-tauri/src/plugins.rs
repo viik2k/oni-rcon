@@ -413,7 +413,7 @@ pub async fn demo_call(request: &Value) -> Value {
                 let r = d.rows.remove(i);
                 d.log.push(format!("undid {} on {}", r.3, r.4));
                 let cmd = if r.3.starts_with("mute") { "unmute" } else if r.3.starts_with("ban") { "unban" } else { "pardon" };
-                let ask = if request["server"].is_string() { json!([{"server": request["server"], "command": cmd, "args": [r.0]}]) } else { json!([]) };
+                let ask = if request["server"].is_string() { json!([{"server": request["server"], "command": cmd, "args": [r.4]}]) } else { json!([]) };
                 json!({"ok": true, "toast": format!("Undid {}'s {}.", r.4, r.3.split(' ').next().unwrap_or_default()), "rcon": ask})
             }
             None => json!({"ok": false, "error": "pick a row first"}),
@@ -522,5 +522,6 @@ mod tests {
         let r = demo_call(&json!({"type": "action", "id": "undo", "row": row, "server": "127.0.0.1:1"})).await;
         let n = normalise_action(&r, &demo_manifest().rcon, &["127.0.0.1:1".into()]);
         assert_eq!((n["rcon"][0]["command"].clone(), n["dropped"].clone()), (json!("unmute"), json!([])));
+        assert_eq!(n["rcon"][0]["args"], json!(["Rook"])); // the player, not the row's id
     }
 }
