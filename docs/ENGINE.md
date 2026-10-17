@@ -1,7 +1,7 @@
 # Plug-in engine: where it stands and what to build on it
 
 Companion to [PLUGINS.md](PLUGINS.md) (the protocol) and [PLUGINS-BUILD.md](PLUGINS-BUILD.md) (the build brief). This file
-says what the engine in desktop 1.7.6 can and can't do, the small changes that would unlock more, and plug-ins worth writing.
+says what the engine in desktop 1.8.0 can and can't do, the small changes that would unlock more, and plug-ins worth writing.
 
 ## What the engine does today
 

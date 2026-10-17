@@ -90,12 +90,12 @@ Every message is one JSON object. Unknown keys are ignored.
 **view**: Oni → plug-in `{"type":"view","server":"3","snapshot":{...},"replies":[...]}` (the selected server; `null` for
 none). Reply below.
 
-`replies` (desktop app after 1.7.6) are what the servers answered the RCON its actions asked for since its last view
+`replies` (desktop 1.8.0 and later) are what the servers answered the RCON its actions asked for since its last view
 (the last 20): `{"server", "command", "args", "ok", "text", "data"}`, with `ok` `null` for no reply and addresses
 blanked unless `permissions.addresses` is true. A view is asked for straight after an action that sent RCON, so a
 plug-in can query (`status`, a ban check) and draw the answer.
 
-`snapshot` (desktop app after 1.7.6; `null` while the server is offline, absent from the terminal console) is the selected
+`snapshot` (desktop 1.8.0 and later; `null` while the server is offline, absent from the terminal console) is the selected
 server as the console sees it: `{"players": [...], "map": "guardian", "mode": "slayer", "score": [{"team": "red",
 "players": 4, "score": 31}, ...]}`. `players` are the server's own player objects (`name`, `player_id`, `team`, `score`,
 `kills`, `deaths`, ...), with addresses blanked unless `permissions.addresses` is true. `score` is empty in a
@@ -137,7 +137,7 @@ can be the terminal console's fallback without drawing twice.
   its own CSP: inline `<script>` and `<style>`, `data:`/`blob:` images, fonts and media, and **no network at all** (no
   fetch, no external scripts, styles or images) and no forms (use buttons). It can't reach Oni, Tauri or the page around it.
 - `height` is the frame's starting height in pixels (default 420); the page can change it.
-- `"persist": true` (desktop app after 1.7.6) keeps the page running, out of sight, while F10 is closed or another plug-in
+- `"persist": true` (desktop 1.8.0 and later) keeps the page running, out of sight, while F10 is closed or another plug-in
   is selected, so its timers keep going (a countdown, a scheduled broadcast). Without it the page is unloaded then. Its
   `action` messages still work while hidden; a `danger`/`confirm` action shows its dialog over whatever tab is open.
   Views are still asked for only as above, so `data` doesn't change while F10 is closed (unless it has a badge).
@@ -149,7 +149,7 @@ can be the terminal console's fallback without drawing twice.
   (any other id is refused), with its `confirm`/`danger` dialog, skipping the form when `params` is given;
   `{"oni": "refresh"}` asks for a new view; `{"oni": "height", "px": 300}` resizes the frame (40–4000);
   `{"oni": "ready"}` asks for the data again.
-- Also (desktop app after 1.7.6): `{"oni": "rcon", "id": 1, "server": "3", "command": "say", "args": ["hi"]}` sends one
+- Also (desktop 1.8.0 and later): `{"oni": "rcon", "id": 1, "server": "3", "command": "say", "args": ["hi"]}` sends one
   RCON command, filtered like an action's (`server` defaults to the selected one), and is answered
   `{"oni": "rcon-reply", "id": 1, "ok": true, "text": "…", "data": …}`. `{"oni": "call", "ref": 1, "data": {...}}` runs its
   `exec` with `{"type": "call", "data": {...}, "server": "3"}` (a session plug-in answers with the request's `ref`) and is
