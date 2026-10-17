@@ -51,6 +51,25 @@ manifest in `prefs.json`; **any change to the manifest asks again**. Oni never i
 itself, and the self-updater never touches `plugins/`. `permissions` limits what Oni will *do for* a plug-in (events it
 forwards, RCON commands it sends, whether it sees addresses); it is not a promise about what the process itself can do.
 
+## Updates (desktop app)
+
+A plug-in folder that is a `git clone` follows its upstream branch. Install one with
+
+```
+git clone https://github.com/you/your-plugin <config dir>/plugins/your-plugin
+```
+
+Each time the app starts or its window is reloaded, and on Ctrl+R on F10, Oni runs `git fetch` in each such folder. When the
+upstream branch has commits the folder hasn't, F10 marks the plug-in ▲ and, the first time its panel is on screen, asks
+**UPDATE <NAME>?** with the commits' subjects and where they came from. UPDATE fast-forwards the folder
+(`git merge --ff-only`), restarts a session plug-in and asks it for a fresh view: no restart of Oni. A folder with
+commits or edits of its own in the way isn't touched, and says why. A changed manifest needs approving again, like any
+manifest change; a code-only change doesn't, so read what changed if you don't know its author.
+
+**For a plug-in's author**: commit to the branch people cloned (normally `main`). That's the release. Oni needs `git`
+on PATH, never prompts for a login (a private repository needs credentials git already has), and never shows the login
+part of an https remote.
+
 ## Two ways to run
 
 **service**: Gryphon's case. The daemon lives on a host and keeps moderating whether or not a console is open. Each time

@@ -18,7 +18,7 @@ function entry(p: Plugin): Row {
     : down ? ["○", p.session ? RED : DIM] : p.error ? ["○", RED] : !p.view ? ["○", DIM] : ["●", b ? BADGE[b.level] : GREEN];
   const tail: Line = why ? [[why === "needs approval" ? "NEEDS APPROVAL" : "DISABLED", why === "needs approval" ? AMBER : RED]]
     : down ? [[p.session ? "RESTARTING" : "STARTING", AMBER]] : p.error ? [["NO ANSWER", RED]] : b?.text ? [[b.text, BADGE[b.level]]] : [];
-  return { id: p.m.id, cells: [[light], [[p.m.name || p.m.id, why ? DIM : WHITE]], tail] };
+  return { id: p.m.id, cells: [[light], [[p.m.name || p.m.id, why ? DIM : WHITE]], p.update ? [["▲ ", CYAN], ...tail] : tail] };
 }
 
 function Howto() {
@@ -178,12 +178,21 @@ export function Plugins({ shown }: { shown: boolean }) {
     useV.setState((s) => ({ plugins: s.plugins + 1 }));
   };
   const live = oni.plugins.filter((x) => (shown && x === p && !x.m.state) || persists(x));
+  useEffect(() => { // its update is offered once per new upstream commit, when its panel is on screen
+    if (shown && p?.update && !p.update.asked && !oni.dialogs.length) oni.pluginUpdate(p);
+  });
   return (
     <div className="hsplit grow">
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
         <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={p?.m.id ?? null} onSelect={select} />
       </Panel>
       <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3 }}>
+        {p?.update ? (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+            <span style={{ color: CYAN }}>▲ {p.update.behind} new commit{p.update.behind === 1 ? "" : "s"} upstream</span>
+            <Btn label="UPDATE…" variant="primary" onClick={() => oni.pluginUpdate(p)} id="plugin-update" />
+          </div>
+        ) : null}
         {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : null}
         {live.map((x) => <div key={x.m.id} style={{ display: x === p ? "contents" : "none" }}><View p={x} /></div>)}
       </Panel>

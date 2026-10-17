@@ -198,6 +198,44 @@ pub fn last_err(err: &[u8], fallback: String) -> String {
     String::from_utf8_lossy(err).trim().lines().last().map(|l| scrub(&cut(l, 300))).unwrap_or(fallback)
 }
 
+// --- updates: a plug-in folder that is a git clone follows its upstream branch ---------------------------------------
+/// git in its folder, never prompting: its stdout, or its last stderr line.
+async fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
+    let exe = crate::util::which("git").ok_or("no git on PATH")?;
+    let mut c = crate::util::command(&exe.to_string_lossy());
+    c.current_dir(folder).args(args).env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never").stdin(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(60), c.output()).await.map_err(|_| "git took over 60 s".to_string())?.map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().into()) } else { Err(last_err(&out.stderr, format!("git {} failed", args[0]))) }
+}
+
+/// A remote's address without the login in it: a token in an https remote never reaches the window.
+fn no_login(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.into() };
+    let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
+    format!("{scheme}://{}/{path}", auth.rsplit_once('@').map_or(auth, |x| x.1))
+}
+
+/// What its upstream branch has that it hasn't: `{behind, log, source, to}`, or None when its folder isn't a git
+/// clone or is up to date. Fetches first.
+pub async fn update_check(m: &Manifest) -> Result<Option<Value>, String> {
+    let Some(f) = m.folder.as_deref().filter(|f| f.join(".git").exists()) else { return Ok(None) };
+    git(f, &["fetch", "--quiet"]).await?;
+    let behind: u64 = git(f, &["rev-list", "--count", "HEAD..@{u}"]).await?.parse().unwrap_or(0);
+    if behind == 0 {
+        return Ok(None);
+    }
+    let log = git(f, &["log", "--format=%h %s", "-n", "20", "HEAD..@{u}"]).await?;
+    let source = git(f, &["ls-remote", "--get-url"]).await.map(|u| scrub(&no_login(&u))).unwrap_or_default();
+    let to = git(f, &["rev-parse", "--short", "@{u}"]).await?;
+    Ok(Some(json!({"behind": behind, "log": log.lines().map(|l| scrub(&cut(l, 200))).collect::<Vec<_>>(), "source": source, "to": to})))
+}
+
+/// Fast-forward it to its upstream branch. Refused, and nothing changed, when it has commits or edits of its own in the way.
+pub async fn update(m: &Manifest) -> Result<(), String> {
+    let f = m.folder.as_deref().filter(|f| f.join(".git").exists()).ok_or("its folder isn't a git clone")?;
+    git(f, &["merge", "--ff-only", "--quiet", "@{u}"]).await.map(|_| ())
+}
+
 /// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
 /// otherwise the last stderr line, scrubbed of addresses.
 pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
@@ -608,5 +646,29 @@ mod tests {
         let n = normalise_action(&r, &demo_manifest().rcon, &["127.0.0.1:1".into()]);
         assert_eq!((n["rcon"][0]["command"].clone(), n["dropped"].clone()), (json!("unmute"), json!([])));
         assert_eq!(n["rcon"][0]["args"], json!(["Rook"])); // the player, not the row's id
+    }
+
+    #[tokio::test]
+    async fn a_git_clone_sees_new_commits_upstream_and_fast_forwards_to_them() {
+        let d = tempfile::tempdir().unwrap();
+        let run = |dir: &Path, args: &[&str]| assert!(std::process::Command::new("git").current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]).args(args).status().unwrap().success());
+        let up = plugin(d.path(), "upstream", GOOD);
+        run(&up, &["init", "-q"]);
+        run(&up, &["add", "."]);
+        run(&up, &["commit", "-qm", "first"]);
+        run(d.path(), &["clone", "-q", "upstream", "echo"]);
+        let m = load(&d.path().join("echo"));
+        assert_eq!(update_check(&m).await.unwrap(), None);
+        assert_eq!(update_check(&load(&plugin(d.path(), "plain", GOOD))).await.unwrap(), None); // not a clone: never asked
+        std::fs::write(up.join("echo.py"), "print(1)\n").unwrap();
+        run(&up, &["add", "."]);
+        run(&up, &["commit", "-qm", "say hi to 10.0.0.1"]);
+        let u = update_check(&m).await.unwrap().unwrap();
+        assert_eq!((&u["behind"], u["log"][0].as_str().unwrap().ends_with("say hi to [ip]")), (&json!(1), true));
+        update(&m).await.unwrap();
+        assert!(d.path().join("echo/echo.py").exists());
+        assert_eq!(update_check(&m).await.unwrap(), None);
+        assert_eq!(no_login("https://me:tok@github.com/a/b.git"), "https://github.com/a/b.git");
     }
 }

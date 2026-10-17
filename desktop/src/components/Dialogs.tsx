@@ -217,6 +217,7 @@ const GUIDE: [string, [string, string][]][] = [
   ]],
   ["F10  PLUG-INS  ·  programs you've added", [
     ["What they are", "A plug-in is a separate program that draws its own panel here: a list, a table, a log, and buttons. Put its folder in plugins/ next to the config file and name it at the top of the config: plugins = [\"gryphon\"]. docs/PLUGINS.md says how to write one."],
+    ["Updates", "A plug-in installed with git clone is checked for new commits each time the app starts, and on Ctrl+R here. ▲ marks one with an update; UPDATE… (asked once by itself) shows the commits and fast-forwards it, with no restart. A changed manifest asks for approval again."],
     ["Approval", "Nothing runs until you approve it. APPROVE shows the exact command it runs, where, and which RCON commands it may have Oni send. It isn't sandboxed: it runs as you. A change to its manifest asks again."],
     ["Badges", "A plug-in can show a badge beside its name. A warning turns the CONDITION amber and an alert turns it red. One that stopped answering keeps its last panel, greyed, and adds no badge."],
     ["Actions", "Its buttons run on the selected server. Risky ones ask first, and every RCON command one sends is in the command log as plug-in <name> ▸ command. Ctrl+R asks every plug-in again."],

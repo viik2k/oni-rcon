@@ -58,6 +58,13 @@ pub fn start(m: Manifest, servers: Vec<Value>, emit: Emit) {
     all.insert(id, Session { tx, waiting, up, task: tokio::spawn(supervise(c, rx)) });
 }
 
+/// Stop one, so the next start runs it afresh (after an update).
+pub fn stop(id: &str) {
+    if let Some(s) = SESSIONS.lock().remove(id) {
+        s.task.abort();
+    }
+}
+
 /// Stop every one: its stdin closes (the sign to exit) and the process is killed.
 pub fn stop_all() {
     for (_, s) in SESSIONS.lock().drain() {

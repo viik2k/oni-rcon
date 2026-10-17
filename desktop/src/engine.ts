@@ -154,6 +154,7 @@ export interface Reply { ok: boolean | null; text?: string; data?: any }
 export interface Plugin {
   m: Dict; view: Dict | null; error: string; busy: boolean; asked: boolean; due: number; note: string;
   replies: Dict[]; session: { state: string; detail: string; retry_in: number } | null; pages: Set<(msg: Dict) => void>;
+  update: { behind: number; log: string[]; source: string; to: string; asked: boolean } | null; // its git upstream is ahead
 }
 export const badgeOf = (p: Plugin): Dict | null => (p.view && !p.error ? p.view.badge : null);
 
@@ -726,7 +727,10 @@ class Oni {
 
   refresh() {
     if (this.tab === "health") invoke("health_now").catch(() => {});
-    if (this.tab === "plugins") this.plugins.forEach((p) => (p.due = 0));
+    if (this.tab === "plugins") {
+      this.plugins.forEach((p) => (p.due = 0));
+      this.pluginUpdates();
+    }
     this.fetch(this.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
     for (const st of this.stations) this.fetch(st, "status");
   }
@@ -756,13 +760,43 @@ class Oni {
     try {
       const list = await invoke<Dict[]>("plugins_list");
       const had = new Map(this.plugins.map((p) => [p.m.id, p]));
-      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "", replies: [], session: null, pages: new Set<(msg: Dict) => void>() }, { m }));
+      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "", replies: [], session: null, pages: new Set<(msg: Dict) => void>(), update: null }, { m }));
     } catch { /* no console running */ }
     const servers = this.stations.map((s) => ({ index: s.index, name: this.serverName(s) }));
     for (const p of this.plugins) {
       if (p.m.mode === "session" && !p.m.state && !this.demo) invoke("plugin_session_start", { id: p.m.id, servers }).catch((e) => (p.error = String(e)));
     }
+    this.pluginUpdates();
     bump("plugins", "mast");
+  }
+
+  /** Fetch each plug-in's git upstream (at start, a window reload, and Ctrl+R on F10); offline or not a clone is just
+   *  no update. The same upstream commit is offered once. */
+  pluginUpdates() {
+    for (const p of this.demo ? [] : this.plugins.filter((x) => !x.m.error)) {
+      invoke<Dict | null>("plugin_update_check", { id: p.m.id }).then((u) => {
+        p.update = u ? { ...(u as NonNullable<Plugin["update"]>), asked: p.update?.to === u.to && !!p.update?.asked } : null;
+        bump("plugins");
+      }, () => {});
+    }
+  }
+
+  /** Offer its git upstream's new commits, and on yes fast-forward to them and start it afresh. */
+  async pluginUpdate(p: Plugin) {
+    const u = p.update, name = String(p.m.name || p.m.id);
+    if (!u) return;
+    u.asked = true;
+    const body = `${u.behind} new commit${u.behind === 1 ? "" : "s"} from ${u.source || "its repository"}:\n\n${u.log.join("\n")}${u.behind > u.log.length ? "\n…" : ""}`
+      + "\n\nThe new code runs as you, like the old. A change to its manifest asks for your approval again.";
+    if (!(await this.confirm(`UPDATE ${name.toUpperCase()}?`, redactText(body, this.redact), "UPDATE", false))) return bump("plugins");
+    try {
+      await invoke("plugin_update", { id: p.m.id });
+    } catch (e) {
+      return this.notify(redactText(String(e), this.redact), `${name.toUpperCase()} · NOT UPDATED`, "error", 12);
+    }
+    [p.update, p.session, p.view, p.due] = [null, null, null, 0];
+    this.notify(`Updated to ${u.to}.`, name.toUpperCase());
+    await this.loadPlugins();
   }
 
   private plugin(id: string) { return this.plugins.find((p) => p.m.id === id); }

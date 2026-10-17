@@ -890,6 +890,33 @@ fn plugin_session_start(id: String, servers: Vec<Value>, handle: AppHandle, app:
     Ok(())
 }
 
+/// What its git upstream has that its folder hasn't (`{behind, log, source, to}`), or null: up to date, not a git
+/// clone, or the demo.
+#[tauri::command]
+async fn plugin_update_check(id: String, app: State<'_, App>) -> Result<Value, String> {
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    if *app.demo.lock() {
+        return Ok(Value::Null);
+    }
+    Ok(plugins::update_check(&m).await?.unwrap_or(Value::Null))
+}
+
+/// Fast-forward its folder to its git upstream, stop its session and read its manifest again: a changed manifest
+/// needs approving again, and the window's next plugins_list starts it afresh.
+#[tauri::command]
+async fn plugin_update(id: String, app: State<'_, App>) -> Result<(), String> {
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    if *app.demo.lock() {
+        return Err("not in the demo".into());
+    }
+    plugins::update(&m).await?;
+    session::stop(&id);
+    if let (Some(f), Some(x)) = (&m.folder, app.plugins.lock().iter_mut().find(|x| x.id == id)) {
+        *x = plugins::load(f);
+    }
+    Ok(())
+}
+
 /// One message to a running session plug-in: an event, or the reply to its RCON.
 #[tauri::command]
 fn plugin_send(id: String, msg: Value) -> Result<(), String> {
@@ -1075,7 +1102,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, update_check, update_install,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])
