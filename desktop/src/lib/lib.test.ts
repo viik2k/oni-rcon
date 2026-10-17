@@ -72,6 +72,16 @@ describe("words", () => {
     expect(pluginReply(x, r, true).data.address).toBe("203.0.113.9");
     expect(pluginReply(x, { ok: null }, false)).toMatchObject({ ok: null, text: "", data: null });
   });
+  it("describes admin and reload events", () => {
+    const d = (ev: Record<string, unknown>) => plain(describeEvent(ev));
+    expect(d({ event: "admin_added", name: "Bravo", id: "76561198000000001", by: "RCON" })).toBe("ADMIN  Bravo  made admin  by RCON");
+    expect(d({ event: "admin_removed", id: "0123456789abcdef0123456789abcdef" })).toBe("ADMIN  01234567…  no longer admin");
+    expect(d({ event: "control", action: "reload", ok: true, text: "max_players 16 -> 12" })).toBe("RELOAD  max_players 16 -> 12");
+    expect(d({ event: "control", action: "reload", ok: false, text: "dedicated.toml: line 4" })).toBe("RELOAD FAILED  dedicated.toml: line 4");
+    expect(d({ event: "control", action: "reload_applied", ok: true, text: "playlist" })).toBe("RELOAD APPLIED  playlist");
+    expect(d({ event: "control", action: "kill_feed", ok: true, text: "x" }).startsWith("CONTROL  x")).toBe(true);
+  });
+
   it("describes a kill with its medals", () => {
     const l = describeEvent({ event: "kill", killer: "A", victim: "B", weapon: "shotgun", _medals: ["DOUBLE KILL"] });
     expect(plain(l)).toBe("A ✕ B  [shotgun]   DOUBLE KILL ");
