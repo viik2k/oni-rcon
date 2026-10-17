@@ -105,7 +105,7 @@ export class Runner {
     }
     if (s.kind === "discord") {
       if (!Object.hasOwn(this.webhooks, s.webhook!)) return `${words}: no webhook called ${s.webhook}`;
-      const code = await this.paced("discord", DISCORD_GAP, () => this.io.discord(s.webhook!, s.text!));
+      const code = await this.paced(`discord:${s.webhook}`, DISCORD_GAP, () => this.io.discord(s.webhook!, s.text!)); // Discord limits each webhook, so each gets its own line
       if (code === null) return `${words}: skipped, ${MAX_QUEUED} posts are already waiting`;
       return words + (code >= 200 && code < 300 ? ": done" : code ? `: Discord answered ${code}` : ": Discord could not be reached");
     }

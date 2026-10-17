@@ -19,6 +19,23 @@ describe("rules", () => {
     }
   });
 
+  it("starters are plentiful and uniquely named (the template list picks by name)", () => {
+    expect(STARTERS.length).toBeGreaterThanOrEqual(50);
+    expect(new Set(STARTERS.map((s) => s.name)).size).toBe(STARTERS.length);
+  });
+
+  it("a Discord step takes several webhooks: one post each, no repeats, at most 10", () => {
+    const post = (webhook: string) => rule({ when: { type: "join" }, then: [{ type: "discord", webhook, message: "{player} joined" }] });
+    const r = post(" main, staff,main ");
+    expect(r.then[0].webhook).toBe("main,staff");
+    const e = new Engine([r]);
+    lobby(e);
+    expect(plan(e, sample(e, r, "s1")).map((s) => [s.kind, s.webhook, s.text])).toEqual([["discord", "main", "ExamplePlayer joined"], ["discord", "staff", "ExamplePlayer joined"]]);
+    expect(relay(STARTERS.find((s) => s.name === "Lag alert")!, "main,staff").then[1].webhook).toBe("main,staff");
+    expect(() => post(Array.from({ length: 11 }, (_, i) => `h${i}`).join(","))).toThrow(/at most 10/);
+    expect(() => post(" , ")).toThrow(/choose a Discord webhook/);
+  });
+
   it("rejects bad rules", () => {
     expect(() => rule({ when: { type: "nope" }, then: [{ type: "cancel_vote" }] })).toThrow(/Unknown WHEN/);
     expect(() => rule({ when: { type: "join" }, then: [{ type: "say", to: "this", message: "hi {nobody}" }] })).toThrow(/unknown placeholder/);

@@ -26,8 +26,11 @@ Messages can use `{player}`, `{server}`, `{count}`, `{max}`, `{medal}`, `{kills}
 
 ## Making one
 
-- **TEMPLATE** starts from a ready-made rule (spree announcer, lag alert, `!admin` call, server-down alert, votes off,
-  and more) and walks through it so you can change the words.
+- **TEMPLATE** starts from a ready-made rule and walks through it so you can change the words. There are about sixty:
+  chat hype (sprees, multi-kills, weapon kills, betrayals), match announcers, timed reminders, join greetings, `!commands`
+  (`!help`, `!rules`, `!players`, `!map`, `!fps`, `!admins`, `!report`, `!bug`), feeds and alerts to Discord or Telegram
+  (medals, joins, matches, busy or empty servers, lag, outages, kick votes, suspicious K/D), and vote blockers. A template
+  that posts to Discord asks which of your webhooks to use.
 - **NEW** builds one a step at a time: name, which servers, WHEN, ONLY IF, THEN DO, limits, then a read-back.
 - **TEST** shows what the rule would do if it fired right now on a server you pick (its conditions and limits aside),
   and offers to really do it.
@@ -45,6 +48,10 @@ role, a built-in rule cancels any vote to kick them.
 Webhook URL. The URL is kept by the app in `discord.json` beside the config (readable only by you) and the window only
 ever sees it with its secret part hidden. Rules post to it by name; **SEND A TEST** checks it. Posts are at least 2
 seconds apart and never ping `@everyone`, roles or users.
+
+**Several webhooks.** Add as many as you like (a public channel, a staff channel, one per server). A *Post to Discord* step
+lets you tick which webhooks it goes to, up to 10, and posts to each one. Templates ask the same way, so nothing is sent to
+a webhook you didn't pick. Each webhook keeps its own 2-second pacing and queue, so a busy one doesn't hold up the others.
 
 ## Telegram
 
