@@ -10,6 +10,7 @@ mod health;
 mod host;
 mod hub;
 mod install;
+mod plugins;
 mod rcon;
 mod stats;
 mod util;
@@ -96,13 +97,21 @@ fn prefs_path() -> PathBuf {
     config::user_config().with_file_name("prefs.json")
 }
 
+/// prefs.json as an object; a missing or unreadable file reads as empty.
+fn prefs_raw() -> Value {
+    std::fs::read_to_string(prefs_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}))
+}
+
 fn prefs_load() -> Prefs {
-    let v: Value = std::fs::read_to_string(prefs_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let v = prefs_raw();
     Prefs { intro_seen: v["intro_seen"] == true, full_intro: v["full_intro"] == true }
 }
 
+/// Read, change, write: keys this version doesn't know (plug-in approvals, a newer one's) are kept.
 fn prefs_save(p: &Prefs) {
-    let _ = util::write_atomic(&prefs_path(), &format!("{}\n", json!({"intro_seen": p.intro_seen, "full_intro": p.full_intro})), false);
+    let mut v = prefs_raw();
+    (v["intro_seen"], v["full_intro"]) = (json!(p.intro_seen), json!(p.full_intro));
+    let _ = util::write_atomic(&prefs_path(), &format!("{v}\n"), false);
 }
 
 struct App {
@@ -115,6 +124,7 @@ struct App {
     demo: Mutex<bool>,
     hint: Mutex<String>,
     picked: Mutex<Vec<PathBuf>>, // files the operator chose to publish; the window never names a path itself
+    plugins: Mutex<Vec<plugins::Manifest>>, // the ones the config turns on, read at start; none runs unapproved
 }
 
 fn config_path(a: &Args) -> Option<PathBuf> {
@@ -391,6 +401,12 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
             ForgeSetup { key, source, error, url: forge::FORGE_URL.into(), poll, cache_dir: Some(config::cache_root()), config: path.clone() },
             Some(config::user_config().parent().unwrap().to_path_buf()),
         )
+    };
+    *app.plugins.lock() = if demo {
+        vec![plugins::demo_manifest()]
+    } else {
+        let ids = plugins::enabled(&config::top_level(path.as_deref(), "plugins")).map_err(|e| format!("{}: {e}", path.as_ref().unwrap().display()))?;
+        plugins::discover(path.as_ref().and_then(|p| p.parent()).map(|d| d.join("plugins")).as_deref(), &ids)
     };
     let waiting = config::resolve_passwords(&mut servers).await?;
     let by = {
@@ -801,6 +817,77 @@ fn prefs_intro(full: Option<bool>, seen: Option<bool>) -> Value {
     json!({"full_intro": p.full_intro, "intro_seen": p.intro_seen})
 }
 
+// --- plug-ins (F10) ------------------------------------------------------------------------------------------------
+/// Why a plug-in won't run, or "" when it will. The demo's own counts as approved.
+fn plugin_state(m: &plugins::Manifest, demo: bool) -> String {
+    if demo {
+        m.error.clone()
+    } else {
+        plugins::state(m, &prefs_raw()["plugins_trusted"])
+    }
+}
+
+/// The plug-ins the config turns on: each manifest, and `state`, why it won't run ("" when it will).
+#[tauri::command]
+fn plugins_list(app: State<'_, App>) -> Vec<Value> {
+    let demo = *app.demo.lock();
+    app.plugins
+        .lock()
+        .iter()
+        .map(|m| {
+            let mut v = json!(m);
+            v["state"] = json!(plugin_state(m, demo));
+            v
+        })
+        .collect()
+}
+
+/// Record the operator's approval against the hash of the manifest as it is now: any change asks again.
+#[tauri::command]
+fn plugin_approve(id: String, app: State<'_, App>) -> Result<(), String> {
+    let hash = app.plugins.lock().iter().find(|m| m.id == id && m.error.is_empty()).map(|m| m.hash.clone()).ok_or("no such plug-in")?;
+    let mut v = prefs_raw();
+    if !v["plugins_trusted"].is_object() {
+        v["plugins_trusted"] = json!({});
+    }
+    v["plugins_trusted"][&id] = json!(hash);
+    util::write_atomic(&prefs_path(), &format!("{v}\n"), false).map_err(|e| e.to_string())
+}
+
+/// Run one plug-in that may run; the demo's is answered in here.
+async fn plugin_ask(app: &State<'_, App>, id: &str, request: Value, timeout: f64) -> Result<(plugins::Manifest, Value), String> {
+    let demo = *app.demo.lock();
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    let why = plugin_state(&m, demo);
+    if !why.is_empty() {
+        return Err(why);
+    }
+    let raw = if demo { plugins::demo_call(&request).await } else { plugins::call(&m, &request, timeout).await? };
+    Ok((m, raw))
+}
+
+/// Its view for `server` (the selected server as a plug-in names it), shaped; `error` set when it gave none.
+#[tauri::command]
+async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) -> Result<Value, String> {
+    let (_, raw) = plugin_ask(&app, &id, json!({"type": "view", "server": server}), plugins::VIEW_TIMEOUT).await?;
+    let mut v = plugins::normalise_view(&raw);
+    if let Some(e) = v["error"].as_str() {
+        v["error"] = json!(health::scrub(e)); // its own words about a failure: no address in them
+    }
+    Ok(v)
+}
+
+/// Run an action: its reply shaped, with the RCON it asked for split into what its permissions and `servers` (every
+/// server as plug-ins name them) allow, and why the rest was dropped.
+#[tauri::command]
+async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
+    let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server});
+    Ok(match plugin_ask(&app, &id, req, plugins::ACTION_TIMEOUT).await {
+        Ok((m, raw)) => plugins::normalise_action(&raw, &m.rcon, &servers),
+        Err(e) => plugins::normalise_action(&json!({"ok": false, "error": e}), &[], &[]),
+    })
+}
+
 /// The newest desktop release newer than `current`, as (version, page): the terminal console's v* releases share
 /// the repository, so only desktop-v* tags count, read without their prefix.
 fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
@@ -903,6 +990,7 @@ pub fn run() {
             demo: Mutex::new(demo),
             hint: Mutex::new(String::new()),
             picked: Mutex::new(Vec::new()),
+            plugins: Mutex::new(Vec::new()),
         })
         .setup(move |app| {
             if devtools {
@@ -915,7 +1003,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, update_check, update_install,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, update_check, update_install,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])

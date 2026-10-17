@@ -109,6 +109,71 @@ export const STARTERS: Dict[] = [
     then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "{target} is a VIP and can't be vote-kicked." }], cooldown: 0 },
   // the votes switch: the dedicated server has one setting for all voting, so the console cancels a vote the moment it starts
   { name: "Votes off", when: { type: "vote", kind: "any" }, then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "Player votes are off on this server." }], cooldown: 0 },
+
+  // more starters. Names never say "Discord" (relay only rewrites messages), and posts go to every webhook you tick.
+  // chat: hype
+  { name: "Kill milestone", when: { type: "kills_reached", count: 25 }, then: [{ type: "say", to: "this", message: "{player} just hit {kills} kills!" }], per_hour: 120 },
+  { name: "Big sprees to everyone", when: { type: "spree", counts: "20,25,30" }, then: [{ type: "say", to: "all", message: "{player} is on a {medal} on {server}! ({kills} kills)" }], per_hour: 120 },
+  { name: "Overkill and up to everyone", when: { type: "multikill", min: 4 }, then: [{ type: "say", to: "all", message: "{medal} by {player} on {server}!" }], per_hour: 120 },
+  { name: "Melee kill", when: { type: "weapon_kill", weapon: "melee" }, then: [{ type: "say", to: "this", message: "{player} took out {victim} up close. Brutal." }], cooldown: 120 },
+  { name: "Sword kill", when: { type: "weapon_kill", weapon: "sword" }, then: [{ type: "say", to: "this", message: "{player} cut down {victim} with the {weapon}!" }], cooldown: 120 },
+  { name: "Rocket kill", when: { type: "weapon_kill", weapon: "rocket" }, then: [{ type: "say", to: "this", message: "{player} sent {victim} flying with a {weapon}!" }], cooldown: 120 },
+  { name: "Grenade kill", when: { type: "weapon_kill", weapon: "grenade" }, then: [{ type: "say", to: "this", message: "{player} blew up {victim}. Pin pulled, point made." }], cooldown: 120 },
+  { name: "Betrayal call-out", when: { type: "betrayal" }, then: [{ type: "say", to: "this", message: "{player} just betrayed a teammate. Friendly fire isn't friendly." }], cooldown: 30 },
+  // chat: matches
+  { name: "Match start announcer", when: { type: "match_start" }, then: [{ type: "say", to: "this", message: "A {mode} match on {map} is live with {count} players. Good luck!" }] },
+  { name: "Match end thanks", when: { type: "match_end" }, then: [{ type: "say", to: "this", message: "GG everyone! Thanks for playing on {server}." }] },
+  { name: "Vote for the next map", when: { type: "before_match" }, then: [{ type: "say", to: "this", message: "Voting is open on {server}. Pick the next map!" }] },
+  // chat: reminders
+  { name: "Call-an-admin reminder", when: { type: "every", minutes: 30 }, if: [{ type: "players_between", min: 1, max: 128 }], then: [{ type: "say", to: "this", message: "Need help? Type !admin to call an admin." }], per_hour: 6 },
+  { name: "Rules reminder", when: { type: "every", minutes: 45 }, if: [{ type: "players_between", min: 1, max: 128 }], then: [{ type: "say", to: "this", message: "Be kind, no griefing, no cheating. Have fun!" }], per_hour: 4 },
+  { name: "Weekend greeting", when: { type: "every", minutes: 60 }, if: [{ type: "day_of_week", days: "sat,sun" }, { type: "players_between", min: 1, max: 128 }], then: [{ type: "say", to: "this", message: "It's the weekend: welcome to {server}, enjoy the games!" }], per_hour: 2 },
+  // joins and who is on
+  { name: "Rules on join", when: { type: "join" }, then: [{ type: "tell_player", message: "Welcome, {player}. Be kind, no griefing, no cheating. Admins have the last word." }], per_hour: 600 },
+  { name: "Busy server welcome", when: { type: "join" }, if: [{ type: "players_between", min: 8, max: 128 }], then: [{ type: "say", to: "this", message: "{player} joined. {count}/{max} players, good game ahead!" }], per_hour: 120 },
+  { name: "Admin on duty", when: { type: "join" }, if: [{ type: "player_role", role: "admin" }], then: [{ type: "say", to: "this", message: "Admin {player} is on {server}. Need help? Ask!" }], cooldown: 600 },
+  { name: "VIP welcome", when: { type: "join" }, if: [{ type: "player_role", role: "vip" }], then: [{ type: "say", to: "this", message: "VIP {player} has joined {server}!" }], cooldown: 600 },
+  // !commands
+  { name: "!help", when: { type: "command", command: "!help" }, then: [{ type: "tell_player", message: "!admin calls an admin, !players counts who's on, !map shows the map, !fps shows server speed." }], cooldown: 30 },
+  { name: "!rules", when: { type: "command", command: "!rules" }, then: [{ type: "tell_player", message: "Be kind, no griefing, no cheating. Admins have the last word." }], cooldown: 30 },
+  { name: "!players", when: { type: "command", command: "!players" }, then: [{ type: "tell_player", message: "{count}/{max} players on {server}." }], cooldown: 15 },
+  { name: "!map", when: { type: "command", command: "!map" }, then: [{ type: "tell_player", message: "Playing {mode} on {map}." }], cooldown: 15 },
+  { name: "!fps", when: { type: "command", command: "!fps" }, then: [{ type: "tell_player", message: "{server} is running at {fps} fps." }], cooldown: 15 },
+  { name: "!admins", when: { type: "command", command: "!admins" }, then: [{ type: "tell_player", message: "Admins online: {admins}." }], cooldown: 15 },
+  { name: "!report", when: { type: "command", command: "!report" }, then: [{ type: "tell_admins", where: "any", message: "{player} on {server} reports: {args}" },
+    { type: "discord", webhook: "", message: "{player} on {server} reports: {args}" }, { type: "tell_player", message: "Thanks, your report was sent to the admins." }], cooldown: 60 },
+  { name: "!bug", when: { type: "command", command: "!bug" }, then: [{ type: "discord", webhook: "", message: "Bug report from {player} on {server}: {args}" }, { type: "tell_player", message: "Thanks, the bug report was sent." }], cooldown: 60 },
+  // posts to Discord or Telegram
+  { name: "Medal feed", when: { type: "medal", medal: "any" }, then: [{ type: "discord", webhook: "", message: "{player} earned {medal} on {server}." }], per_hour: 120 },
+  { name: "Highlight reel", when: { type: "spree", counts: "15,20,25,30" }, then: [{ type: "discord", webhook: "", message: "{player} reached {medal} ({kills} kills) on {server}." }], per_hour: 120 },
+  { name: "Perfection post", when: { type: "medal", medal: "Perfection" }, then: [{ type: "discord", webhook: "", message: "PERFECTION: {player} won on {server} without dying." }], per_hour: 60 },
+  { name: "Betrayal log", when: { type: "betrayal" }, then: [{ type: "discord", webhook: "", message: "{player} betrayed a teammate on {server}." }], cooldown: 30, per_hour: 120 },
+  { name: "Join feed", when: { type: "join" }, then: [{ type: "discord", webhook: "", message: "{player} joined {server} ({count}/{max})." }], per_hour: 120 },
+  { name: "Leave feed", when: { type: "leave" }, then: [{ type: "discord", webhook: "", message: "{player} left {server} ({count}/{max})." }], per_hour: 120 },
+  { name: "Match start post", when: { type: "match_start" }, then: [{ type: "discord", webhook: "", message: "A {mode} match started on {server}: {map}, {count} players." }], per_hour: 60 },
+  { name: "Match end post", when: { type: "match_end" }, then: [{ type: "discord", webhook: "", message: "A match ended on {server} ({map}, {count} players)." }], per_hour: 60 },
+  { name: "Hourly status", when: { type: "every", minutes: 60 }, then: [{ type: "discord", webhook: "", message: "{server}: {count}/{max} players, {mode} on {map}, {fps} fps." }], per_hour: 2 },
+  { name: "Friday night event", when: { type: "at", cron: "0 20 * * 5" }, then: [{ type: "say", to: "all", message: "Friday night event starts now on {server}!" },
+    { type: "discord", webhook: "", message: "The Friday night event is starting on {server}. Come join!" }], cooldown: 0, per_hour: 2 },
+  { name: "Server is busy", when: { type: "players_above", count: 8 }, then: [{ type: "discord", webhook: "", message: "{server} is busy: {count}/{max} players." }], cooldown: 1800 },
+  { name: "Server is full", when: { type: "full" }, then: [{ type: "discord", webhook: "", message: "{server} is full ({count}/{max})." }], cooldown: 900 },
+  { name: "Server emptied", when: { type: "empty" }, then: [{ type: "discord", webhook: "", message: "{server} is empty." }], cooldown: 1800 },
+  { name: "Quiet at prime time", when: { type: "players_below", count: 3 }, if: [{ type: "time_between", start: "18:00", end: "23:59" }],
+    then: [{ type: "discord", webhook: "", message: "{server} is quiet at prime time: {count}/{max} players. Come play!" }], cooldown: 3600 },
+  // alerts
+  { name: "Server back up", when: { type: "server_up" }, then: [{ type: "tell_admins", where: "any", message: "{server} is back up." }, { type: "discord", webhook: "", message: "{server} is back up." }], cooldown: 300 },
+  { name: "Long outage", when: { type: "server_down", seconds: 600 }, then: [{ type: "discord", webhook: "", message: "{down} has been down for 10 minutes." }], cooldown: 1800 },
+  { name: "Lag warning in chat", when: { type: "fps_below", fps: 35 }, then: [{ type: "say", to: "this", message: "Server lag detected ({fps} fps). The admins have been told." },
+    { type: "tell_admins", where: "any", message: "{server} dropped to {fps} fps with {count} players." }], cooldown: 900 },
+  { name: "Severe lag", when: { type: "fps_below", fps: 20 }, then: [{ type: "tell_admins", where: "any", message: "SEVERE LAG: {server} is at {fps} fps ({count} players)." },
+    { type: "discord", webhook: "", message: "SEVERE LAG: {server} is at {fps} fps with {count} players." }], cooldown: 600 },
+  { name: "Lag recovered", when: { type: "fps_recovered", fps: 54 }, then: [{ type: "tell_admins", where: "any", message: "{server} is back to {fps} fps." }, { type: "discord", webhook: "", message: "{server} is back to {fps} fps." }], cooldown: 900 },
+  { name: "Kick vote alert", when: { type: "vote", kind: "kick" }, then: [{ type: "tell_admins", where: "any", message: "A kick vote against {target} was called on {server}." },
+    { type: "discord", webhook: "", message: "A kick vote against {target} was called on {server}." }], cooldown: 60 },
+  { name: "Kick votes off", when: { type: "vote", kind: "kick" }, then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "Kick votes are off here. Type !admin if someone needs a word." }], cooldown: 0 },
+  { name: "Shuffle votes off", when: { type: "vote", kind: "shuffle" }, then: [{ type: "cancel_vote" }, { type: "say", to: "this", message: "Shuffle votes are off on this server." }], cooldown: 0 },
+  { name: "Suspicious K/D", when: { type: "kills_reached", count: 30 }, if: [{ type: "player_kd", min_kd: "5", min_kills: 20 }],
+    then: [{ type: "tell_admins", where: "any", message: "{player} has {kills} kills at a {kd} K/D on {server}. Worth a look." }, { type: "discord", webhook: "", message: "{player} has {kills} kills at a {kd} K/D on {server}." }], cooldown: 600 },
 ];
 
 /** A starter ready to use: its Discord steps point at `hook`, or, when a Telegram `chat` is all that is set up, become Telegram
@@ -256,7 +321,13 @@ export function block(part: Part, b: unknown): Dict {
       if (typeof v !== "string" || v.length > (f.max ?? 200) || clean(v) !== v) fail(`${label}: ${f.label} is too long or has odd characters.`);
       v = (v as string).trim();
       if (f.kind === "server" && !v) fail(`${label}: choose a server.`);
-      if (f.kind === "webhook" && !v) fail(`${label}: choose a Discord webhook (add one under DISCORD first).`);
+      if (f.kind === "webhook") {
+        // one name, or several (comma list): the message goes to each, separately
+        const names = [...new Set((v as string).split(",").map((n) => n.trim()).filter(Boolean))];
+        if (!names.length) fail(`${label}: choose a Discord webhook (add one under DISCORD first).`);
+        if (names.length > 10) fail(`${label}: at most 10 webhooks per step.`);
+        v = names.join(",");
+      }
       if (f.kind === "chat" && !v) fail(`${label}: choose a Telegram chat (add one under TELEGRAM first).`);
     }
     out[f.key] = v;
@@ -800,7 +871,7 @@ export function plan(e: Engine, f: Firing): Step[] {
       case "tell_role": for (const [server, p] of e.withRole(a.role)) if (p.id) steps.push({ kind: "rcon", server, args: ["tell", p.id, msg], text: p.name }); break;
       case "cancel_vote": steps.push({ kind: "rcon", server: here, args: ["cancelvote"] }); break;
       case "shuffle": steps.push({ kind: "rcon", server: here, args: ["shuffle"] }); break;
-      case "discord": steps.push({ kind: "discord", webhook: a.webhook, text: msg }); break;
+      case "discord": for (const webhook of a.webhook.split(",")) steps.push({ kind: "discord", webhook, text: msg }); break;
       case "telegram": steps.push({ kind: "telegram", chat: a.chat, text: fill(a.message, unmention(f.ctx)) }); break;
       case "wait": steps.push({ kind: "wait", seconds: a.seconds }); break;
     }

@@ -43,6 +43,16 @@ describe("runner", () => {
     expect(a.r.history.some((n) => /no webhook called nope/.test(n.result))).toBe(true);
   });
 
+  it("a step with several webhooks posts to each of them by name, and notes an unknown one on its own", async () => {
+    const a = setup();
+    a.r.webhooks.staff = "https://discord.com/api/webhooks/2/••••••";
+    a.r.load([rule([{ type: "discord", webhook: "hook,staff,nope", message: "hello" }])], {});
+    a.r.event("s", { event: "join", name: "A", player_id: "1" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(a.posts).toEqual(["hook:hello", "staff:hello"]);
+    expect(a.r.history.at(-1)!.result).toMatch(/no webhook called nope/);
+  });
+
   it("posts to Telegram by name, and says why a post failed", async () => {
     const a = setup();
     a.r.load([rule([{ type: "telegram", chat: "alerts", message: "hello" }]), rule([{ type: "telegram", chat: "nope", message: "x" }]), rule([{ type: "telegram", chat: "revoked", message: "y" }])], {});

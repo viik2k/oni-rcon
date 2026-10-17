@@ -194,6 +194,18 @@ export function redactData(v: unknown, on: boolean): unknown {
   return v;
 }
 
+/** A plug-in action's form answers (keyed p0, p1, ... in its params' order) as the contract types them: number as a
+ *  JSON number, bool as true/false, the rest strings. A number that isn't one gives the words to say, and nothing is sent. */
+export function typedParams(params: Dict[], got: Dict): Dict | string {
+  const out: Dict = {};
+  for (const [i, p] of params.entries()) {
+    const v = String(got[`p${i}`] ?? "").trim();
+    if (p.type === "number" && (v === "" || !Number.isFinite(Number(v)))) return `${p.label} must be a number: nothing was sent.`;
+    out[p.name] = p.type === "number" ? Number(v) : p.type === "bool" ? v === "true" : v;
+  }
+  return out;
+}
+
 export function clipId(v: unknown): string {
   const s = String(v);
   return s.length > 16 && /^[0-9a-fA-F-]+$/.test(s) ? s.slice(0, 8) + "…" : s;

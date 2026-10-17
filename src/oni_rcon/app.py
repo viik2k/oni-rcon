@@ -47,6 +47,8 @@ from .forge import (CREDIT, SITE, SORTS, WINDOWED, WINDOWS, WITHDRAWN, ForgeClie
                     version_id, version_label, versions_of, views_of, votes_of, when_of)
 from .health import BARE, OOM, RESTART, SIGNATURE, HealthSetup, Monitor, Notice, mem_level, swap_level
 from .install import SSH_OPTS, InstallError, place, plan, size_words, target_for
+from . import plugins as pl
+from .plugins import ACTION_TIMEOUT, VIEW_TIMEOUT, Manifest, PluginError, PluginSetup, server_name
 from .medals import Medals
 from .prefs import Prefs
 from .rcon import Rcon, Tunnel
@@ -76,8 +78,10 @@ GLYPH = {"health": "⚠", "chat": "»", "kill": "✕", "join": "▲", "leave": "
 STATE = {"online": ("◉", GREEN), "connecting": ("◌", AMBER), "offline": ("○", RED), "denied": ("⊘", RED)}
 SPIN = "◐◓◑◒"
 PANE_FOCUS = {"assets": "#players", "intercepts": "#feed", "operations": "#op-load", "blacklist": "#bans",
-              "console": "#cmd", "forge": "#listings", "health": "#crashes"}
-TABS = ("f1", "f2", "f3", "f4", "f5", "f6", "f7")
+              "console": "#cmd", "forge": "#listings", "health": "#crashes", "plugins": "#plugin-list"}
+TABS = ("f1", "f2", "f3", "f4", "f5", "f6", "f7", "f10")
+PLUGIN_EVERY, PLUGIN_BADGE_EVERY = 30, 60  # seconds between asks: with F10 open, and for a badge while it's shut
+BADGE = {"ok": GREEN, "warn": AMBER, "alert": RED, "off": DIM}
 HEALTH_EVERY = 60  # seconds between a server's health reports
 HEALTH_GATE = 4  # reports being fetched at once
 BANNER_FOR = 30  # seconds a crash banner stays up unless it's clicked
@@ -169,7 +173,8 @@ TAB_TIPS = {"assets": "Players on the selected server: click one for their file 
             "blacklist": "Bans, players allowed to join through a VPN, and who was kicked.",
             "console": "Type server commands directly. For when a button doesn't cover it.",
             "forge": "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
-            "health": "Crashes read from each server's log, the host's memory, and whether the workaround service runs."}
+            "health": "Crashes read from each server's log, the host's memory, and whether the workaround service runs.",
+            "plugins": "Programs you've added that draw their own panel here, such as Gryphon's moderation log."}
 
 # A connection failure in words to act on: (what the error says, card text, the full explanation)
 EXPLAIN = [
@@ -656,6 +661,22 @@ class Station:
         return out
 
 
+@dataclass
+class Plugin:
+    """A plug-in the config turns on, and what the console last heard from it."""
+    m: Manifest
+    view: dict | None = None  # the last view it sent, normalised; kept, greyed, when an ask fails
+    error: str = ""  # why the last ask failed, scrubbed
+    busy: bool = False
+    asked: bool = False  # asked once since start: after that only one with a badge is asked while F10 is shut
+    due: float = 0.0  # monotonic: when it's next asked
+    note: str = ""  # the last action's outcome, under its title
+
+    @property
+    def badge(self) -> dict | None:
+        return self.view.get("badge") if self.view and not self.error else None
+
+
 # --- dialogs: titles and bodies are Text, because they carry player names and markup in a name must stay a name ---
 class Dialog(ModalScreen):
     """A modal that dims the screen behind it as its box rises into place (the -enter transitions in oni.tcss)."""
@@ -710,7 +731,7 @@ class Form(Dialog):
             if self.note:
                 yield Static(Text(self.note), classes="dialog-body")
             for key, label, default in self.fields:
-                yield Label(label + ("  (required)" if key in self.required else ""))
+                yield Label(Text(label + ("  (required)" if key in self.required else "")))
                 if isinstance(default, list):
                     yield Select(default, allow_blank=False, id=f"field-{key}")
                 else:
@@ -1261,7 +1282,7 @@ class OniApp(App):
         Binding("f1", "tab('assets')", "Assets"), Binding("f2", "tab('intercepts')", "Intercepts"),
         Binding("f3", "tab('operations')", "Ops"), Binding("f4", "tab('blacklist')", "Blacklist"),
         Binding("f5", "tab('console')", "Console"), Binding("f6", "tab('forge')", "Forge"),
-        Binding("f7", "tab('health')", "Health"),
+        Binding("f7", "tab('health')", "Health"), Binding("f10", "tab('plugins')", "Plug-ins"),
         Binding("ctrl+b", "broadcast", "Broadcast"),
         Binding("ctrl+r", "refresh", "Refresh"), Binding("x", "redact", "Redact"),
         Binding("question_mark", "help", "Help"), Binding("slash", "focus_input", "Type", show=False),
@@ -1271,7 +1292,7 @@ class OniApp(App):
 
     def __init__(self, servers: list[Server], by: str, intro: bool | str = True, updater: Callable[[], str] | None = None,
                  hint: str = "", forge: ForgeSetup | None = None, prefs: Prefs | None = None,
-                 health: HealthSetup | None = None):
+                 health: HealthSetup | None = None, plugins: PluginSetup | None = None):
         super().__init__()
         # intro: "full" (the archive, then the clearance check), "quick" (the clearance check), "off"; True is quick
         self.by, self.intro, self.updater, self.hint = by, {True: "quick", False: "off"}.get(intro, intro), updater, hint
@@ -1313,6 +1334,9 @@ class OniApp(App):
         self.service_at: dict[str, float] = {}  # ssh destination ("" = here) -> when its service check is next due
         self.service_err: dict[str, str] = {}
         self.banner_until = 0.0
+        self.psetup = plugins or PluginSetup()
+        self.plugins = [Plugin(m) for m in self.psetup.plugins]
+        self.psel, self.pdrawn = 0, None  # the plug-in F10 shows, and what its panel was last built from
 
     @property
     def cur(self) -> Station:
@@ -1412,6 +1436,10 @@ class OniApp(App):
                             yield Static(id="host")
                             yield Roster(id="containers", cursor_type="none", zebra_stripes=True)
                         yield Static(id="workaround")
+                with TabPane("[dim]F10[/] PLUG-INS", id="plugins"):
+                    with Horizontal(id="plugins-main"):
+                        yield OptionList(id="plugin-list")
+                        yield VerticalScroll(id="plugin-panel")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1431,7 +1459,7 @@ class OniApp(App):
                            "#sitrep": "SITREP", "#theatre": "THEATRE", "#rotation": "ROTATION", "#bans": "BLACKLIST",
                            "#vpn": "VPN ALLOWANCES", "#console-log": "COMMAND LOG", "#listings": "FORGE CATALOG",
                            "#listing-box": "FORGE FILE", "#versions": "VERSIONS", "#host-box": "HOST",
-                           "#workaround": "WORKAROUND"}.items():
+                           "#workaround": "WORKAROUND", "#plugin-list": "PLUG-INS"}.items():
             self.query_one(sel).border_title = title
         for wid, tip in TIPS.items():  # escaped: "[Server]" in a tip is text, not a style
             self.query_one(f"#{wid}").tooltip = escape(tip)
@@ -1477,6 +1505,10 @@ class OniApp(App):
                 if self.hsetup.source or not st.server.url:
                     self.service_at.setdefault(st.server.ssh, now + 1)
         self.set_interval(2, self.health_tick)
+        self.set_interval(2, self.plugin_tick)
+        for pg in self.plugins:  # each asked once soon after start, for its badge; one that needs approval never is
+            pg.due = now + 3
+        self.paint_plugins()
         self.set_interval(1, self.tick)
         self.set_interval(3, self.poll_fast)
         self.set_interval(1, self.poll_slow)
@@ -1708,6 +1740,276 @@ class OniApp(App):
              "means.\n\n", DIM),
             ("health_min_free_mb", CYAN), (" (default 1024) is the free memory below which it alerts.  ", DIM),
             ("health_service", CYAN), (" names a systemd service to watch.", DIM))
+
+    # --- plug-ins (F10) ------------------------------------------------------------------------------------------
+    def plugin_state(self, pg: Plugin) -> str:
+        """Why it won't run ("needs approval", a bad manifest), or "" when it will. A stand-in's own count as approved."""
+        return pg.m.error if self.psetup.source else pl.state(pg.m, self.prefs.plugins_trusted)
+
+    async def plugin_call(self, pg: Plugin, request: dict, timeout: float) -> dict:
+        return await (self.psetup.source or pl).call(pg.m, request, timeout)
+
+    def plugin_shown(self) -> bool:
+        return self.is_running and self.query_one(TabbedContent).active == "plugins"
+
+    def plugin_tick(self) -> None:
+        """Ask the plug-ins that are due: with F10 open every one that runs, every 30 s; shut, only one whose badge
+        feeds CONDITION, every 60 s (and each once after start, to learn whether it has a badge)."""
+        if not self.is_running:
+            return
+        now, shown = time.monotonic(), self.plugin_shown()
+        for pg in self.plugins:
+            if not (self.plugin_state(pg) or pg.busy) and now >= pg.due and (shown or not pg.asked or pg.badge):
+                pg.busy = True
+                self.run_worker(self.plugin_view(pg), group="plugins", exit_on_error=False)
+                self.paint_plugins()
+
+    async def plugin_view(self, pg: Plugin) -> None:
+        try:
+            v = pl.normalise_view(await self.plugin_call(pg, {"type": "view", "server": server_name(self.cur.server)},
+                                                          VIEW_TIMEOUT))
+            pg.view, pg.error = (pg.view, hc.scrub(v["error"])) if "error" in v else (v, "")
+        except PluginError as e:
+            pg.error = str(e)
+        except Exception as e:  # a stand-in that broke: said, never a traceback
+            pg.error = hc.scrub(f"{type(e).__name__}: {e}")
+        pg.busy, pg.asked = False, True
+        pg.due = time.monotonic() + (PLUGIN_EVERY if self.plugin_shown() else PLUGIN_BADGE_EVERY)
+        if self.is_running:
+            self.paint_plugins()
+            self.paint_masthead()
+
+    def plugin_line(self, pg: Plugin) -> Text:
+        """Its entry in the strip: a light, its name, its badge, and what's wrong if anything is."""
+        why, b = self.plugin_state(pg), pg.badge
+        light = (("◌", AMBER) if pg.busy else ("⊘", RED) if why and why != "needs approval" else ("?", AMBER) if why
+                 else ("○", RED) if pg.error else ("○", DIM) if not pg.view else ("●", BADGE[b["level"]] if b else GREEN))
+        line = Text.assemble((f"{light[0]} ", light[1]), (pg.m.title, DIM if why else WHITE))
+        if b and b["text"]:
+            line.append(f"  {b['text']}", BADGE[b["level"]])
+        if why:
+            line.append("\n  NEEDS APPROVAL" if why == "needs approval" else "\n  DISABLED",
+                        AMBER if why == "needs approval" else RED)
+        elif pg.error:
+            line.append("\n  NO ANSWER", RED)
+        return line
+
+    def paint_plugins(self) -> None:
+        """The strip of plug-ins, then the selected one's panel."""
+        if not self.is_running:
+            return
+        box = self.query_one("#plugin-list", OptionList)
+        lines = [self.plugin_line(pg) for pg in self.plugins]
+        if [o.prompt for o in box.options] != lines:
+            box.set_options(lines)
+            box.highlighted = min(self.psel, len(lines) - 1) if lines else None
+        self.paint_plugin()
+
+    @on(OptionList.OptionHighlighted, "#plugin-list")
+    def _plugin(self, e: OptionList.OptionHighlighted) -> None:
+        if e.option_index != self.psel:
+            self.psel = e.option_index
+            self.paint_plugin()
+
+    def paint_plugin(self) -> None:
+        """The selected plug-in's panel: its view drawn from blocks, or why it can't run. Rebuilt only when what it
+        shows has changed, so focus and a table's cursor stay put. Every string in it is the plug-in's data: Text,
+        never markup, and redacted like the rest of the console."""
+        panel = self.query_one("#plugin-panel", VerticalScroll)
+        pg = self.plugins[min(self.psel, len(self.plugins) - 1)] if self.plugins else None
+        why = self.plugin_state(pg) if pg else ""
+        key = pg and (pg.m.id, why, json.dumps(pg.view, sort_keys=True), pg.error, pg.note, self.redact)
+        if key == self.pdrawn and panel.children:
+            return
+        cursors = ({t.name: t.cursor_row for t in panel.query(DataTable)}
+                   if pg and self.pdrawn and self.pdrawn[0] == pg.m.id else {})
+        self.pdrawn = key
+        panel.remove_children()
+        if not pg:
+            panel.border_title = "PLUG-IN"
+            panel.mount(Static(self.plugins_howto()))
+            return
+        panel.border_title = Text(pg.m.title.upper())
+        if why:
+            panel.mount(*self.plugin_gate(pg, why))
+            return
+        def rt(s: str) -> Text:
+            return Text(redact_text(s, self.redact))
+        v = pg.view or {}
+        head = Text.assemble((v.get("title") or pg.m.title, AMBER), (f"  {pg.m.version}", DIM))
+        if (b := v.get("badge")) and b["text"]:
+            head.append("   ").append(f" {b['text']} ", f"{INK} on {BADGE[b['level']]}")
+        out: list = [Static(head, classes="plugin-head")]
+        if pg.error:
+            out.append(Static(Text(f"⚠ {redact_text(pg.error, self.redact)}"
+                                   + ("   ·   showing its last answer" if pg.view else ""), RED)))
+        if pg.note:
+            out.append(Static(Text(redact_text(pg.note, self.redact), DIM)))
+        if not pg.view and not pg.error:
+            out.append(Static(Text("asking…", DIM)))
+        acts = {a["id"]: a for a in v.get("actions", [])}
+        body: list = []
+        for i, blk in enumerate(v.get("blocks", [])):
+            kind = blk["type"]
+            if kind == "kv":
+                g = Table.grid(padding=(0, 2))
+                g.add_column(style=AMBER, no_wrap=True)
+                g.add_column(style=WHITE)
+                for k, val in blk["rows"]:
+                    g.add_row(rt(k), rt(val))
+                body.append(Static(g, classes="plugin-block"))
+            elif kind == "text":
+                body.append(Static(rt(blk["text"]), classes="plugin-block"))
+            elif kind == "log":
+                body.append(Static(Text("\n").join(Text(redact_text(x, self.redact), DIM) for x in blk["lines"])
+                                   or Text("—", DIM), classes="plugin-block plugin-log"))
+            elif kind == "table":
+                table = DataTable(cursor_type="row", zebra_stripes=True, name=str(i), classes="plugin-table")
+                width = len(blk["columns"]) or max((len(r["cells"]) for r in blk["rows"]), default=1)
+                table.add_columns(*([Text(c) for c in blk["columns"]] or [Text("")] * width))
+                for j, r in enumerate(blk["rows"]):
+                    cells = [rt(c) for c in r["cells"][:width]]
+                    table.add_row(*cells, *[Text("")] * (width - len(cells)), key=str(j))
+                if cursors.get(str(i)):
+                    table.call_after_refresh(table.move_cursor, row=cursors[str(i)])
+                body.append(table)
+                if blk["row_actions"] and blk["rows"]:
+                    body.append(Horizontal(*[
+                        Button(Text(acts[a]["label"] if a in acts else a.upper()), name=f"plugin:row:{i}:{a}", compact=True,
+                               variant="error" if acts.get(a, {}).get("danger") else "default")
+                        for a in blk["row_actions"]], classes="plugin-actions"))
+            else:
+                body.append(Static(Text(f"this version of Oni can't draw a '{blk['name']}' block", GREY),
+                                   classes="plugin-block"))
+            if blk.get("more"):
+                body.append(Static(Text(f"+{blk['more']} more", DIM)))
+        if v.get("actions"):
+            body.append(Horizontal(*[Button(Text(a["label"]), name=f"plugin:act:{a['id']}", compact=True,
+                                            variant="error" if a["danger"] else "primary") for a in v["actions"]],
+                                   classes="plugin-actions"))
+        out.append(Vertical(*body, classes="plugin-body -stale" if pg.error else "plugin-body"))
+        panel.mount(*out)
+
+    def plugin_gate(self, pg: Plugin, why: str) -> list:
+        """A plug-in that won't run: why it can't, or what approving it would allow."""
+        if why != "needs approval":
+            return [Static(Text.assemble(("DISABLED\n\n", RED), (why, WHITE),
+                                         (f"\n\n{pg.m.description}" if pg.m.description else "", DIM)))]
+        return [Static(Text.assemble(("NEEDS YOUR APPROVAL\n\n", AMBER), *self.plugin_terms(pg.m))),
+                Button("APPROVE…", name="plugin:approve", variant="warning", compact=True)]
+
+    def plugin_terms(self, m: Manifest) -> tuple:
+        """What a plug-in is and may do, as approval shows it."""
+        def rt(s: str) -> str:
+            return redact_text(s, self.redact)
+        return ((f"{m.title} {m.version}".strip(), WHITE), (f" by {m.author}" if m.author else "", DIM),
+                (f"\n{m.description}" if m.description else "", DIM),
+                ("\n\nRuns   ", CYAN), (rt(m.exec), WHITE),
+                ("\nOn     ", CYAN), (rt(m.host) if m.host else "this computer", WHITE),
+                ("\nMay have Oni send   ", CYAN), (", ".join(m.rcon) or "nothing", WHITE),
+                ("\nSees player addresses   ", CYAN), ("yes" if m.addresses else "no", RED if m.addresses else WHITE),
+                ("\n\nOni doesn't sandbox it: it runs as you and can do whatever you can. This approval holds until its "
+                 "manifest changes.", DIM))
+
+    @staticmethod
+    def plugins_howto() -> Text:
+        return Text.assemble(
+            ("NO PLUG-INS\n\n", AMBER),
+            ("A plug-in is a program that draws its own panel here, such as Gryphon's moderation log. Put its folder "
+             "in plugins/ next to the config file and turn it on at the top of the config, above the first [table]:"
+             "\n\n", WHITE), ("  plugins = ", CYAN), ('["gryphon"]\n\n', WHITE),
+            ("It asks for your approval before it ever runs. docs/PLUGINS.md says how to write one.", DIM))
+
+    def plugin_button(self, name: str) -> None:
+        if not self.plugins:
+            return
+        pg = self.plugins[min(self.psel, len(self.plugins) - 1)]
+        kind, _, rest = name.partition(":")
+        acts = {a["id"]: a for a in (pg.view or {}).get("actions", [])}
+        if kind == "approve":
+            self.plugin_approve(pg)
+        elif kind == "act" and rest in acts:
+            self.plugin_action(pg, acts[rest])
+        elif kind == "row":
+            i, _, aid = rest.partition(":")
+            rows = (pg.view or {}).get("blocks", [])[int(i)]["rows"]
+            table = next((t for t in self.query_one("#plugin-panel").query(DataTable) if t.name == i), None)
+            if rows and table:
+                row = rows[min(table.cursor_row, len(rows) - 1)]["id"]
+                self.plugin_action(pg, acts.get(aid) or {"id": aid, "label": aid, "danger": False, "confirm": "",
+                                                          "params": []}, row)
+
+    @work(exclusive=True, group="dialog")
+    async def plugin_approve(self, pg: Plugin) -> None:
+        if not await self.push_screen_wait(Confirm(f"RUN THE PLUG-IN {pg.m.title.upper()}?",
+                                                   Text.assemble(*self.plugin_terms(pg.m)).plain, verb="APPROVE")):
+            return
+        self.prefs.plugins_trusted[pg.m.id] = pg.m.hash
+        self.prefs.save()
+        pg.due = 0.0
+        self.paint_plugins()
+
+    @work(exclusive=True, group="dialog")
+    async def plugin_action(self, pg: Plugin, a: dict, row: str | None = None) -> None:
+        """Its params asked for, then its confirm if it has one (ABORT is the default), then run in the background.
+        Esc or ABORT at either step sends nothing."""
+        if self.plugin_state(pg):
+            return
+        params: dict = {}
+        if a["params"]:  # field keys are positions: a param's name needn't be a valid widget id
+            fields = [(f"p{i}", x["label"] + ("  (10m, 1d)" if x["type"] == "duration" else ""),
+                       [("No", "false"), ("Yes", "true")] if x["type"] == "bool"
+                       else [(Text(o), o) for o in x["options"]] if x["type"] == "choice" else "")
+                      for i, x in enumerate(a["params"])]
+            got = await self.push_screen_wait(Form(f"{pg.m.title} › {a['label']}".upper(), fields, verb="RUN",
+                                                   danger=a["danger"]))
+            if got is None:
+                return
+            for i, x in enumerate(a["params"]):
+                v = got[f"p{i}"]
+                if x["type"] == "number":
+                    try:
+                        v = int(v) if re.fullmatch(r"-?\d+", v) else float(v)
+                    except ValueError:
+                        self.notify(f"{x['label']} must be a number: nothing was sent.", severity="warning")
+                        return
+                params[x["name"]] = v == "true" if x["type"] == "bool" else v
+        if (a["danger"] or a["confirm"]) and not await self.push_screen_wait(Confirm(
+                f"{pg.m.title} › {a['label']}".upper(), a["confirm"] or f"Run {a['label']}?",
+                verb=a["label"].upper()[:24], danger=a["danger"])):
+            return
+        self.run_worker(self.plugin_run(pg, a, params, row), group="plugins", exit_on_error=False)
+
+    async def plugin_run(self, pg: Plugin, a: dict, params: dict, row: str | None) -> None:
+        """Run an action: toast what it said, send the RCON it asked for that its permissions allow, then show the
+        view it sent back, or ask for a fresh one."""
+        title = f"{pg.m.title} · {a['label']}"
+        try:
+            raw = await self.plugin_call(pg, {"type": "action", "id": a["id"], "params": params, "row": row,
+                                              "server": server_name(self.cur.server)}, ACTION_TIMEOUT)
+        except PluginError as e:
+            raw = {"ok": False, "error": str(e)}
+        except Exception as e:
+            raw = {"ok": False, "error": hc.scrub(f"{type(e).__name__}: {e}")}
+        if not self.is_running:
+            return
+        by_name = {server_name(st.server): st for st in self.stations}
+        r = pl.normalise_action(raw, pg.m, list(by_name))
+        words = redact_text(r["toast"] or r["error"] or ("done" if r["ok"] else "failed"), self.redact)
+        pg.note = f"{time.strftime('%H:%M:%S')}  {a['label']}: {words}"
+        self.notify(words, title=title, severity="information" if r["ok"] else "error")
+        for d in r["dropped"]:
+            self.notify(f"Not sent: {d}.", title=title, severity="warning")
+            self.log_cmd(Text(f"plug-in {pg.m.id} asked for {d}: not sent", AMBER))
+        for x in r["rcon"]:
+            await self.cmd(by_name[x["server"]], x["command"], *x["args"], via=f"plug-in {pg.m.id}")
+        if r["view"] and "error" not in r["view"]:
+            pg.view, pg.error = r["view"], ""
+        else:
+            pg.due = 0.0
+        if self.is_running:
+            self.paint_plugins()
+            self.paint_masthead()
 
     def check_update(self) -> None:
         try:
@@ -1945,10 +2247,11 @@ class OniApp(App):
             self.fetch(st, "status", *(() if empty else ("players",)))
 
     async def cmd(self, st: Station, command: str, *args: str, toast: bool = True, show_data: bool = False,
-                  quiet: bool = False, brief: bool = False) -> dict:
+                  quiet: bool = False, brief: bool = False, via: str = "") -> dict:
         """Run one command, write it to the command log (the audit trail), toast the result. `ok` comes back None
         when no reply came in time: it may still have run. `quiet` keeps even a failure out of the toasts, and
-        `brief` logs only the station and its reply, for a fan-out that names the command once and sums up."""
+        `brief` logs only the station and its reply, for a fan-out that names the command once and sums up. `via`
+        names who asked for it when that wasn't the operator, e.g. "plug-in gryphon"."""
         try:
             r = await st.rcon.call(command, *args)
             r = {**r, "ok": bool(r.get("ok"))}  # None is kept for no reply at all
@@ -1956,7 +2259,8 @@ class OniApp(App):
             r = {"ok": None, "text": str(e)}
         except Exception as e:
             r = {"ok": False, "text": str(e) or type(e).__name__}
-        self.log_reply(st, None if brief else " ".join([command, *map(q, args)]), r, show_data)
+        line = " ".join([command, *map(q, args)])
+        self.log_reply(st, None if brief else f"{via} ▸ {line}" if via else line, r, show_data)
         ok = r.get("ok")
         if toast or not (ok or quiet):
             self.notify(self.reply_text(r), title=f"{st.label} · {command.upper()}",
@@ -2092,9 +2396,10 @@ class OniApp(App):
     def condition(self) -> tuple[str, str]:
         """RED while an alert is unseen and for a moment after any; AMBER while a station is down, the host is short
         of memory, or something installed from Forge has been withdrawn and nobody has acknowledged it; else GREEN."""
-        if self.unseen or time.monotonic() - self.alert_at < 15:
+        badges = {b["level"] for pg in self.plugins if (b := pg.badge)}  # a plug-in's warn or alert counts too
+        if self.unseen or time.monotonic() - self.alert_at < 15 or "alert" in badges:
             return "RED", RED
-        if not all(st.online for st in self.stations) or self.fstate.alarms() or self.mon.short():
+        if not all(st.online for st in self.stations) or self.fstate.alarms() or self.mon.short() or "warn" in badges:
             return "AMBER", AMBER
         return "GREEN", GREEN
 
@@ -2132,6 +2437,7 @@ class OniApp(App):
         self.paint_bans()
         self.paint_forge()
         self.paint_uplink()
+        self.paint_plugins()
         self.paint_masthead()
         if feed:
             self.repaint_feed()
@@ -2539,6 +2845,10 @@ class OniApp(App):
         if e.pane.id == "health":  # looked at now: the banner has done its job
             self.hide_banner()
             self.paint_health()
+        if e.pane.id == "plugins":  # looked at now: every one that runs is asked afresh
+            for pg in self.plugins:
+                pg.due = 0.0
+            self.paint_plugins()
         if e.pane.id == "intercepts" and self.unseen:  # every station's alerts are in the feed: seen now
             for st in self.stations:
                 st.alerts = 0
@@ -2610,7 +2920,9 @@ class OniApp(App):
     @on(Button.Pressed)
     def _button(self, e: Button.Pressed) -> None:
         bid = e.button.id or ""
-        if bid == "op-broadcast":
+        if (e.button.name or "").startswith("plugin:"):
+            self.plugin_button(e.button.name[7:])
+        elif bid == "op-broadcast":
             self.action_broadcast()
         elif bid.startswith("op-"):
             self.op(bid[3:])
@@ -2676,6 +2988,9 @@ class OniApp(App):
         self.query_one("#say" if tabs.active == "intercepts" else "#cmd").focus()
 
     def action_refresh(self) -> None:
+        if self.query_one(TabbedContent).active == "plugins":
+            for pg in self.plugins:
+                pg.due = 0.0
         if self.query_one(TabbedContent).active == "health":  # every report and service check, now
             for st in self.stations:
                 st.check_at = 0.0
@@ -2717,6 +3032,10 @@ class OniApp(App):
         yield SystemCommand("Health: read the reports now", "crashes, memory and the workaround service  (F7, Ctrl+R)",
                             lambda: (setattr(self, "service_at", {h: 0.0 for h in self.service_at}),
                                      [setattr(st, "check_at", 0.0) for st in self.stations]))
+        for pg in self.plugins:  # one per action of each plug-in that runs; the names are the plug-in's: escaped
+            for a in [] if self.plugin_state(pg) else (pg.view or {}).get("actions", []):
+                yield SystemCommand(escape(f"{pg.m.title} › {a['label']}"), escape(a["confirm"] or "a plug-in action  (F10)"),
+                                    lambda pg=pg, a=a: self.plugin_action(pg, a))
         yield SystemCommand("Help: field manual", "what everything does, in plain words  (?)", self.action_help)
         yield SystemCommand("Add a server", "open the setup screen", self.action_add_server)
         yield SystemCommand("Forge: Load API key", "your own ReclaimerForge key, for F6", lambda: self.action_forge("key"))

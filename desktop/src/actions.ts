@@ -90,6 +90,7 @@ export const TAB_TIPS: Record<string, string> = {
   console: "Type server commands directly. For when a button doesn't cover it.",
   forge: "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
   health: "Crashes read from each server's log, the host's memory, and whether the workaround service runs.",
+  plugins: "Programs you've added that draw their own panel here, such as Gryphon's moderation log.",
 };
 
 const opt = (v: string) => (v ? [v] : []);
@@ -524,10 +525,6 @@ function fieldRow(f: Field, now: unknown): [string, string, string | [string, st
   const first = (opts: [string, string][]): [string, string][] => [...opts.filter(([, v]) => v === cur), ...opts.filter(([, v]) => v !== cur)];
   if (f.kind === "choice") return [f.key, f.label, first(f.options!.map((o) => [o, o]))];
   if (f.kind === "server") return [f.key, f.label, first(oni.stations.map((x) => [x.label, x.where]))];
-  if (f.kind === "webhook") {
-    const names = Object.keys(oni.runner.webhooks);
-    return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.webhooks[n]}`, n]))] : null;
-  }
   if (f.kind === "chat") {
     const names = Object.keys(oni.runner.chats);
     return names.length ? [f.key, f.label, first(names.map((n) => [`${n}  ${oni.runner.chats[n]}`, n]))] : null;
@@ -535,23 +532,44 @@ function fieldRow(f: Field, now: unknown): [string, string, string | [string, st
   return [f.key, f.label, cur];
 }
 
+/** Which saved Discord webhooks a step posts to: one is taken as is, several are ticked (at least one). `now` is the comma list to start from. */
+async function pickHooks(now: string): Promise<string | null> {
+  const names = Object.keys(oni.runner.webhooks);
+  if (names.length === 1) return names[0];
+  for (;;) {
+    const got = await toggles("POST TO WHICH WEBHOOKS · tick one or more", names.map((n) => [`${n}  ${oni.runner.webhooks[n]}`, n] as [string, string]), now.split(",").filter((n) => names.includes(n)));
+    if (!got) return null;
+    if (got.length) return got.join(",");
+    oni.notify("Tick at least one webhook.", "AUTOMATION", "warning");
+  }
+}
+
 /** One WHEN, IF or THEN block of the given type, asked field by field and checked; `init` holds the values to start from. */
 async function askBlock(part: Part, type: string, init: Dict = {}): Promise<Dict | null> {
   const { label, hint, fields } = CATALOG[part][type];
   if (!fields.length) return block(part, { type });
   let cur: Dict = { ...init }, note = hint + (fields.some((f) => f.kind === "message") ? `\nIn a message: ${TEMPLATE_HELP}` : "");
+  const hookField = fields.find((f) => f.kind === "webhook"); // asked as a tick list, so a step can post to several webhooks
+  if (hookField) {
+    if (!Object.keys(oni.runner.webhooks).length) {
+      oni.notify("Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
+      return null;
+    }
+    const h = await pickHooks(String(cur[hookField.key] ?? ""));
+    if (!h) return null;
+    cur[hookField.key] = h;
+  }
   for (;;) {
-    const rows = fields.map((f) => fieldRow(f, cur[f.key]));
+    const rows = fields.filter((f) => f !== hookField).map((f) => fieldRow(f, cur[f.key]));
     if (rows.includes(null)) {
-      oni.notify(fields.some((f) => f.kind === "chat") ? "Add a Telegram chat first (TELEGRAM in the automation list), then use this step."
-        : "Add a Discord webhook first (DISCORD in the automation list), then use this step.", "AUTOMATION", "warning", 10);
+      oni.notify("Add a Telegram chat first (TELEGRAM in the automation list), then use this step.", "AUTOMATION", "warning", 10);
       return null;
     }
     const v = await oni.form(label.toUpperCase(), rows as [string, string, string | [string, string][]][], { verb: "OK", note });
     if (!v) return null;
-    cur = v;
+    cur = { ...v, ...(hookField && { [hookField.key]: cur[hookField.key] }) };
     try {
-      return block(part, { type, ...v });
+      return block(part, { type, ...cur });
     } catch (e) {
       note = `${(e as Error).message}\n${hint}`;
     }
@@ -784,10 +802,17 @@ export async function automation() {
           const t = STARTERS.find((x) => x.name === name);
           if (!t) continue;
           // a template that posts to Discord posts to Telegram instead when that is the only place set up
-          const hook = Object.keys(oni.runner.webhooks)[0], chat = Object.keys(oni.runner.chats)[0];
-          if (t.then.some((a: Dict) => a.type === "discord") && !hook && !chat) {
-            oni.notify("This one posts to Discord or Telegram: add a webhook (DISCORD) or a chat (TELEGRAM) first.", "AUTOMATION", "warning", 10);
-            continue;
+          const chat = Object.keys(oni.runner.chats)[0];
+          let hook = "";
+          if (t.then.some((a: Dict) => a.type === "discord")) {
+            if (Object.keys(oni.runner.webhooks).length) {
+              const picked = await pickHooks(""); // with several webhooks, you choose which ones; never just the first
+              if (!picked) continue;
+              hook = picked;
+            } else if (!chat) {
+              oni.notify("This one posts to Discord or Telegram: add a webhook (DISCORD) or a chat (TELEGRAM) first.", "AUTOMATION", "warning", 10);
+              continue;
+            }
           }
           base = relay(t, hook, chat);
         }

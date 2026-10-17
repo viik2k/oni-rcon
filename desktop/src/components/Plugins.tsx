@@ -1,0 +1,125 @@
+// F10: plug-ins, separate programs that describe their own panel in JSON (docs/PLUGINS.md). The backend finds, runs
+// and shapes them; this draws what they sent. Every string here is the plug-in's data, drawn as plain text (never
+// markup) and redacted like the rest of the console.
+import { useState } from "react";
+import { AMBER, CYAN, DIM, GREEN, GREY, INK, RED, WHITE } from "../art/palette";
+import { badgeOf, oni, useV, type Plugin } from "../engine";
+import { redactText, type Dict, type Line } from "../lib/util";
+import { Btn, Panel, Table, type Row } from "./ui";
+
+const BADGE: Record<string, string> = { ok: GREEN, warn: AMBER, alert: RED, off: DIM };
+
+/** Its entry in the list: a light, its name, and its badge or what's wrong. */
+function entry(p: Plugin): Row {
+  const why = p.m.state, b = badgeOf(p);
+  const light: [string, string] = p.busy ? ["◌", AMBER] : why && why !== "needs approval" ? ["⊘", RED] : why ? ["?", AMBER]
+    : p.error ? ["○", RED] : !p.view ? ["○", DIM] : ["●", b ? BADGE[b.level] : GREEN];
+  const tail: Line = why ? [[why === "needs approval" ? "NEEDS APPROVAL" : "DISABLED", why === "needs approval" ? AMBER : RED]]
+    : p.error ? [["NO ANSWER", RED]] : b?.text ? [[b.text, BADGE[b.level]]] : [];
+  return { id: p.m.id, cells: [[light], [[p.m.name || p.m.id, why ? DIM : WHITE]], tail] };
+}
+
+function Howto() {
+  return (
+    <div style={{ whiteSpace: "pre-wrap" }}>
+      <div style={{ color: AMBER }}>NO PLUG-INS</div><br />
+      <div>A plug-in is a program that draws its own panel here, such as Gryphon's moderation log. Put its folder in plugins/ next to the config file and turn it on at the top of the config, above the first [table]:</div><br />
+      <div><span style={{ color: CYAN }}>  plugins = </span>["gryphon"]</div><br />
+      <div style={{ color: DIM }}>It asks for your approval before it ever runs. docs/PLUGINS.md says how to write one.</div>
+    </div>
+  );
+}
+
+/** A plug-in that won't run: why it can't, or what approving it would allow. */
+function Gate({ p }: { p: Plugin }) {
+  if (p.m.state !== "needs approval") {
+    return (
+      <div style={{ whiteSpace: "pre-wrap" }}>
+        <div style={{ color: RED }}>DISABLED</div><br />
+        <div>{redactText(p.m.state, oni.redact)}</div>
+        {p.m.description ? <><br /><div style={{ color: DIM }}>{p.m.description}</div></> : null}
+      </div>
+    );
+  }
+  return (
+    <div style={{ whiteSpace: "pre-wrap" }}>
+      <div style={{ color: AMBER }}>NEEDS YOUR APPROVAL</div><br />
+      <div>{oni.pluginTerms(p.m)}</div><br />
+      <Btn label="APPROVE…" variant="warning" onClick={() => oni.pluginApprove(p)} id="plugin-approve" />
+    </div>
+  );
+}
+
+function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) {
+  const [sel, setSel] = useState<string | null>(null);
+  const rt = (s: string) => redactText(s, oni.redact);
+  const more = b.more ? <div style={{ color: DIM }}>+{b.more} more</div> : null;
+  if (b.type === "kv") {
+    return <><div className="facts">{b.rows.flatMap(([k, v]: string[], i: number) => [<span key={i} style={{ color: AMBER }}>{rt(k)}</span>, <span key={`${i}v`}>{rt(v)}</span>])}</div>{more}</>;
+  }
+  if (b.type === "text") return <div style={{ whiteSpace: "pre-wrap" }}>{rt(b.text)}</div>;
+  if (b.type === "log") return <><div style={{ whiteSpace: "pre-wrap", color: DIM }}>{b.lines.length ? b.lines.map(rt).join("\n") : "—"}</div>{more}</>;
+  if (b.type !== "table") return <div style={{ color: GREY }}>this version of Oni can't draw a '{b.name}' block</div>;
+  const width = b.columns.length || Math.max(1, ...b.rows.map((r: Dict) => r.cells.length));
+  const rows: Row[] = b.rows.map((r: Dict, j: number) => ({ id: String(j), cells: Array.from({ length: width }, (_, k) => rt(r.cells[k] ?? "")) }));
+  const row = b.rows[Number(sel ?? 0)]?.id ?? null;
+  return (
+    <>
+      <div style={{ maxHeight: 360, display: "flex", flexDirection: "column" }}>
+        <Table cols={b.columns.length ? b.columns : Array(width).fill("")} rows={rows} selected={sel} onSelect={setSel} />
+      </div>
+      {more}
+      {b.row_actions.length && b.rows.length ? (
+        <div className="btns" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {b.row_actions.map((a: string) => {
+            const act = acts.get(a) ?? { id: a, label: a.toUpperCase(), danger: false, confirm: "", params: [] };
+            return <Btn key={a} label={act.label} variant={act.danger ? "error" : ""} onClick={() => oni.pluginAction(p, act, row)} />;
+          })}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function View({ p }: { p: Plugin }) {
+  const v: Dict = p.view ?? {}, b = v.badge;
+  const acts = new Map<string, Dict>((v.actions ?? []).map((a: Dict) => [a.id, a]));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div>
+        <span style={{ color: AMBER }}>{v.title || p.m.name}</span><span style={{ color: DIM }}>  {p.m.version}</span>
+        {b?.text ? <span style={{ marginLeft: 12, padding: "0 6px", color: INK, background: BADGE[b.level] }}>{b.text}</span> : null}
+      </div>
+      {p.error ? <div style={{ color: RED }}>⚠ {redactText(p.error, oni.redact)}{p.view ? "   ·   showing its last answer" : ""}</div> : null}
+      {p.note ? <div style={{ color: DIM }}>{redactText(p.note, oni.redact)}</div> : null}
+      {!p.view && !p.error ? <div style={{ color: DIM }}>asking…</div> : null}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1 }}>
+        {(v.blocks ?? []).map((blk: Dict, i: number) => <Block key={`${p.m.id}:${i}:${blk.type}`} p={p} b={blk} acts={acts} />)}
+        {v.actions?.length ? (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {v.actions.map((a: Dict) => <Btn key={a.id} label={a.label} variant={a.danger ? "error" : "primary"} onClick={() => oni.pluginAction(p, a)} />)}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function Plugins() {
+  useV((s) => s.plugins);
+  const p = oni.plugins[Math.min(oni.psel, oni.plugins.length - 1)];
+  const select = (id: string) => {
+    oni.psel = Math.max(0, oni.plugins.findIndex((x) => x.m.id === id));
+    useV.setState((s) => ({ plugins: s.plugins + 1 }));
+  };
+  return (
+    <div className="hsplit grow">
+      <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
+        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={p?.m.id ?? null} onSelect={select} />
+      </Panel>
+      <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3, overflow: "auto" }}>
+        {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : <View p={p} />}
+      </Panel>
+    </div>
+  );
+}

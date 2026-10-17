@@ -14,7 +14,7 @@ import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
-  redactData, redactText, resolve, splitTag, stripEnds, who, noteKick,
+  redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line,
 } from "./lib/util";
 
@@ -22,13 +22,16 @@ export const FLEET = 12;
 const FANOUT = 4;
 const SLOW_POLL = 15_000;
 export const SPREE = 5;
-export type Tab = "assets" | "intercepts" | "operations" | "blacklist" | "console" | "forge" | "health";
-export const TABS: Tab[] = ["assets", "intercepts", "operations", "blacklist", "console", "forge", "health"];
+export type Tab = "assets" | "intercepts" | "operations" | "blacklist" | "console" | "forge" | "health" | "plugins";
+export const TABS: Tab[] = ["assets", "intercepts", "operations", "blacklist", "console", "forge", "health", "plugins"];
+/** The key that opens a tab: F1 to F7 in order, then plug-ins on F10 (F8 and F9 were taken). */
+export const fkey = (t: Tab) => (t === "plugins" ? "F10" : `F${TABS.indexOf(t) + 1}`);
+const PLUGIN_EVERY = 30_000, PLUGIN_BADGE_EVERY = 60_000; // ms between asks: with F10 open, and for a badge while it's shut
 
 // --- what the window repaints, by counter ----------------------------------------------------------------------
 type Counters = { cards: number; roster: number; ops: number; bans: number; feed: number; log: number; forge: number;
-  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number };
-export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0 }));
+  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number; plugins: number };
+export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0, plugins: 0 }));
 const pending = new Set<keyof Counters>();
 let flushQueued = false;
 // the feed and the log repaint at most this often: a fleet's events arrive as a stream, and a repaint per event
@@ -145,6 +148,11 @@ export interface Dialog { id: number; kind: string; props: Dict; resolve: (v: an
 
 export interface Reply { ok: boolean | null; text?: string; data?: any }
 
+/** A plug-in the config turns on (its manifest, and `state`: why it won't run, "" when it will), and what the console
+ *  last heard from it. Its view is kept, greyed, when an ask fails. */
+export interface Plugin { m: Dict; view: Dict | null; error: string; busy: boolean; asked: boolean; due: number; note: string }
+export const badgeOf = (p: Plugin): Dict | null => (p.view && !p.error ? p.view.badge : null);
+
 class Oni {
   by = "";
   stations: Station[] = [];
@@ -189,6 +197,8 @@ class Oni {
   forgeState: Dict = { servers: {}, withdrawn: {}, latest: {}, alarms: [] };
   fullIntro = false;
   waiting: number[] = [];
+  plugins: Plugin[] = [];
+  psel = 0;
   private ids = 0;
   private timers: number[] = [];
   private unlisten: (() => void) | null = null;
@@ -228,6 +238,9 @@ class Oni {
     every(1000, () => this.tick());
     every(3000, () => this.pollFast());
     every(1000, () => this.pollSlow());
+    every(2000, () => this.pluginTick());
+    this.plugins = [];
+    this.loadPlugins(performance.now() + 3000); // each asked once soon after start, for its badge
     for (const st of this.stations) if (st.online) this.fetch(st, "status");
     bump("cards", "roster", "ops", "bans", "feed", "log", "forge", "health", "mast", "ui");
   }
@@ -602,8 +615,9 @@ class Oni {
   /** RED while an alert is unseen and for a moment after any; AMBER while a station is down, the host is short of
    *  memory, or something installed from Forge was withdrawn and nobody has acknowledged it; else GREEN. */
   condition(): ["RED" | "AMBER" | "GREEN", string] {
-    if (this.unseen || performance.now() - this.alertAt < 15_000) return ["RED", RED];
-    if (!this.stations.every((s) => s.online) || this.forgeState.alarms?.length || this.health.short) return ["AMBER", AMBER];
+    const badges = this.plugins.map((p) => badgeOf(p)?.level);
+    if (this.unseen || performance.now() - this.alertAt < 15_000 || badges.includes("alert")) return ["RED", RED];
+    if (!this.stations.every((s) => s.online) || this.forgeState.alarms?.length || this.health.short || badges.includes("warn")) return ["AMBER", AMBER];
     return ["GREEN", GREEN];
   }
 
@@ -701,6 +715,7 @@ class Oni {
 
   refresh() {
     if (this.tab === "health") invoke("health_now").catch(() => {});
+    if (this.tab === "plugins") this.plugins.forEach((p) => (p.due = 0));
     this.fetch(this.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
     for (const st of this.stations) this.fetch(st, "status");
   }
@@ -716,6 +731,100 @@ class Oni {
     } catch (e) {
       this.notify(String(e), "COPY FAILED", "warning");
     }
+  }
+
+  // --- plug-ins (F10) ----------------------------------------------------------------------------------------------
+  /** How a plug-in names a server: its name in the config, or its address. Not the label, which changes once the
+   *  server reports its own name. */
+  serverName(st?: Station) { return st ? st.name || st.where : null; }
+
+  /** The list from the backend, keeping what each already said; `due` for any it hasn't seen before. */
+  async loadPlugins(due = 0) {
+    try {
+      const list = await invoke<Dict[]>("plugins_list");
+      const had = new Map(this.plugins.map((p) => [p.m.id, p]));
+      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "" }, { m }));
+    } catch { /* no console running */ }
+    bump("plugins", "mast");
+  }
+
+  /** Ask the plug-ins that are due: with F10 open every one that runs, every 30 s; shut, only one whose badge feeds
+   *  CONDITION, every 60 s (and each once after start, to learn whether it has a badge). */
+  private pluginTick() {
+    const now = performance.now(), shown = this.tab === "plugins";
+    for (const p of this.plugins) if (!p.m.state && !p.busy && now >= p.due && (shown || !p.asked || badgeOf(p))) this.pluginView(p);
+  }
+
+  async pluginView(p: Plugin) {
+    p.busy = true;
+    bump("plugins");
+    try {
+      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server: this.serverName(this.cur) });
+      if (v.error) p.error = v.error;
+      else [p.view, p.error] = [v, ""];
+    } catch (e) {
+      p.error = String(e);
+    }
+    [p.busy, p.asked] = [false, true];
+    p.due = performance.now() + (this.tab === "plugins" ? PLUGIN_EVERY : PLUGIN_BADGE_EVERY);
+    bump("plugins", "mast");
+  }
+
+  /** What a plug-in is and may do, as approval shows it. */
+  pluginTerms(m: Dict) {
+    return redactText(`${m.name} ${m.version}`.trim() + (m.author ? ` by ${m.author}` : "") + (m.description ? `\n${m.description}` : "")
+      + `\n\nRuns   ${m.exec}\nOn     ${m.host || "this computer"}\nMay have Oni send   ${m.rcon.join(", ") || "nothing"}`
+      + `\nSees player addresses   ${m.addresses ? "yes" : "no"}\n\nOni doesn't sandbox it: it runs as you and can do whatever you can. `
+      + "This approval holds until its manifest changes.", this.redact);
+  }
+
+  async pluginApprove(p: Plugin) {
+    if (!(await this.confirm(`RUN THE PLUG-IN ${String(p.m.name || p.m.id).toUpperCase()}?`, this.pluginTerms(p.m), "APPROVE"))) return;
+    try {
+      await invoke("plugin_approve", { id: p.m.id });
+    } catch (e) {
+      return this.notify(String(e), "APPROVAL NOT SAVED", "error");
+    }
+    p.due = 0;
+    await this.loadPlugins();
+  }
+
+  /** Its params asked for, then its confirm if it has one (ABORT is the default), then run. Esc or ABORT at either
+   *  step sends nothing. Then: toast what it said, send the RCON its permissions allow, and show the view it sent back
+   *  or ask for a fresh one. */
+  async pluginAction(p: Plugin, a: Dict, row: string | null = null) {
+    if (p.m.state) return;
+    const title = `${p.m.name || p.m.id} › ${a.label}`.toUpperCase();
+    let params: Dict = {};
+    if (a.params.length) {
+      const got = await this.form(title, a.params.map((x: Dict, i: number) => [`p${i}`, x.label + (x.type === "duration" ? "  (10m, 1d)" : ""),
+        x.type === "bool" ? [["No", "false"], ["Yes", "true"]] : x.type === "choice" ? x.options.map((o: string) => [o, o]) : ""]), { verb: "RUN", danger: a.danger });
+      if (!got) return;
+      const typed = typedParams(a.params, got);
+      if (typeof typed === "string") return this.notify(typed, title, "warning");
+      params = typed;
+    }
+    if ((a.danger || a.confirm) && !(await this.confirm(title, a.confirm || `Run ${a.label}?`, a.label.toUpperCase().slice(0, 24), a.danger))) return;
+    const r: Dict = await invoke<Dict>("plugin_action", { id: p.m.id, action: a.id, params, row, server: this.serverName(this.cur),
+      servers: this.stations.map((s) => this.serverName(s)) }).catch((e) => ({ ok: false, toast: "", error: String(e), view: null, rcon: [], dropped: [] }));
+    const words = redactText(r.toast || r.error || (r.ok ? "done" : "failed"), this.redact);
+    p.note = `${new Date().toTimeString().slice(0, 8)}  ${a.label}: ${words}`;
+    this.notify(words, title, r.ok ? "information" : "error");
+    for (const d of r.dropped) {
+      this.notify(`Not sent: ${d}.`, title, "warning");
+      this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [redactText(`plug-in ${p.m.id} asked for ${d}: not sent`, this.redact), AMBER]]);
+    }
+    for (const x of r.rcon) {
+      const st = this.stations.find((s) => this.serverName(s) === x.server);
+      if (!st) continue;
+      const res = await this.call(st, x.command, x.args);
+      this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [`${st.label} `, CYAN], [redactText(`plug-in ${p.m.id} ▸ ${cmdLine(x.command, x.args)}`, this.redact), WHITE]]);
+      this.logLine([["  "], [this.replyText(res), res.ok ? GREEN : res.ok === null ? AMBER : RED]]);
+      if (!res.ok) this.notify(this.replyText(res), `${st.label} · ${x.command.toUpperCase()}`, res.ok === null ? "warning" : "error");
+    }
+    if (r.view && !r.view.error) [p.view, p.error] = [r.view, ""];
+    else p.due = 0;
+    bump("plugins", "mast");
   }
 
   // --- dialogs -----------------------------------------------------------------------------------------------------
