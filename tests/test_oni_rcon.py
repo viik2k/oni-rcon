@@ -664,6 +664,19 @@ def test_kicked_list_follows_kick_refused_and_pardon():
         == "PARDON  Bravo, Bravo2  may rejoin  by Alice (RCON)"
 
 
+def test_admin_and_reload_events_get_a_layout():
+    d = lambda ev: appmod.describe(ev, {}).plain
+    assert d({"event": "admin_added", "name": "Bravo", "id": "76561198000000001", "by": "RCON"}) \
+        == "ADMIN  Bravo  made admin  by RCON"
+    assert d({"event": "admin_removed", "id": "0123456789abcdef0123456789abcdef"}) == "ADMIN  01234567…  no longer admin"
+    assert d({"event": "control", "action": "reload", "ok": True, "text": "max_players 16 -> 12"}) \
+        == "RELOAD  max_players 16 -> 12"
+    assert d({"event": "control", "action": "reload", "ok": False, "text": "dedicated.toml: line 4"}) \
+        == "RELOAD FAILED  dedicated.toml: line 4"
+    assert d({"event": "control", "action": "reload_applied", "ok": True, "text": "playlist"}) == "RELOAD APPLIED  playlist"
+    assert d({"event": "control", "action": "kill_feed", "ok": True, "text": "x"}).startswith("CONTROL  x")
+
+
 def test_f4_pardons_a_kick():
     async def go():
         ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])

@@ -367,9 +367,10 @@ export function explain(detail: string, state = "offline", short = false): strin
 
 export const CATS: Record<string, string> = { chat: WHITE, combat: RED, traffic: CYAN, moderation: AMBER, ops: GREY };
 export const KIND: Record<string, string> = { chat: "chat", kill: "combat", join: "traffic", leave: "traffic", refused: "traffic",
-  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation", pardon: "moderation" };
+  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", pardon: "moderation",
+  admin_added: "moderation", admin_removed: "moderation" };
 export const GLYPH: Record<string, string> = { health: "⚠", chat: "»", kill: "✕", join: "▲", leave: "▼", refused: "⊘", kick: "◆", ban: "■",
-  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
+  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin_added: "✦", admin_removed: "✧", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
 
 /** What an event says, after its time and station. Known kinds get a layout; anything else prints its fields. */
 export function describe(ev: Dict, redact = true): Line {
@@ -397,6 +398,14 @@ export function describe(ev: Dict, redact = true): Line {
     const names = [ev.name ?? []].flat().map(String).filter(Boolean);
     line.push(["PARDON", AMBER], [`  ${names.length ? names.join(", ") : redactText(String(ev.target ?? "?"), redact)}`, WHITE], ["  may rejoin", DIM]);
     if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "admin_added" || kind === "admin_removed") {
+    line.push(["ADMIN", AMBER], [`  ${ev.name ? String(ev.name) : redactText(clipId(ev.id ?? "?"), redact)}`, WHITE],
+      [kind === "admin_added" ? "  made admin" : "  no longer admin", DIM]);
+    if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "control" && (ev.action === "reload" || ev.action === "reload_applied")) {
+    const failed = ev.ok === false; // a reload that changed nothing says why
+    line.push([failed ? "RELOAD FAILED" : ev.action === "reload" ? "RELOAD" : "RELOAD APPLIED", failed ? RED : CYAN]);
+    if (ev.text) line.push([`  ${redactText(String(ev.text), redact)}`]);
   } else if (kind === "health") {
     line.push(["HEALTH  " + String(ev.text ?? ""), ev.level === "crit" ? RED : AMBER]);
   } else {
