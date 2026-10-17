@@ -51,6 +51,11 @@ fn hexed(v: Option<&str>) -> String {
 }
 
 /// Text without player IDs or IPv4 addresses.
+/// Text with every IPv4 address blanked, as address redaction shows them.
+pub fn hide_ips(text: &str) -> String {
+    IPV4.replace_all(text, "███.███.███.███").into_owned()
+}
+
 pub fn scrub(text: &str) -> String {
     IPV4.replace_all(&HEX_ID.replace_all(text, "[id]"), "[ip]").into_owned()
 }

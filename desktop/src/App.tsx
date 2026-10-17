@@ -1,7 +1,7 @@
 // The window: the setup screen or the console, with the boot in between, and every key the terminal console had.
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { bump, fkey, oni, TABS, useV, type Tab } from "./engine";
 import { OPS, BAN_OPS, TAB_TIPS, askPassword, automation, bl, broadcast, goto, op, player } from "./actions";
 import { Sidebar } from "./components/Sidebar";
@@ -174,23 +174,90 @@ function useKeys(onSetup: () => void) {
   }, [onSetup]);
 }
 
+// Per-viewer layout: the sidebar's width and whether it's folded away. Storage can be missing; the layout still works without it.
+const saved = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const save = (k: string, v: string | null) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* not kept */ } };
+
+/** Drag the gap between two panels in any .hsplit/.vsplit to resize them; double-click the gap to put them back. */
+function useSplits() {
+  useEffect(() => {
+    const isSplit = (el: HTMLElement) => (el.classList?.contains("hsplit") || el.classList?.contains("vsplit")) && getComputedStyle(el).flexWrap !== "wrap";
+    const growing = (box: HTMLElement) => [...box.children].filter((k) => {
+      const cs = getComputedStyle(k);
+      return cs.display !== "none" && cs.position !== "absolute" && Number(cs.flexGrow) > 0;
+    }) as HTMLElement[];
+    const down = (e: PointerEvent) => {
+      const box = e.target as HTMLElement;
+      if (e.button !== 0 || !isSplit(box)) return;
+      const row = getComputedStyle(box).flexDirection.startsWith("row");
+      const kids = growing(box);
+      const at = row ? e.clientX : e.clientY;
+      const start = (k: HTMLElement) => { const r = k.getBoundingClientRect(); return row ? r.left : r.top; };
+      const size = (k: HTMLElement) => { const r = k.getBoundingClientRect(); return row ? r.width : r.height; };
+      const i = kids.findIndex((k) => start(k) > at);
+      if (i < 1) return;
+      e.preventDefault();
+      const [a, b] = [kids[i - 1], kids[i]];
+      const sizes = kids.map(size); // freeze every growing panel at its size, so moving one gap moves only its two neighbours
+      kids.forEach((k, j) => { k.style.flex = `${sizes[j]} 1 0px`; });
+      const [sa, sb] = [sizes[i - 1], sizes[i]];
+      const move = (m: PointerEvent) => {
+        const d = Math.max(40 - sa, Math.min(sb - 40, (row ? m.clientX : m.clientY) - at));
+        a.style.flexGrow = String(sa + d);
+        b.style.flexGrow = String(sb - d);
+      };
+      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.style.cursor = ""; };
+      document.body.style.cursor = row ? "col-resize" : "row-resize";
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    };
+    const reset = (e: MouseEvent) => {
+      const box = e.target as HTMLElement;
+      if (isSplit(box)) [...box.children].forEach((k) => { (k as HTMLElement).style.flex = ""; });
+    };
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("dblclick", reset);
+    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("dblclick", reset); };
+  }, []);
+}
+
 function Console({ onSetup }: { onSetup: () => void }) {
   useV((s) => s.ui);
   useKeys(onSetup);
+  useSplits();
   useEffect(() => {
     requestAnimationFrame(() => document.getElementById(FOCUS[oni.tab])?.focus());
   }, []);
   const [ref, { w }] = useSize<HTMLDivElement>();
-  const sidebar = w >= 1700 ? 400 : w < 1250 ? 280 : 330;
+  const [width, setWidth] = useState(() => Number(saved("oni.sidebar")) || 0);
+  const [folded, setFolded] = useState(() => saved("oni.sidebar.folded") === "1");
+  const fit = (n: number) => Math.round(Math.max(200, Math.min(n, Math.max(200, w - 480))));
+  const sidebar = width ? fit(width) : w >= 1700 ? 400 : w < 1250 ? 280 : 330;
+  const fold = () => { setFolded(!folded); save("oni.sidebar.folded", folded ? null : "1"); };
+  const grip = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const left = el.parentElement!.getBoundingClientRect().left;
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("drag");
+    let n = sidebar;
+    el.onpointermove = (m) => { n = fit(m.clientX - left); setWidth(n); };
+    el.onpointerup = () => { el.onpointermove = el.onpointerup = null; el.classList.remove("drag"); save("oni.sidebar", String(n)); };
+  };
+  const unsize = () => { setWidth(0); save("oni.sidebar", null); };
+  const bar = useRef<HTMLDivElement>(null);
   const t = oni.tab;
+  useEffect(() => { bar.current?.querySelector(".on")?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [t]);
+  const wheel = (e: React.WheelEvent<HTMLDivElement>) => { if (!e.deltaX) e.currentTarget.scrollLeft += e.deltaY; };
   return (
-    <div className="console" ref={ref} style={{ ["--sidebar" as any]: `${sidebar}px` }}>
+    <div className="console" ref={ref} style={{ ["--sidebar" as any]: `${folded ? 0 : sidebar}px` }}>
       <Masthead width={w} />
       <Banner />
-      <div className="body">
+      <div className={folded ? "body folded" : "body"}>
         <Sidebar onSetup={onSetup} />
+        <div className="sidegrip" onPointerDown={grip} onDoubleClick={unsize} title="Drag to resize the sidebar; double-click to reset" />
         <div className="tabs">
-          <div className="tabbar">
+          <div className="tabbar" ref={bar} onWheel={wheel}>
+            <button className="fold" onClick={fold} title={folded ? "Show the sidebar" : "Hide the sidebar"}>{folded ? "»" : "«"}</button>
             {TABS.map((x) => (
               <button key={x} className={x === t ? "on" : ""} onClick={() => setTab(x)} title={TAB_TIPS[x]}><span className="f">{fkey(x)}</span>{NAMES[x]}</button>
             ))}

@@ -792,12 +792,13 @@ class Oni {
   /** Its params asked for, then its confirm if it has one (ABORT is the default), then run. Esc or ABORT at either
    *  step sends nothing. Then: toast what it said, send the RCON its permissions allow, and show the view it sent back
    *  or ask for a fresh one. */
-  async pluginAction(p: Plugin, a: Dict, row: string | null = null) {
+  /** Run one of its actions: its form (unless `given` answers it, from the plug-in's own page), confirm, then RCON. */
+  async pluginAction(p: Plugin, a: Dict, row: string | null = null, given?: Dict) {
     if (p.m.state) return;
     const title = `${p.m.name || p.m.id} › ${a.label}`.toUpperCase();
     let params: Dict = {};
     if (a.params.length) {
-      const got = await this.form(title, a.params.map((x: Dict, i: number) => [`p${i}`, x.label + (x.type === "duration" ? "  (10m, 1d)" : ""),
+      const got = given ? Object.fromEntries(a.params.map((x: Dict, i: number) => [`p${i}`, given[x.name] ?? ""])) : await this.form(title, a.params.map((x: Dict, i: number) => [`p${i}`, x.label + (x.type === "duration" ? "  (10m, 1d)" : ""),
         x.type === "bool" ? [["No", "false"], ["Yes", "true"]] : x.type === "choice" ? x.options.map((o: string) => [o, o]) : ""]), { verb: "RUN", danger: a.danger });
       if (!got) return;
       const typed = typedParams(a.params, got);

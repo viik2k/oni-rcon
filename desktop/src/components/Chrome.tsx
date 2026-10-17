@@ -3,6 +3,7 @@
 import { AMBER, CYAN, DIM, INK, RED, WHITE, blend } from "../art/palette";
 import { oni, useV } from "../engine";
 import { hms, num } from "../lib/util";
+import { Logo } from "./Logo";
 
 export function Masthead({ width }: { width: number }) {
   useV((s) => s.mast);
@@ -13,7 +14,7 @@ export function Masthead({ width }: { width: number }) {
   const wide = width >= 1150;
   return (
     <div className="masthead">
-      <span><span style={{ color: AMBER }}>▲ {wide ? "OFFICE OF NAVAL INTELLIGENCE" : "ONI"}</span>{width >= 1300 ? <span style={{ color: DIM }}>  ·  SECTION III</span> : null}</span>
+      <span className="l"><Logo />{wide ? <span><span style={{ color: AMBER }}>OFFICE OF NAVAL INTELLIGENCE</span>{width >= 1450 ? <span style={{ color: DIM }}>  ·  SECTION III</span> : null}</span> : null}</span>
       <span>
         <span className="cond" style={{ background: color }}>CONDITION {cond}{unseen ? ` · ⚑ ${unseen}` : ""}</span>
         <span style={{ color: online ? CYAN : RED }}>  {online}/{oni.stations.length} {wide ? "STATIONS SECURE" : "SECURE"}  ·  {assets} ASSETS</span>
