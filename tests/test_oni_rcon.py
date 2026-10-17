@@ -496,7 +496,7 @@ def test_feed_holds_still_and_keeps_its_width(monkeypatch):
             await pilot.pause(0.3)
             assert feed.is_vertical_scroll_end  # following the tail
             feed.scroll_to(y=10, animate=False)
-            await pilot.pause(0.1)
+            await until(pilot, lambda: feed.scroll_y == 10 and not feed.auto_scroll)
             for i in range(20):
                 app.on_rcon_event(st.rcon, chat(i))
             await pilot.pause(0.3)

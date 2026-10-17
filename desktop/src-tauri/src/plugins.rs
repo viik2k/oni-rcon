@@ -111,8 +111,6 @@ pub fn load(folder: &Path) -> Manifest {
         "the manifest has no name".into()
     } else if m.mode != "service" && m.mode != "session" {
         "run.mode must be \"service\" or \"session\"".into()
-    } else if m.mode == "session" {
-        "session plug-ins aren't supported by this version of Oni yet".into()
     } else if exec.is_none_or(|e| e.trim().is_empty()) {
         "run.exec must be the command line to run".into()
     } else if host.is_some_and(|h| h.is_none()) {
@@ -161,9 +159,8 @@ pub fn state(m: &Manifest, trusted: &Value) -> String {
 }
 
 // --- running one ---------------------------------------------------------------------------------------------------
-/// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
-/// otherwise the last stderr line, scrubbed of addresses.
-pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
+/// Its `exec`, here in its folder or over ssh, with all three pipes. Killed when dropped.
+pub fn command(m: &Manifest) -> Result<tokio::process::Command, String> {
     let mut c = if m.host.is_empty() {
         let mut c = crate::util::shell(&m.exec);
         if let Some(f) = &m.folder {
@@ -177,22 +174,77 @@ pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, 
         c
     };
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    Ok(c)
+}
+
+/// Read a pipe to its end, keeping the last 4 KiB, so a chatty stderr never blocks the process.
+pub fn tail(mut r: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> tokio::task::JoinHandle<Vec<u8>> {
+    tokio::spawn(async move {
+        let (mut tail, mut buf) = (Vec::new(), [0u8; 65536]);
+        while let Ok(n) = r.read(&mut buf).await {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&buf[..n]);
+            let cut = tail.len().saturating_sub(4096);
+            tail.drain(..cut);
+        }
+        tail
+    })
+}
+
+/// Its last stderr line, scrubbed of addresses, else `fallback`.
+pub fn last_err(err: &[u8], fallback: String) -> String {
+    String::from_utf8_lossy(err).trim().lines().last().map(|l| scrub(&cut(l, 300))).unwrap_or(fallback)
+}
+
+// --- updates: a plug-in folder that is a git clone follows its upstream branch ---------------------------------------
+/// git in its folder, never prompting: its stdout, or its last stderr line.
+async fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
+    let exe = crate::util::which("git").ok_or("no git on PATH")?;
+    let mut c = crate::util::command(&exe.to_string_lossy());
+    c.current_dir(folder).args(args).env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never").stdin(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(60), c.output()).await.map_err(|_| "git took over 60 s".to_string())?.map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().into()) } else { Err(last_err(&out.stderr, format!("git {} failed", args[0]))) }
+}
+
+/// A remote's address without the login in it: a token in an https remote never reaches the window.
+fn no_login(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.into() };
+    let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
+    format!("{scheme}://{}/{path}", auth.rsplit_once('@').map_or(auth, |x| x.1))
+}
+
+/// What its upstream branch has that it hasn't: `{behind, log, source, to}`, or None when its folder isn't a git
+/// clone or is up to date. Fetches first.
+pub async fn update_check(m: &Manifest) -> Result<Option<Value>, String> {
+    let Some(f) = m.folder.as_deref().filter(|f| f.join(".git").exists()) else { return Ok(None) };
+    git(f, &["fetch", "--quiet"]).await?;
+    let behind: u64 = git(f, &["rev-list", "--count", "HEAD..@{u}"]).await?.parse().unwrap_or(0);
+    if behind == 0 {
+        return Ok(None);
+    }
+    let log = git(f, &["log", "--format=%h %s", "-n", "20", "HEAD..@{u}"]).await?;
+    let source = git(f, &["ls-remote", "--get-url"]).await.map(|u| scrub(&no_login(&u))).unwrap_or_default();
+    let to = git(f, &["rev-parse", "--short", "@{u}"]).await?;
+    Ok(Some(json!({"behind": behind, "log": log.lines().map(|l| scrub(&cut(l, 200))).collect::<Vec<_>>(), "source": source, "to": to})))
+}
+
+/// Fast-forward it to its upstream branch. Refused, and nothing changed, when it has commits or edits of its own in the way.
+pub async fn update(m: &Manifest) -> Result<(), String> {
+    let f = m.folder.as_deref().filter(|f| f.join(".git").exists()).ok_or("its folder isn't a git clone")?;
+    git(f, &["merge", "--ff-only", "--quiet", "@{u}"]).await.map(|_| ())
+}
+
+/// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
+/// otherwise the last stderr line, scrubbed of addresses.
+pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
+    let mut c = command(m)?;
     let mut child = c.spawn().map_err(|e| scrub(&e.to_string()))?; // killed on drop: a timeout leaves nothing running
-    let (mut stdin, mut stdout, mut stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let (mut stdin, mut stdout, stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let line = format!("{request}\n");
     let exchange = async {
-        let errs = tokio::spawn(async move { // read to the end so a chatty stderr never blocks it; keep the tail
-            let (mut tail, mut buf) = (Vec::new(), [0u8; 65536]);
-            while let Ok(n) = stderr.read(&mut buf).await {
-                if n == 0 {
-                    break;
-                }
-                tail.extend_from_slice(&buf[..n]);
-                let cut = tail.len().saturating_sub(4096);
-                tail.drain(..cut);
-            }
-            tail
-        });
+        let errs = tail(stderr);
         let _ = stdin.write_all(line.as_bytes()).await; // one that doesn't read its request can still answer
         drop(stdin);
         let mut out = Vec::new();
@@ -209,16 +261,11 @@ pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, 
     if let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(&text) {
         return Ok(v);
     }
-    let err = String::from_utf8_lossy(&err);
-    Err(match err.trim().lines().last() {
-        Some(last) => scrub(&cut(last, 300)),
-        None if !text.is_empty() && code == 0 => "its reply isn't JSON".into(),
-        None => format!("exited {code}"),
-    })
+    Err(last_err(&err, if !text.is_empty() && code == 0 { "its reply isn't JSON".into() } else { format!("exited {code}") }))
 }
 
 // --- shaping what it sent ------------------------------------------------------------------------------------------
-fn cut(s: &str, n: usize) -> String {
+pub(crate) fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
@@ -231,7 +278,7 @@ fn s(v: Option<&Value>) -> String {
     }
 }
 
-fn sn(v: Option<&Value>, n: usize) -> String {
+pub(crate) fn sn(v: Option<&Value>, n: usize) -> String {
     cut(&s(v), n)
 }
 
@@ -268,7 +315,8 @@ fn block(b: &Value) -> Option<Value> {
     if t == "html" { // its own page, drawn in a sandboxed frame: see `stash` and the oniplugin: scheme in lib.rs
         let html = b.get("html").and_then(Value::as_str).map(|h| cut(h, MAX_HTML)).unwrap_or_default();
         let height = b.get("height").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 4000.0) as u64;
-        return Some(json!({"type": "html", "html": html, "height": height, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
+        let persist = b.get("persist").and_then(Value::as_bool).unwrap_or(false); // its frame stays running while F10 is closed
+        return Some(json!({"type": "html", "html": html, "height": height, "persist": persist, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
     }
     let (rs, more) = rows(b.get(if t == "log" { "lines" } else { "rows" }));
     Some(match t {
@@ -519,7 +567,7 @@ mod tests {
         assert_eq!((got[0].name.as_str(), got[0].rcon.clone()), ("Echo", vec!["say".to_string()]));
         assert!(got[1].error.contains("needs plug-in api 2"));
         assert!(got[2].error.contains("isn't valid TOML"));
-        assert!(got[3].error.contains("session plug-ins"));
+        assert_eq!((got[3].error.as_str(), got[3].mode.as_str()), ("", "session"));
         assert!(got[4].error.contains("lower-case"));
         assert!(got[5].error.contains("no oni-plugin.toml"));
     }
@@ -552,8 +600,9 @@ mod tests {
         assert_eq!(v["blocks"][4]["lines"][0].as_str().unwrap().len(), MAX_STR);
         assert_eq!(v["actions"], json!([{"id": "a", "label": "a", "danger": false, "confirm": "", "params": [{"name": "c", "label": "c", "type": "text", "options": []}]}]));
         assert_eq!(normalise_view(&json!({"error": "down"})), json!({"error": "down"}));
-        let mut h = normalise_view(&json!({"blocks": [{"type": "text"}, {"type": "html", "html": "<b>hi</b>".repeat(100_000), "height": 9e9, "data": {"n": 1}}]}));
+        let mut h = normalise_view(&json!({"blocks": [{"type": "text"}, {"type": "html", "html": "<b>hi</b>".repeat(100_000), "height": 9e9, "persist": true, "data": {"n": 1}}]}));
         assert_eq!((h["blocks"][1]["html"].as_str().unwrap().len(), &h["blocks"][1]["height"], &h["blocks"][1]["data"]), (MAX_HTML, &json!(4000), &json!({"n": 1})));
+        assert_eq!((&h["blocks"][1]["persist"], &normalise_view(&json!({"blocks": [{"type": "html", "persist": "yes"}]}))["blocks"][0]["persist"]), (&json!(true), &json!(false)));
         stash("echo", &mut h);
         assert_eq!((&h["blocks"][1]["html"], &h["blocks"][1]["src"], h["blocks"][1]["v"].as_str().unwrap().len()), (&Value::Null, &json!("echo.1"), 12));
         assert_eq!(frame("echo.1").unwrap().len(), MAX_HTML);
@@ -597,5 +646,29 @@ mod tests {
         let n = normalise_action(&r, &demo_manifest().rcon, &["127.0.0.1:1".into()]);
         assert_eq!((n["rcon"][0]["command"].clone(), n["dropped"].clone()), (json!("unmute"), json!([])));
         assert_eq!(n["rcon"][0]["args"], json!(["Rook"])); // the player, not the row's id
+    }
+
+    #[tokio::test]
+    async fn a_git_clone_sees_new_commits_upstream_and_fast_forwards_to_them() {
+        let d = tempfile::tempdir().unwrap();
+        let run = |dir: &Path, args: &[&str]| assert!(std::process::Command::new("git").current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]).args(args).status().unwrap().success());
+        let up = plugin(d.path(), "upstream", GOOD);
+        run(&up, &["init", "-q"]);
+        run(&up, &["add", "."]);
+        run(&up, &["commit", "-qm", "first"]);
+        run(d.path(), &["clone", "-q", "upstream", "echo"]);
+        let m = load(&d.path().join("echo"));
+        assert_eq!(update_check(&m).await.unwrap(), None);
+        assert_eq!(update_check(&load(&plugin(d.path(), "plain", GOOD))).await.unwrap(), None); // not a clone: never asked
+        std::fs::write(up.join("echo.py"), "print(1)\n").unwrap();
+        run(&up, &["add", "."]);
+        run(&up, &["commit", "-qm", "say hi to 10.0.0.1"]);
+        let u = update_check(&m).await.unwrap().unwrap();
+        assert_eq!((&u["behind"], u["log"][0].as_str().unwrap().ends_with("say hi to [ip]")), (&json!(1), true));
+        update(&m).await.unwrap();
+        assert!(d.path().join("echo/echo.py").exists());
+        assert_eq!(update_check(&m).await.unwrap(), None);
+        assert_eq!(no_login("https://me:tok@github.com/a/b.git"), "https://github.com/a/b.git");
     }
 }
