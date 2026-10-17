@@ -867,9 +867,10 @@ async fn plugin_ask(app: &State<'_, App>, id: &str, request: Value, timeout: f64
 }
 
 /// Its view for `server` (the selected server as a plug-in names it), shaped; `error` set when it gave none.
+/// `snapshot` is that server's roster, map, mode and scores, already redacted to the plug-in's permissions.
 #[tauri::command]
-async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) -> Result<Value, String> {
-    let (_, raw) = plugin_ask(&app, &id, json!({"type": "view", "server": server}), plugins::VIEW_TIMEOUT).await?;
+async fn plugin_view(id: String, server: Option<String>, snapshot: Option<Value>, app: State<'_, App>) -> Result<Value, String> {
+    let (_, raw) = plugin_ask(&app, &id, json!({"type": "view", "server": server, "snapshot": snapshot}), plugins::VIEW_TIMEOUT).await?;
     let mut v = plugins::normalise_view(&raw);
     if let Some(e) = v["error"].as_str() {
         v["error"] = json!(health::scrub(e)); // its own words about a failure: no address in them
@@ -881,8 +882,8 @@ async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) ->
 /// Run an action: its reply shaped, with the RCON it asked for split into what its permissions and `servers` (every
 /// server as plug-ins name them) allow, and why the rest was dropped.
 #[tauri::command]
-async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
-    let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server});
+async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, snapshot: Option<Value>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
+    let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server, "snapshot": snapshot});
     let mut r = match plugin_ask(&app, &id, req, plugins::ACTION_TIMEOUT).await {
         Ok((m, raw)) => plugins::normalise_action(&raw, &m.rcon, &servers),
         Err(e) => plugins::normalise_action(&json!({"ok": false, "error": e}), &[], &[]),

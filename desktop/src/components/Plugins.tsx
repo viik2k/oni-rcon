@@ -146,20 +146,28 @@ function View({ p }: { p: Plugin }) {
   );
 }
 
-export function Plugins() {
+/** Whether its page asked to keep running while it isn't on screen. */
+const persists = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict) => b.type === "html" && b.persist);
+
+/** Always mounted (App hides it off F10). The selected plug-in's view is drawn; any other whose page has `persist`
+ *  stays mounted out of sight, so its timers keep going. Each view keeps one place in one list: moving it would
+ *  reload its frame. */
+export function Plugins({ shown }: { shown: boolean }) {
   useV((s) => s.plugins);
   const p = oni.plugins[Math.min(oni.psel, oni.plugins.length - 1)];
   const select = (id: string) => {
     oni.psel = Math.max(0, oni.plugins.findIndex((x) => x.m.id === id));
     useV.setState((s) => ({ plugins: s.plugins + 1 }));
   };
+  const live = oni.plugins.filter((x) => (shown && x === p && !x.m.state) || persists(x));
   return (
     <div className="hsplit grow">
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
         <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={p?.m.id ?? null} onSelect={select} />
       </Panel>
       <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3 }}>
-        {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : <View p={p} />}
+        {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : null}
+        {live.map((x) => <div key={x.m.id} style={{ display: x === p ? "contents" : "none" }}><View p={x} /></div>)}
       </Panel>
     </div>
   );

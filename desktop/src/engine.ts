@@ -14,7 +14,7 @@ import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
-  redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
+  pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line,
 } from "./lib/util";
 
@@ -742,6 +742,8 @@ class Oni {
   /** How a plug-in names a server: its name in the config, or its address. Not the label, which changes once the
    *  server reports its own name. */
   serverName(st?: Station) { return st ? st.name || st.where : null; }
+  /** The selected server as a plug-in sees it, or null while it's offline. */
+  snapshot(p: Plugin) { return this.cur?.online ? pluginSnapshot(this.cur.data.status ?? {}, this.cur.players, !!p.m.addresses) : null; }
 
   /** The list from the backend, keeping what each already said; `due` for any it hasn't seen before. */
   async loadPlugins(due = 0) {
@@ -765,7 +767,7 @@ class Oni {
     bump("plugins");
     const server = this.serverName(this.cur);
     try {
-      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server });
+      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server, snapshot: this.snapshot(p) });
       if (v.error) p.error = v.error;
       else [p.view, p.error] = [v, ""];
     } catch (e) {
@@ -813,7 +815,7 @@ class Oni {
       params = typed;
     }
     if ((a.danger || a.confirm) && !(await this.confirm(title, a.confirm || `Run ${a.label}?`, a.label.toUpperCase().slice(0, 24), a.danger))) return;
-    const r: Dict = await invoke<Dict>("plugin_action", { id: p.m.id, action: a.id, params, row, server: this.serverName(this.cur),
+    const r: Dict = await invoke<Dict>("plugin_action", { id: p.m.id, action: a.id, params, row, server: this.serverName(this.cur), snapshot: this.snapshot(p),
       servers: this.stations.map((s) => this.serverName(s)) }).catch((e) => ({ ok: false, toast: "", error: String(e), view: null, rcon: [], dropped: [] }));
     const words = redactText(r.toast || r.error || (r.ok ? "done" : "failed"), this.redact);
     p.note = `${new Date().toTimeString().slice(0, 8)}  ${a.label}: ${words}`;

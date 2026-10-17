@@ -268,7 +268,8 @@ fn block(b: &Value) -> Option<Value> {
     if t == "html" { // its own page, drawn in a sandboxed frame: see `stash` and the oniplugin: scheme in lib.rs
         let html = b.get("html").and_then(Value::as_str).map(|h| cut(h, MAX_HTML)).unwrap_or_default();
         let height = b.get("height").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 4000.0) as u64;
-        return Some(json!({"type": "html", "html": html, "height": height, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
+        let persist = b.get("persist").and_then(Value::as_bool).unwrap_or(false); // its frame stays running while F10 is closed
+        return Some(json!({"type": "html", "html": html, "height": height, "persist": persist, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
     }
     let (rs, more) = rows(b.get(if t == "log" { "lines" } else { "rows" }));
     Some(match t {
@@ -552,8 +553,9 @@ mod tests {
         assert_eq!(v["blocks"][4]["lines"][0].as_str().unwrap().len(), MAX_STR);
         assert_eq!(v["actions"], json!([{"id": "a", "label": "a", "danger": false, "confirm": "", "params": [{"name": "c", "label": "c", "type": "text", "options": []}]}]));
         assert_eq!(normalise_view(&json!({"error": "down"})), json!({"error": "down"}));
-        let mut h = normalise_view(&json!({"blocks": [{"type": "text"}, {"type": "html", "html": "<b>hi</b>".repeat(100_000), "height": 9e9, "data": {"n": 1}}]}));
+        let mut h = normalise_view(&json!({"blocks": [{"type": "text"}, {"type": "html", "html": "<b>hi</b>".repeat(100_000), "height": 9e9, "persist": true, "data": {"n": 1}}]}));
         assert_eq!((h["blocks"][1]["html"].as_str().unwrap().len(), &h["blocks"][1]["height"], &h["blocks"][1]["data"]), (MAX_HTML, &json!(4000), &json!({"n": 1})));
+        assert_eq!((&h["blocks"][1]["persist"], &normalise_view(&json!({"blocks": [{"type": "html", "persist": "yes"}]}))["blocks"][0]["persist"]), (&json!(true), &json!(false)));
         stash("echo", &mut h);
         assert_eq!((&h["blocks"][1]["html"], &h["blocks"][1]["src"], h["blocks"][1]["v"].as_str().unwrap().len()), (&Value::Null, &json!("echo.1"), 12));
         assert_eq!(frame("echo.1").unwrap().len(), MAX_HTML);

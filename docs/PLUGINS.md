@@ -65,7 +65,15 @@ stops it on quit, restarts it with backoff if it dies, and talks JSON lines over
 
 Every message is one JSON object. Unknown keys are ignored.
 
-**view**: Oni → plug-in `{"type":"view","server":"3"}` (the selected server; `null` for none). Reply:
+**view**: Oni → plug-in `{"type":"view","server":"3","snapshot":{...}}` (the selected server; `null` for none). Reply below.
+
+`snapshot` (desktop app after 1.7.6; `null` while the server is offline, absent from the terminal console) is the selected
+server as the console sees it: `{"players": [...], "map": "guardian", "mode": "slayer", "score": [{"team": "red",
+"players": 4, "score": 31}, ...]}`. `players` are the server's own player objects (`name`, `player_id`, `team`, `score`,
+`kills`, `deaths`, ...), with addresses blanked unless `permissions.addresses` is true. `score` is empty in a
+free-for-all. Action requests carry the same `snapshot`.
+
+Reply:
 
 ```json
 {"title": "Gryphon",
@@ -101,6 +109,10 @@ can be the terminal console's fallback without drawing twice.
   its own CSP: inline `<script>` and `<style>`, `data:`/`blob:` images, fonts and media, and **no network at all** (no
   fetch, no external scripts, styles or images) and no forms (use buttons). It can't reach Oni, Tauri or the page around it.
 - `height` is the frame's starting height in pixels (default 420); the page can change it.
+- `"persist": true` (desktop app after 1.7.6) keeps the page running, out of sight, while F10 is closed or another plug-in
+  is selected, so its timers keep going (a countdown, a scheduled broadcast). Without it the page is unloaded then. Its
+  `action` messages still work while hidden; a `danger`/`confirm` action shows its dialog over whatever tab is open.
+  Views are still asked for only as above, so `data` doesn't change while F10 is closed (unless it has a badge).
 - The frame reloads only when `html` changes. Send changing values in `data` instead: Oni posts it to the page on load
   and whenever a view arrives, redacted like everything else. With redaction on, IPv4 addresses in `html` are blanked too.
 - Oni → page (`message` event): `{"oni": "data", "data": …, "redact": true, "server": "3", "theme": {"amber": "#d9a441", …}}`.
@@ -110,7 +122,7 @@ can be the terminal console's fallback without drawing twice.
   `{"oni": "refresh"}` asks for a new view; `{"oni": "height", "px": 300}` resizes the frame (40–4000);
   `{"oni": "ready"}` asks for the data again.
 
-**action**: Oni → plug-in `{"type":"action","id":"undo","params":{},"row":"<row id>","server":"3"}`. Reply:
+**action**: Oni → plug-in `{"type":"action","id":"undo","params":{},"row":"<row id>","server":"3","snapshot":{...}}`. Reply:
 
 ```json
 {"ok": true, "toast": "Undid Bob's mute.", "view": {...optional, replaces the panel...},

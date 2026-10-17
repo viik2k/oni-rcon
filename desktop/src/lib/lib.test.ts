@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -58,6 +58,13 @@ describe("words", () => {
   it("blanks addresses and keys while redacted", () => {
     expect(redactText("from 203.0.113.9 rfk_abcdefghij", true)).toBe("from ███.███.███.███ rfk_…████");
     expect(redactData({ address: "1.2.3.4", n: 1 }, true)).toEqual({ address: "███.███.███.███", n: 1 });
+  });
+  it("gives a plug-in the server, with addresses only when its manifest grants them", () => {
+    const players = [{ name: "A", team: "red", score: 3, address: "203.0.113.9" }, { name: "B", team: "blue", score: 5, address: "203.0.113.10" }];
+    const s = pluginSnapshot({ map: "guardian", mode: "slayer" }, players, false);
+    expect(s).toMatchObject({ map: "guardian", mode: "slayer", score: [{ team: "red", players: 1, score: 3 }, { team: "blue", players: 1, score: 5 }] });
+    expect(s.players[0].address).toBe("███.███.███.███");
+    expect(pluginSnapshot({}, players, true).players[1].address).toBe("203.0.113.10");
   });
   it("describes a kill with its medals", () => {
     const l = describeEvent({ event: "kill", killer: "A", victim: "B", weapon: "shotgun", _medals: ["DOUBLE KILL"] });

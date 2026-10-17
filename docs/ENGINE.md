@@ -18,20 +18,21 @@ says what the engine in desktop 1.7.6 can and can't do, the small changes that w
 
 ## Limits that shape what a plug-in can be
 
-1. **No live data from Oni.** A view request is only `{"type": "view", "server": "3"}`
-   ([lib.rs](../desktop/src-tauri/src/lib.rs), `plugin_view`). Players, the feed, the map and the scores never reach a
-   plug-in, so it has to read its own: the server's logs and files over ssh, an API, or a file next to itself.
+1. **Only a snapshot from Oni.** View and action requests carry the selected server's players, map, mode and team
+   scores (`snapshot`, built in [engine.ts](../desktop/src/engine.ts)), but not the feed or history: for those a
+   plug-in reads its own (the server's logs and files over ssh, an API, or a file next to itself).
 2. **The page can't fetch or remember.** Fetching and storage belong in the `exec` process, which has both.
-3. **The page unmounts when F10 closes** ([App.tsx](../desktop/src/App.tsx) renders `<Plugins />` only on that tab), so
-   its timers stop. A countdown or auto-broadcast can't outlive the tab.
+3. **A page unloads when F10 closes** unless its html block has `"persist": true`, which keeps it running out of sight
+   ([Plugins.tsx](../desktop/src/components/Plugins.tsx)). Its `data` only changes when a view is asked for, which is
+   while F10 is open (or every 60 s for a plug-in with a badge).
 4. **RCON is send-only.** A plug-in can ask Oni to send a command but never sees the reply.
 
 ## Engine additions, smallest first
 
 | Change | Unlocks | Size |
 |---|---|---|
-| **Snapshot in the view request**: `"snapshot": {"players": [...], "map": "...", "mode": "...", "score": [...]}`, redacted like the UI | Team balancer, AFK list, live stats, per-player tools without log parsing | ~10 lines in `plugin_view`, plus a PLUGINS.md line; both hosts |
-| **`"persist": true` on an html block**: keep the frame mounted while F10 is closed | Countdowns, scheduled broadcasts, timers in the page | Keep `<Plugins />` mounted and hidden instead of unmounted |
+| ~~**Snapshot in the view request**~~ Done (desktop): `snapshot` in view and action requests, addresses blanked unless granted | Team balancer, AFK list, live stats, per-player tools without log parsing | — |
+| ~~**`"persist": true` on an html block**~~ Done (desktop): the frame stays mounted, hidden, while F10 is closed | Countdowns, scheduled broadcasts, timers in the page | — |
 | **RCON replies**: return each sent command's reply text to the page or in the next view request | Plug-ins that query (`status`, ban checks) and react | Medium: thread replies back through `plugin_action` |
 | **Session mode**, as already specified | Rules engine, join MOTD, AFK kicker, recorders | Large: process supervision, event filter, backoff |
 
