@@ -48,7 +48,7 @@ const KEYS: Record<string, [string, string][]> = {
 
 export function Footer() {
   useV((s) => s.ui);
-  const keys: [string, string][] = [...KEYS[oni.tab], ["F1–F7", "Tabs"], ["g", "Go to"], ["^B", "Broadcast"], ["^R", "Refresh"], ["x", "Redact"], ["?", "Help"]];
+  const keys: [string, string][] = [...KEYS[oni.tab], ["F1–F7 F10", "Tabs"], ["g", "Go to"], ["^B", "Broadcast"], ["^R", "Refresh"], ["x", "Redact"], ["?", "Help"]];
   return (
     <div className="footer">
       {keys.map(([k, v]) => <span key={k + v}><span className="k">{k}</span>{v}</span>)}

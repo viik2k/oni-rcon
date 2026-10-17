@@ -38,7 +38,7 @@ function Confirm({ d }: { d: Dialog }) {
 
 function Form({ d }: { d: Dialog }) {
   const { title, fields, verb = "OK", danger, note, required = [], secret = [] } = d.props as Dict;
-  const [vals, setVals] = useState<Dict>(() => Object.fromEntries(fields.map(([k, , def]: [string, string, unknown]) => [k, Array.isArray(def) ? def[0][1] : String(def)])));
+  const [vals, setVals] = useState<Dict>(() => Object.fromEntries(fields.map(([k, , def]: [string, string, unknown]) => [k, Array.isArray(def) ? def[0][1] : String(def ?? "")])));
   const [missing, setMissing] = useState("");
   const first = useRef<HTMLInputElement | HTMLSelectElement>(null);
   useEffect(() => first.current?.focus(), []);
@@ -96,7 +96,7 @@ function Pick({ d }: { d: Dialog }) {
   useEffect(() => setCur(0), [text]);
   useEffect(() => { list.current?.children[cur]?.scrollIntoView({ block: "nearest" }); }, [cur]);
   const key = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setCur((c) => Math.min(shown.length - 1, c + 1)); list.current?.focus(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); setCur((c) => Math.max(0, Math.min(shown.length - 1, c + 1))); list.current?.focus(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setCur((c) => Math.max(0, c - 1)); }
     else if (e.key === "Enter" && shown[cur]) d.resolve(shown[cur][1]);
   };

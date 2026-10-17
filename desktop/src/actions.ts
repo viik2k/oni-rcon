@@ -174,7 +174,7 @@ async function saveSetting(st: Station, key: string, value: unknown, what: strin
     await oni.send(st, "reload", [], ["status", "admins", "players"]);
     return;
   }
-  if (st.canRestart) return op("restart");
+  if (st.canRestart) return op("restart", st); // the server just saved, even if the selection moved meanwhile
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
 }
 
@@ -301,8 +301,8 @@ async function playlistsManager(st: Station): Promise<void> {
   }
 }
 
-export async function op(name: string) {
-  const st = oni.cur, s = st.data.status ?? {};
+export async function op(name: string, st = oni.cur) {
+  const s = st.data.status ?? {};
   if (name === "broadcast") return broadcast();
   if (name === "reconnect") {
     let pw: string | undefined;
