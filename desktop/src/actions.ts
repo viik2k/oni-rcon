@@ -90,6 +90,7 @@ export const TAB_TIPS: Record<string, string> = {
   console: "Type server commands directly. For when a button doesn't cover it.",
   forge: "The ReclaimerForge catalog: community maps, gametypes and playlists for your servers.",
   health: "Crashes read from each server's log, the host's memory, and whether the workaround service runs.",
+  plugins: "Programs you've added that draw their own panel here, such as Gryphon's moderation log.",
 };
 
 const opt = (v: string) => (v ? [v] : []);

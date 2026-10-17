@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag, type Kick } from "./util";
+import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -423,5 +423,14 @@ describe("kicked list", () => {
   it("shows a pardon as one line", () => {
     expect(plain(describeEvent({ event: "pardon", target: "76561198000000001", name: ["Bravo", "Bravo2"], by: "Alice (RCON)" })))
       .toBe("PARDON  Bravo, Bravo2  may rejoin  by Alice (RCON)");
+  });
+});
+
+describe("plug-ins", () => {
+  it("types an action's params as the contract says, and a bad number sends nothing", () => {
+    const ps = [{ name: "n", label: "N", type: "number" }, { name: "b", type: "bool" }, { name: "t", type: "duration" }, { name: "c", type: "choice" }];
+    expect(typedParams(ps, { p0: " 2.5 ", p1: "true", p2: "10m", p3: "warm" })).toEqual({ n: 2.5, b: true, t: "10m", c: "warm" });
+    expect(typedParams(ps, { p0: "x" })).toBe("N must be a number: nothing was sent.");
+    expect(typedParams(ps, { p0: "" })).toBe("N must be a number: nothing was sent.");
   });
 });

@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
-import { bump, oni, TABS, useV, type Tab } from "./engine";
+import { bump, fkey, oni, TABS, useV, type Tab } from "./engine";
 import { OPS, BAN_OPS, TAB_TIPS, askPassword, automation, bl, broadcast, goto, op, player } from "./actions";
 import { Sidebar } from "./components/Sidebar";
 import { Banner, Footer, Masthead, Toasts } from "./components/Chrome";
@@ -11,6 +11,7 @@ import { ConsoleTab, Intercepts } from "./components/Feeds";
 import { Blacklist, Operations, blSel } from "./components/Ops";
 import { Forge, fg, forgeAction, forgeLoad } from "./components/Forge";
 import { Health } from "./components/Health";
+import { Plugins } from "./components/Plugins";
 import { Dialogs } from "./components/Dialogs";
 import { Archive, Boot } from "./components/Boot";
 import { Setup } from "./components/Setup";
@@ -18,8 +19,8 @@ import { useSize } from "./components/ui";
 import { targetOf, pick, type Dict } from "./lib/util";
 import type { Opened } from "./components/Findings";
 
-const NAMES: Record<Tab, string> = { assets: "ASSETS", intercepts: "INTERCEPTS", operations: "OPERATIONS", blacklist: "BLACKLIST", console: "CONSOLE", forge: "FORGE", health: "HEALTH" };
-const FOCUS: Record<Tab, string> = { assets: "players", intercepts: "feed", operations: "op-load", blacklist: "bans", console: "cmd", forge: "listings", health: "crashes" };
+const NAMES: Record<Tab, string> = { assets: "ASSETS", intercepts: "INTERCEPTS", operations: "OPERATIONS", blacklist: "BLACKLIST", console: "CONSOLE", forge: "FORGE", health: "HEALTH", plugins: "PLUG-INS" };
+const FOCUS: Record<Tab, string> = { assets: "players", intercepts: "feed", operations: "op-load", blacklist: "bans", console: "cmd", forge: "listings", health: "crashes", plugins: "plugin-list" };
 
 export function setTab(t: Tab) {
   oni.setTab(t);
@@ -68,6 +69,8 @@ function palette(onSetup: () => void) {
       o === "broadcast" ? "say on this or every station" : `${o} on the selected station`, () => op(o)] as [string, string, () => void]),
     ...BAN_OPS.map(([o, label]) => [`Blacklist: ${label.split("  ")[0].toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}`, o,
       () => bl(o, ...blSel())] as [string, string, () => void]),
+    ...oni.plugins.filter((p) => !p.m.state).flatMap((p) => (p.view?.actions ?? []).map((a: Dict) =>
+      [`${p.m.name || p.m.id} › ${a.label}`, "plug-in action  (F10)", () => { setTab("plugins"); oni.pluginAction(p, a); }] as [string, string, () => void])),
     ["Toggle address redaction", "hide or show player IPs", () => oni.toggleRedact()],
     [`Boot sequence: ${oni.fullIntro ? "quick after the first run" : "full every time"}`, oni.fullIntro ? "now: the full sequence plays every time" : "now: full the first time, quick after",
       async () => {
@@ -110,6 +113,10 @@ function useKeys(onSetup: () => void) {
       if (e.key === "F9") {
         e.preventDefault();
         return void automation();
+      }
+      if (e.key === "F10") {
+        e.preventDefault();
+        return setTab("plugins");
       }
       const fn = /^F([1-7])$/.exec(e.key);
       if (fn) {
@@ -184,13 +191,13 @@ function Console({ onSetup }: { onSetup: () => void }) {
         <Sidebar onSetup={onSetup} />
         <div className="tabs">
           <div className="tabbar">
-            {TABS.map((x, i) => (
-              <button key={x} className={x === t ? "on" : ""} onClick={() => setTab(x)} title={TAB_TIPS[x]}><span className="f">F{i + 1}</span>{NAMES[x]}</button>
+            {TABS.map((x) => (
+              <button key={x} className={x === t ? "on" : ""} onClick={() => setTab(x)} title={TAB_TIPS[x]}><span className="f">{fkey(x)}</span>{NAMES[x]}</button>
             ))}
           </div>
           <div className="pane" key={t}>
             {t === "assets" ? <Assets /> : t === "intercepts" ? <Intercepts /> : t === "operations" ? <Operations /> : t === "blacklist" ? <Blacklist />
-              : t === "console" ? <ConsoleTab /> : t === "forge" ? <Forge /> : <Health />}
+              : t === "console" ? <ConsoleTab /> : t === "forge" ? <Forge /> : t === "health" ? <Health /> : <Plugins />}
           </div>
         </div>
       </div>

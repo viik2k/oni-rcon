@@ -43,7 +43,7 @@ const KEYS: Record<string, [string, string][]> = {
   forge: [["i", "Install"], ["l", "Load now"], ["a", "Ack"], ["s", "Sort"], ["w", "Window"], ["n", "More"], ["/", "Search"], ["k", "Key"], ["y", "Copy ID"]],
   intercepts: [["/", "Type"], ["End", "Follow"]],
   console: [["/", "Type"], ["↑↓", "History"]],
-  operations: [], health: [],
+  operations: [], health: [], plugins: [],
 };
 
 export function Footer() {

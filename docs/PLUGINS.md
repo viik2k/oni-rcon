@@ -1,8 +1,8 @@
 # Plug-ins (design draft)
 
-Status: **service mode built in the terminal console** (`plugins.py`, the F10 tab, palette entries, the CONDITION badge;
-`oni-rcon --demo` has one, and [examples/plugins/hello](../examples/plugins/hello) is a real one). Not yet: the desktop app
-and session mode (a session manifest is listed, disabled). First plug-in: [Gryphon](../../gryphon) (automated moderation).
+Status: **service mode built in the desktop app** (`plugins.rs`, `Plugins.tsx`: the F10 tab, palette entries, the
+CONDITION badge; `--demo` has one, and [examples/plugins/hello](../examples/plugins/hello) is a real one). Not yet:
+session mode (a session manifest is listed, disabled). First plug-in: [Gryphon](../../gryphon) (automated moderation).
 
 ## Why this shape
 

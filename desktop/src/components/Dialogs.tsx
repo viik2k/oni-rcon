@@ -164,7 +164,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Servers", "Your servers are on the left. Click one, or press 1 to 9. A green ◉ is connected; a red ○ says why it isn't, and retries by itself."],
     ["Go to", "g lists every server, the busiest first: type part of a name and press Enter."],
     ["Find a player", "Ctrl+F searches every server's players at once. Type a name (a typo of 4+ letters still finds them), or narrow it: @tag, clan:x, team:red, id:…, server:…, node:…, port:… All the words must match the same player; \"quotes\" keep a phrase together. Enter opens their server with them selected."],
-    ["Tabs", "F1 to F7, or click the names along the top."],
+    ["Tabs", "F1 to F7 and F10, or click the names along the top."],
     ["Anything", "Ctrl+P opens a searchable list of every action. Rest the mouse on a button to see what it does."],
     ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels. Click it, or press F8, for what it has noticed."],
     ["Findings", "F8 lists what the Superintendent noticed in the last hour, with the evidence behind each: a repeated vote, a vote fight, a kill burst, an unusual kill rate, a cheat flag, a request for an admin or a report of another player. They are observations to review, never grounds for action by themselves, and nothing is moderated for you. CLEAR ALL acknowledges them. Chat from 2 minutes either side is kept with a request."],
@@ -214,6 +214,12 @@ const GUIDE: [string, [string, string][]][] = [
     ["Frame rate", "The server logs each minute it spent under 54 frames a second; a minute without that line counts as 60. FRAME RATE gives each server's rate now (FPS), over 5 minutes, its worst, its longest frame and how many players were on; pick one for FRAME TIME, the last 30 minutes with WHAT'S HAPPENING and WHAT TO DO in plain words. A lagging server's card shows its rate and the feed says once when it drops under 40. Needs health_cmd to print the server's log. docs/SERVER-PERFORMANCE.md has the long version."],
     ["Alerts", "A new crash, or memory falling under the limit, flashes a banner over every tab (click it away), goes in the F2 feed and plays the Superintendent chime."],
     ["Turning it on", "Set health_cmd in the config: this tab says how when it's off. Ctrl+R reads everything now."],
+  ]],
+  ["F10  PLUG-INS  ·  programs you've added", [
+    ["What they are", "A plug-in is a separate program that draws its own panel here: a list, a table, a log, and buttons. Put its folder in plugins/ next to the config file and name it at the top of the config: plugins = [\"gryphon\"]. docs/PLUGINS.md says how to write one."],
+    ["Approval", "Nothing runs until you approve it. APPROVE shows the exact command it runs, where, and which RCON commands it may have Oni send. It isn't sandboxed: it runs as you. A change to its manifest asks again."],
+    ["Badges", "A plug-in can show a badge beside its name. A warning turns the CONDITION amber and an alert turns it red. One that stopped answering keeps its last panel, greyed, and adds no badge."],
+    ["Actions", "Its buttons run on the selected server. Risky ones ask first, and every RCON command one sends is in the command log as plug-in <name> ▸ command. Ctrl+R asks every plug-in again."],
   ]],
   ["SAFETY", [
     ["Addresses", "Player IPs are hidden. Press x to show them, and again to hide them before you stream."],
