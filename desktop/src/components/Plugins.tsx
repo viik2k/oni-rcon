@@ -123,6 +123,8 @@ function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) 
 function View({ p }: { p: Plugin }) {
   const v: Dict = p.view ?? {}, b = v.badge;
   const acts = new Map<string, Dict>((v.actions ?? []).map((a: Dict) => [a.id, a]));
+  // a view with its own page draws only that: the other blocks are its fallback for the terminal console
+  const all: Dict[] = v.blocks ?? [], pages = all.filter((x) => x.type === "html"), blocks = pages.length ? pages : all;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
@@ -133,7 +135,7 @@ function View({ p }: { p: Plugin }) {
       {p.note ? <div style={{ color: DIM }}>{redactText(p.note, oni.redact)}</div> : null}
       {!p.view && !p.error ? <div style={{ color: DIM }}>asking…</div> : null}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1 }}>
-        {(v.blocks ?? []).map((blk: Dict, i: number) => <Block key={`${p.m.id}:${i}:${blk.type}`} p={p} b={blk} acts={acts} />)}
+        {blocks.map((blk: Dict, i: number) => <Block key={`${p.m.id}:${i}:${blk.type}`} p={p} b={blk} acts={acts} />)}
         {v.actions?.length ? (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {v.actions.map((a: Dict) => <Btn key={a.id} label={a.label} variant={a.danger ? "error" : "primary"} onClick={() => oni.pluginAction(p, a)} />)}

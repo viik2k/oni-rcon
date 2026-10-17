@@ -90,7 +90,8 @@ Oni's own confirm dialog, whose button defaults to ABORT. A block type this Oni 
 ("this version of Oni can't draw a 'chart' block"), never an error.
 
 **html block** (desktop app only; the terminal console draws it as the grey line): a plug-in's own page, for any UI the
-other blocks can't draw.
+other blocks can't draw. A view with an html block shows only its html blocks in the desktop app, so its other blocks
+can be the terminal console's fallback without drawing twice.
 
 ```json
 {"type": "html", "html": "<!doctype html>…", "height": 420, "data": {"any": "JSON"}}
