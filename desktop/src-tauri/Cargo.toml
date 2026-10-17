@@ -1,6 +1,6 @@
 [package]
 name = "oni-rcon"
-version = "1.7.5"
+version = "1.7.6"
 description = "An ONI-themed admin console for Project Reclaimer Halo 3 dedicated servers, over RCON."
 authors = ["Arche Labs"]
 license = "GPL-3.0-or-later"

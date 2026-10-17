@@ -1,10 +1,12 @@
 // F10: plug-ins, separate programs that describe their own panel in JSON (docs/PLUGINS.md). The backend finds, runs
 // and shapes them; this draws what they sent. Every string here is the plug-in's data, drawn as plain text (never
-// markup) and redacted like the rest of the console.
-import { useState } from "react";
+// markup) and redacted like the rest of the console. The one exception is an html block: the plug-in's own page, in a
+// sandboxed frame with no network and no way into the app but the messages below.
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, GREEN, GREY, INK, RED, WHITE } from "../art/palette";
 import { badgeOf, oni, useV, type Plugin } from "../engine";
-import { redactText, type Dict, type Line } from "../lib/util";
+import { redactData, redactText, type Dict, type Line } from "../lib/util";
 import { Btn, Panel, Table, type Row } from "./ui";
 
 const BADGE: Record<string, string> = { ok: GREEN, warn: AMBER, alert: RED, off: DIM };
@@ -50,6 +52,40 @@ function Gate({ p }: { p: Plugin }) {
   );
 }
 
+const THEME = ["ink", "surface", "panel", "panel-2", "line", "amber", "cyan", "red", "green", "warn", "white", "grey", "dim"];
+
+/** An html block: the page from oniplugin:, sent its `data` (redacted) and the theme; it may ask back for one of the
+ * view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}) or a height ({oni:"height", px}). */
+function Frame({ p, b }: { p: Plugin; b: Dict }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [h, setH] = useState<number>(b.height || 420);
+  const post = () => {
+    const css = getComputedStyle(document.documentElement);
+    ref.current?.contentWindow?.postMessage({ oni: "data", data: redactData(b.data, oni.redact), redact: oni.redact, server: oni.serverName(oni.cur),
+      theme: Object.fromEntries(THEME.map((k) => [k, css.getPropertyValue(`--${k}`).trim()])) }, "*"); // its origin is opaque: "*" is the only target
+  };
+  useEffect(post, [b.data, oni.redact]);
+  useEffect(() => {
+    const on = (e: MessageEvent) => {
+      const m = e.data;
+      if (e.source !== ref.current?.contentWindow || !m || typeof m !== "object") return;
+      if (m.oni === "ready") post();
+      else if (m.oni === "refresh") oni.pluginView(p);
+      else if (m.oni === "height" && Number.isFinite(m.px)) setH(Math.max(40, Math.min(4000, m.px)));
+      else if (m.oni === "action" && !oni.dialogs.length) { // only the actions its view declared, with their confirms
+        const a = (p.view?.actions ?? []).find((x: Dict) => x.id === String(m.id));
+        if (!a) return oni.notify(`Its page asked for '${String(m.id).slice(0, 40)}', which its view doesn't offer.`, (p.m.name || p.m.id).toUpperCase(), "warning");
+        oni.pluginAction(p, a, m.row == null ? null : String(m.row), m.params && typeof m.params === "object" ? m.params : undefined);
+      }
+    };
+    window.addEventListener("message", on);
+    return () => window.removeEventListener("message", on);
+  }, [p]);
+  const src = `${convertFileSrc(b.src, "oniplugin")}?redact=${oni.redact ? 1 : 0}&v=${b.v}`;
+  return <iframe ref={ref} src={src} sandbox="allow-scripts" onLoad={post} title={`${p.m.name || p.m.id} page`}
+    style={{ width: "100%", height: h, flex: "none", colorScheme: "normal", border: "1px solid var(--panel-2)", borderRadius: 4, background: "transparent" }} />;
+}
+
 function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) {
   const [sel, setSel] = useState<string | null>(null);
   const rt = (s: string) => redactText(s, oni.redact);
@@ -58,11 +94,14 @@ function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) 
     return <><div className="facts">{b.rows.flatMap(([k, v]: string[], i: number) => [<span key={i} style={{ color: AMBER }}>{rt(k)}</span>, <span key={`${i}v`}>{rt(v)}</span>])}</div>{more}</>;
   }
   if (b.type === "text") return <div style={{ whiteSpace: "pre-wrap" }}>{rt(b.text)}</div>;
+  if (b.type === "html") return <Frame p={p} b={b} />;
   if (b.type === "log") return <><div style={{ whiteSpace: "pre-wrap", color: DIM }}>{b.lines.length ? b.lines.map(rt).join("\n") : "—"}</div>{more}</>;
   if (b.type !== "table") return <div style={{ color: GREY }}>this version of Oni can't draw a '{b.name}' block</div>;
   const width = b.columns.length || Math.max(1, ...b.rows.map((r: Dict) => r.cells.length));
-  const rows: Row[] = b.rows.map((r: Dict, j: number) => ({ id: String(j), cells: Array.from({ length: width }, (_, k) => rt(r.cells[k] ?? "")) }));
-  const row = b.rows[Number(sel ?? 0)]?.id ?? null;
+  // selected by the plug-in's row id, so a refresh that moves the rows can't point an action at a different one
+  const key = (r: Dict, j: number) => r.id || `#${j}`;
+  const rows: Row[] = b.rows.map((r: Dict, j: number) => ({ id: key(r, j), cells: Array.from({ length: width }, (_, k) => rt(r.cells[k] ?? "")) }));
+  const row = sel === null ? b.rows[0]?.id ?? null : b.rows.find((r: Dict, j: number) => key(r, j) === sel)?.id ?? null;
   return (
     <>
       <div style={{ maxHeight: 360, display: "flex", flexDirection: "column" }}>
@@ -117,7 +156,7 @@ export function Plugins() {
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
         <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={p?.m.id ?? null} onSelect={select} />
       </Panel>
-      <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3, overflow: "auto" }}>
+      <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3 }}>
         {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : <View p={p} />}
       </Panel>
     </div>

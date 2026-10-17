@@ -26,7 +26,8 @@ const MAX_ROWS: usize = 500; // rows of a table (and of a kv or log block); the 
 const MAX_STR: usize = 10_000; // characters per string
 const MAX_ACTIONS: usize = 20;
 const MAX_PARAMS: usize = 10;
-const BLOCKS: [&str; 4] = ["kv", "table", "text", "log"];
+const MAX_HTML: usize = 512 * 1024; // characters of an html block's page
+const BLOCKS: [&str; 5] = ["kv", "table", "text", "log", "html"];
 const LEVELS: [&str; 4] = ["ok", "warn", "alert", "off"];
 const PARAM_TYPES: [&str; 5] = ["text", "number", "bool", "choice", "duration"];
 pub const MANIFEST: &str = "oni-plugin.toml";
@@ -264,6 +265,11 @@ fn block(b: &Value) -> Option<Value> {
     if t == "text" {
         return Some(json!({"type": "text", "text": s(b.get("text"))}));
     }
+    if t == "html" { // its own page, drawn in a sandboxed frame: see `stash` and the oniplugin: scheme in lib.rs
+        let html = b.get("html").and_then(Value::as_str).map(|h| cut(h, MAX_HTML)).unwrap_or_default();
+        let height = b.get("height").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 4000.0) as u64;
+        return Some(json!({"type": "html", "html": html, "height": height, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
+    }
     let (rs, more) = rows(b.get(if t == "log" { "lines" } else { "rows" }));
     Some(match t {
         "log" => json!({"type": "log", "lines": rs.iter().map(|x| s(Some(x))).collect::<Vec<_>>(), "more": more}),
@@ -349,6 +355,28 @@ pub fn normalise_action(raw: &Value, allowed: &[String], servers: &[String]) -> 
         "rcon": rcon, "dropped": dropped})
 }
 
+// --- html blocks: pages served to their frames ------------------------------------------------------------------------
+/// The page of every html block shown, by "<plug-in id>.<block index>" (a dot: the window percent-encodes a slash): the window loads it from oniplugin:, never inline.
+static FRAMES: Lazy<Mutex<std::collections::HashMap<String, String>>> = Lazy::new(Default::default);
+
+/// Move each html block's page out of a shaped view into FRAMES, leaving `src` (its path) and `v` (a hash of the page,
+/// so the frame reloads only when the page changed). `data` stays in the view: the window posts it to the frame.
+pub fn stash(id: &str, view: &mut Value) {
+    let Some(blocks) = view.get_mut("blocks").and_then(Value::as_array_mut) else { return };
+    let mut frames = FRAMES.lock();
+    for (i, b) in blocks.iter_mut().enumerate().filter(|(_, b)| b["type"] == "html") {
+        let html = b["html"].take().as_str().unwrap_or_default().to_string();
+        b["v"] = json!(&format!("{:x}", Sha256::digest(html.as_bytes()))[..12]);
+        b["src"] = json!(format!("{id}.{i}"));
+        frames.insert(format!("{id}.{i}"), html);
+    }
+}
+
+/// The page at a stashed path, if any.
+pub fn frame(path: &str) -> Option<String> {
+    FRAMES.lock().get(path).cloned()
+}
+
 // --- the demo's pretend plug-in ------------------------------------------------------------------------------------
 /// A pretend Gryphon for --demo's F10, answered in this process: the same requests and replies a real plug-in sends
 /// over stdin and stdout, so the tab works with nothing installed.
@@ -373,6 +401,46 @@ static DEMO: Lazy<Mutex<Demo>> = Lazy::new(|| {
     Mutex::new(Demo { live: false, log: vec!["daemon started".into(), "word list loaded: 412 words".into()], rows })
 });
 
+/// The demo's own page: an html block drawing its `data`, asking for the view's actions back.
+const DEMO_PAGE: &str = r#"<!doctype html><meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 8px 10px; font: 12.5px Consolas, ui-monospace, monospace; color: var(--white, #d6dce4); }
+  h4 { margin: 0 0 6px; font-weight: normal; color: var(--amber, #d9a441); letter-spacing: .12em; }
+  .row { display: grid; grid-template-columns: 70px 1fr 24px; align-items: center; gap: 8px; margin: 3px 0; }
+  .bar { height: 10px; background: linear-gradient(90deg, var(--amber), var(--red)); transform-origin: left; transition: transform .5s; }
+  .ask { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  input { flex: 1 1 200px; font: inherit; color: inherit; background: var(--panel, #111821); border: 1px solid var(--grey); padding: 2px 6px; }
+  button { font: inherit; background: none; color: var(--cyan); border: 1px solid currentColor; padding: 2px 10px; cursor: pointer; }
+  button.hot { color: var(--red); }
+</style>
+<h4>ACTIONS BY SERVER · THIS PAGE IS THE PLUG-IN'S OWN HTML</h4>
+<div id="chart"></div>
+<div class="ask"><input id="t" placeholder="check a message against the word list"><button id="c">CHECK</button><button id="mode"></button><button id="r">REFRESH</button></div>
+<script>
+  const send = (m) => parent.postMessage(m, "*");
+  addEventListener("message", (e) => {
+    const m = e.data;
+    if (!m || m.oni !== "data") return;
+    for (const [k, v] of Object.entries(m.theme)) document.body.style.setProperty("--" + k, v);
+    const d = m.data, max = Math.max(1, ...d.per_server);
+    chart.innerHTML = "";
+    d.per_server.forEach((n, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `<span>STATION ${i + 1}</span><div class="bar" style="transform: scaleX(${n / max})"></div><span>${n}</span>`;
+      chart.append(row);
+    });
+    mode.textContent = d.live ? "GO DRY-RUN" : "GO LIVE";
+    mode.className = d.live ? "" : "hot";
+    mode.onclick = () => send({ oni: "action", id: d.live ? "go-dry" : "go-live" });
+  });
+  c.onclick = () => send({ oni: "action", id: "check", params: { text: t.value } }); // no <form>: the sandbox blocks submitting
+  t.onkeydown = (e) => e.key === "Enter" && c.click();
+  r.onclick = () => send({ oni: "refresh" });
+  new ResizeObserver(() => send({ oni: "height", px: Math.ceil(document.body.getBoundingClientRect().height) + 2 })).observe(document.body);
+  send({ oni: "ready" });
+</script>"#;
+
 fn demo_view(d: &Demo) -> Value {
     let hm = |t: f64| chrono::DateTime::from_timestamp(t as i64, 0).map(|x| x.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
     let last = d.rows.first().map(|r| format!("{} min ago", ((crate::util::now() - r.1) / 60.0) as i64)).unwrap_or("none".into());
@@ -382,6 +450,7 @@ fn demo_view(d: &Demo) -> Value {
             {"type": "table", "id": "actions", "columns": ["Time", "Server", "Action", "Player", "Why"], "row_actions": ["undo"],
              "rows": d.rows.iter().map(|r| json!({"id": r.0, "cells": [hm(r.1), (r.2 + 1).to_string(), r.3, r.4, r.5]})).collect::<Vec<_>>()},
             {"type": "log", "lines": d.log[d.log.len().saturating_sub(8)..]},
+            {"type": "html", "html": DEMO_PAGE, "data": {"live": d.live, "per_server": (0..3).map(|s| d.rows.iter().filter(|r| r.2 == s).count()).collect::<Vec<_>>()}},
             {"type": "text", "text": "A pretend plug-in: nothing here runs as a program. See docs/PLUGINS.md for how a real one is written."}],
         "actions": [
             {"id": "check", "label": "Check a message", "params": [{"name": "text", "label": "Message", "type": "text"}]},
@@ -413,7 +482,7 @@ pub async fn demo_call(request: &Value) -> Value {
                 let r = d.rows.remove(i);
                 d.log.push(format!("undid {} on {}", r.3, r.4));
                 let cmd = if r.3.starts_with("mute") { "unmute" } else if r.3.starts_with("ban") { "unban" } else { "pardon" };
-                let ask = if request["server"].is_string() { json!([{"server": request["server"], "command": cmd, "args": [r.0]}]) } else { json!([]) };
+                let ask = if request["server"].is_string() { json!([{"server": request["server"], "command": cmd, "args": [r.4]}]) } else { json!([]) };
                 json!({"ok": true, "toast": format!("Undid {}'s {}.", r.4, r.3.split(' ').next().unwrap_or_default()), "rcon": ask})
             }
             None => json!({"ok": false, "error": "pick a row first"}),
@@ -483,6 +552,11 @@ mod tests {
         assert_eq!(v["blocks"][4]["lines"][0].as_str().unwrap().len(), MAX_STR);
         assert_eq!(v["actions"], json!([{"id": "a", "label": "a", "danger": false, "confirm": "", "params": [{"name": "c", "label": "c", "type": "text", "options": []}]}]));
         assert_eq!(normalise_view(&json!({"error": "down"})), json!({"error": "down"}));
+        let mut h = normalise_view(&json!({"blocks": [{"type": "text"}, {"type": "html", "html": "<b>hi</b>".repeat(100_000), "height": 9e9, "data": {"n": 1}}]}));
+        assert_eq!((h["blocks"][1]["html"].as_str().unwrap().len(), &h["blocks"][1]["height"], &h["blocks"][1]["data"]), (MAX_HTML, &json!(4000), &json!({"n": 1})));
+        stash("echo", &mut h);
+        assert_eq!((&h["blocks"][1]["html"], &h["blocks"][1]["src"], h["blocks"][1]["v"].as_str().unwrap().len()), (&Value::Null, &json!("echo.1"), 12));
+        assert_eq!(frame("echo.1").unwrap().len(), MAX_HTML);
         assert_eq!(normalise_view(&json!([1])), json!({"error": "its reply isn't a JSON object"}));
     }
 
@@ -522,5 +596,6 @@ mod tests {
         let r = demo_call(&json!({"type": "action", "id": "undo", "row": row, "server": "127.0.0.1:1"})).await;
         let n = normalise_action(&r, &demo_manifest().rcon, &["127.0.0.1:1".into()]);
         assert_eq!((n["rcon"][0]["command"].clone(), n["dropped"].clone()), (json!("unmute"), json!([])));
+        assert_eq!(n["rcon"][0]["args"], json!(["Rook"])); // the player, not the row's id
     }
 }

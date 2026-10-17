@@ -1,7 +1,7 @@
 {
   "name": "oni-rcon-desktop",
   "private": true,
-  "version": "1.7.5",
+  "version": "1.7.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/rajdhani": "^5.2.5",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.0",
     "react": "^19.2.0",

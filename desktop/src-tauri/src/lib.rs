@@ -874,6 +874,7 @@ async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) ->
     if let Some(e) = v["error"].as_str() {
         v["error"] = json!(health::scrub(e)); // its own words about a failure: no address in them
     }
+    plugins::stash(&id, &mut v);
     Ok(v)
 }
 
@@ -882,10 +883,28 @@ async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) ->
 #[tauri::command]
 async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
     let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server});
-    Ok(match plugin_ask(&app, &id, req, plugins::ACTION_TIMEOUT).await {
+    let mut r = match plugin_ask(&app, &id, req, plugins::ACTION_TIMEOUT).await {
         Ok((m, raw)) => plugins::normalise_action(&raw, &m.rcon, &servers),
         Err(e) => plugins::normalise_action(&json!({"ok": false, "error": e}), &[], &[]),
-    })
+    };
+    plugins::stash(&id, &mut r["view"]);
+    Ok(r)
+}
+
+/// An html block's page for its frame, at oniplugin://localhost/<id>.<n>?redact=1 (http://oniplugin.localhost/... on Windows).
+/// Its own CSP: inline script and style, data: images and fonts, and no network at all, so a page can't phone home.
+fn plugin_frame(uri: &tauri::http::Uri) -> tauri::http::Response<Vec<u8>> {
+    let page = plugins::frame(uri.path().trim_start_matches('/'));
+    let redact = uri.query().is_some_and(|q| q.split('&').any(|x| x == "redact=1"));
+    let Some(page) = page else {
+        return tauri::http::Response::builder().status(404).body(b"gone: open the plug-in again".to_vec()).unwrap();
+    };
+    tauri::http::Response::builder()
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'")
+        .header("Cache-Control", "no-store")
+        .body((if redact { health::hide_ips(&page) } else { page }).into_bytes())
+        .unwrap()
 }
 
 /// The newest desktop release newer than `current`, as (version, page): the terminal console's v* releases share
@@ -977,6 +996,7 @@ pub fn run() {
     let devtools = args.devtools;
     let demo = args.demo; // until the setup screen saves servers of the operator's own
     tauri::Builder::default()
+        .register_uri_scheme_protocol("oniplugin", |_, req| plugin_frame(req.uri()))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())

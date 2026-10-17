@@ -89,6 +89,26 @@ console's CONDITION to AMBER and `alert` to RED while it holds, `ok` and `off` c
 Oni's own confirm dialog, whose button defaults to ABORT. A block type this Oni doesn't know is drawn as a grey line
 ("this version of Oni can't draw a 'chart' block"), never an error.
 
+**html block** (desktop app only; the terminal console draws it as the grey line): a plug-in's own page, for any UI the
+other blocks can't draw.
+
+```json
+{"type": "html", "html": "<!doctype html>…", "height": 420, "data": {"any": "JSON"}}
+```
+
+- `html` is a whole page (up to 512 KiB). It's shown in a sandboxed frame (`sandbox="allow-scripts"`, opaque origin) with
+  its own CSP: inline `<script>` and `<style>`, `data:`/`blob:` images, fonts and media, and **no network at all** (no
+  fetch, no external scripts, styles or images) and no forms (use buttons). It can't reach Oni, Tauri or the page around it.
+- `height` is the frame's starting height in pixels (default 420); the page can change it.
+- The frame reloads only when `html` changes. Send changing values in `data` instead: Oni posts it to the page on load
+  and whenever a view arrives, redacted like everything else. With redaction on, IPv4 addresses in `html` are blanked too.
+- Oni → page (`message` event): `{"oni": "data", "data": …, "redact": true, "server": "3", "theme": {"amber": "#d9a441", …}}`.
+- Page → Oni (`parent.postMessage(msg, "*")`):
+  `{"oni": "action", "id": "undo", "row": "<row id>", "params": {"name": value}}` runs one of the view's own `actions`
+  (any other id is refused), with its `confirm`/`danger` dialog, skipping the form when `params` is given;
+  `{"oni": "refresh"}` asks for a new view; `{"oni": "height", "px": 300}` resizes the frame (40–4000);
+  `{"oni": "ready"}` asks for the data again.
+
 **action**: Oni → plug-in `{"type":"action","id":"undo","params":{},"row":"<row id>","server":"3"}`. Reply:
 
 ```json
@@ -121,7 +141,7 @@ plug-in → Oni `rcon {id, server, command, args}`, `view {…}` (push, replaces
 - **Values.** Params arrive as: `number` a JSON number, `bool` `true`/`false`, the rest strings. A `row_actions` id not in
   `actions` gets its id, upper-cased, as the button label.
 - **Plain text only.** Every string a plug-in sends is data, never markup: not Rich/Textual markup, not HTML, not Markdown.
-  Escape or use text nodes. This is the one security rule that is easy to get wrong in the console.
+  Escape or use text nodes. The `html` block is the one exception, and only inside its sandboxed frame. This is the one security rule that is easy to get wrong in the console.
 - **Redaction.** Anything shown from a plug-in goes through the same address redaction as the rest of the UI (on by default).
   `permissions.addresses` only decides whether Oni *sends* unredacted addresses to the plug-in.
 - **Ids.** A plug-in id is its folder name, `[a-z0-9-]+`. A row `id` is opaque to Oni: the plug-in chooses it and gets it

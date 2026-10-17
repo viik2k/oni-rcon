@@ -226,6 +226,9 @@ class Oni {
     this.sel = 0;
     this.feed = [];
     this.log = [];
+    this.banner = null;
+    this.alertAt = -Infinity;
+    this.toasts = [];
     this.findings.clear();
     this.runner.history = [];
     this.runner.engine = new Engine();
@@ -573,6 +576,7 @@ class Oni {
 
   logJson(v: unknown) {
     this.log.push({ id: ++this.ids, json: v });
+    if (this.log.length > 5000) this.log.splice(0, this.log.length - 5000);
     bump("log");
   }
 
@@ -695,6 +699,7 @@ class Oni {
     if (i === this.sel || i < 0 || i >= this.stations.length) return;
     this.sel = i;
     this.cur.alerts = 0;
+    this.plugins.forEach((p) => (p.due = 0)); // their views are per server: ask again for this one
     this.fetch(this.cur, "status", "players", "nextmap", "vote", "bans", "vpn", "admins");
     bump("cards", "roster", "ops", "bans", "forge", "mast", "ui", ...(this.localOnly ? ["feed" as const] : []));
   }
@@ -758,15 +763,17 @@ class Oni {
   async pluginView(p: Plugin) {
     p.busy = true;
     bump("plugins");
+    const server = this.serverName(this.cur);
     try {
-      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server: this.serverName(this.cur) });
+      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server });
       if (v.error) p.error = v.error;
       else [p.view, p.error] = [v, ""];
     } catch (e) {
       p.error = String(e);
     }
     [p.busy, p.asked] = [false, true];
-    p.due = performance.now() + (this.tab === "plugins" ? PLUGIN_EVERY : PLUGIN_BADGE_EVERY);
+    // the server changed while it was asked: ask again for the one selected now
+    p.due = server !== this.serverName(this.cur) ? 0 : performance.now() + (this.tab === "plugins" ? PLUGIN_EVERY : PLUGIN_BADGE_EVERY);
     bump("plugins", "mast");
   }
 
@@ -792,12 +799,13 @@ class Oni {
   /** Its params asked for, then its confirm if it has one (ABORT is the default), then run. Esc or ABORT at either
    *  step sends nothing. Then: toast what it said, send the RCON its permissions allow, and show the view it sent back
    *  or ask for a fresh one. */
-  async pluginAction(p: Plugin, a: Dict, row: string | null = null) {
+  /** Run one of its actions: its form (unless `given` answers it, from the plug-in's own page), confirm, then RCON. */
+  async pluginAction(p: Plugin, a: Dict, row: string | null = null, given?: Dict) {
     if (p.m.state) return;
     const title = `${p.m.name || p.m.id} › ${a.label}`.toUpperCase();
     let params: Dict = {};
     if (a.params.length) {
-      const got = await this.form(title, a.params.map((x: Dict, i: number) => [`p${i}`, x.label + (x.type === "duration" ? "  (10m, 1d)" : ""),
+      const got = given ? Object.fromEntries(a.params.map((x: Dict, i: number) => [`p${i}`, given[x.name] ?? ""])) : await this.form(title, a.params.map((x: Dict, i: number) => [`p${i}`, x.label + (x.type === "duration" ? "  (10m, 1d)" : ""),
         x.type === "bool" ? [["No", "false"], ["Yes", "true"]] : x.type === "choice" ? x.options.map((o: string) => [o, o]) : ""]), { verb: "RUN", danger: a.danger });
       if (!got) return;
       const typed = typedParams(a.params, got);
