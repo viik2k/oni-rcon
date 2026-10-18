@@ -122,7 +122,7 @@ Also:
 
 ## Install
 
-You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7), or let the desktop app
+You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.18), or let the desktop app
 [host one](#host-a-server) for you.
 
 **Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-windows-x64.exe) and double-click it. The build
