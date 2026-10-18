@@ -48,6 +48,9 @@ Also:
   server, the busiest first, to type a name into. Each card shows how full the server is and a trace of its activity
   over the last 100 seconds. Names that share a community tag ("ALPHA · Big Team") are shortened to what tells them
   apart, with the tag on the card's second line.
+- **Version drift.** A server lets in only players on exactly its version, and players' games update themselves, so a
+  server behind the newest Project Reclaimer release says so on its card and in F3 (`▲ 0.9.18 out` in the TUI), and
+  the feed says `MIXED VERSIONS` when your servers disagree. Checked hourly; `ONI_RCON_NO_UPDATE=1` turns it off.
 - **Built for fleets.** Past 12 servers the cards slim to two lines, the boot screen tallies the stations instead of
   listing each one, and the console stays light enough for a web terminal: a card is redrawn only when what it shows
   changes, status polls are spread over 15 seconds instead of fired together, and servers sign in 8 at a time with

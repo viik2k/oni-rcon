@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -16,6 +17,7 @@ from . import __version__
 
 REPO = "viik2k/oni-rcon"
 RELEASES = f"https://github.com/{REPO}/releases/latest"
+RECLAIMER = "https://api.github.com/repos/ProjectReclaimer/project-reclaimer-releases/releases/latest"
 ASSET = {"win32": "oni-rcon-windows-x64.exe", "linux": "oni-rcon-linux-x64"}.get(sys.platform)
 
 
@@ -64,3 +66,38 @@ def check(exe: Path | None = None) -> str:
     except Exception:  # read-only install dir, no asset for this platform, a cut-off download
         return by_hand
     return f"Updated to {tag}. Restart oni-rcon to use it."
+
+
+def reclaimer_latest() -> str:
+    """The newest Project Reclaimer release, as "0.9.18". Servers admit only players on exactly their version, and
+    players' games update themselves. Empty when offline or turned off."""
+    if os.environ.get("ONI_RCON_NO_UPDATE"):
+        return ""
+    try:
+        return json.loads(fetch(RECLAIMER))["tag_name"].lstrip("v")
+    except Exception:  # offline, rate limited: the cards just don't say
+        return ""
+
+
+def semver(version) -> tuple[int, ...] | None:
+    """A version's major.minor.patch ("v0.9.18-rc1" is (0, 9, 18)); None when it isn't one."""
+    m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", str(version or "").strip())
+    return tuple(map(int, m.groups())) if m else None
+
+
+def behind(have, latest) -> str:
+    """The newer release a server is behind, as "0.9.18"; empty when it is current, ahead, or either is unknown."""
+    h, l = semver(have), semver(latest)
+    return ".".join(map(str, l)) if h and l and h < l else ""
+
+
+def mixed_versions(stations: list[tuple[str, object]]) -> str:
+    """"0.9.17 on F1 · 0.9.18 on F2, F3", oldest first, when (label, version) pairs disagree; empty when they agree.
+    Unknown versions don't count."""
+    by: dict[tuple, list[str]] = {}
+    for label, version in stations:
+        if v := semver(version):
+            by.setdefault(v, []).append(label)
+    if len(by) < 2:
+        return ""
+    return " · ".join(f"{'.'.join(map(str, v))} on {', '.join(labels)}" for v, labels in sorted(by.items()))
