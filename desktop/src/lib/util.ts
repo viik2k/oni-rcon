@@ -313,10 +313,37 @@ const EXPLAIN: [string[], string, string][] = [
 
 /** Server 0.9.18 and later apply dedicated.toml edits without a restart, and `reload` says what changed. */
 export function hotReloads(version: unknown): boolean {
+  const v = semver(version);
+  return !!v && cmpVer(v, [0, 9, 18]) >= 0;
+}
+
+/** A version's major.minor.patch ("v0.9.18-rc1" is [0, 9, 18]); null when it isn't one. */
+export function semver(version: unknown): number[] | null {
   const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version ?? "").trim());
-  if (!m) return false;
-  const [major, minor, patch] = m.slice(1).map(Number);
-  return major > 0 || minor > 9 || (minor === 9 && patch >= 18);
+  return m ? m.slice(1).map(Number) : null;
+}
+const cmpVer = (a: number[], b: number[]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+/** The newer Project Reclaimer release a server is behind, as "0.9.18"; "" when it is current, ahead, or either
+ *  version is unknown. Servers admit only players on exactly their version, and players' clients update themselves. */
+export function behind(have: unknown, latest: unknown): string {
+  const [h, l] = [semver(have), semver(latest)];
+  return h && l && cmpVer(h, l) < 0 ? l.join(".") : "";
+}
+
+/** "0.9.17 on F1 · 0.9.18 on F2, F3", oldest first, when the stations run different versions; "" when they agree.
+ *  Unknown versions don't count. */
+export function mixedVersions(stations: { label: string; version: unknown }[]): string {
+  const by = new Map<string, { v: number[]; labels: string[] }>();
+  for (const s of stations) {
+    const v = semver(s.version);
+    if (!v) continue;
+    const k = v.join(".");
+    if (!by.has(k)) by.set(k, { v, labels: [] });
+    by.get(k)!.labels.push(s.label);
+  }
+  if (by.size < 2) return "";
+  return [...by].sort((a, b) => cmpVer(a[1].v, b[1].v)).map(([k, g]) => `${k} on ${g.labels.join(", ")}`).join(" · ");
 }
 
 /** Someone this station saw kicked: `pardon` (server 0.9.16 or later) lets them back in now. `until` is 0 when unknown. */

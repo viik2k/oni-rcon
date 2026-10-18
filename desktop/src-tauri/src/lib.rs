@@ -1024,6 +1024,21 @@ async fn update_check(app: AppHandle) -> String {
     find_update(&app).await.map(|(u, _)| u.version).unwrap_or_default()
 }
 
+/// The newest Project Reclaimer release, as "0.9.18", so a card can say its server is behind: servers admit only
+/// players on exactly their version. Empty offline or with updates turned off (ONI_RCON_NO_UPDATE=1).
+#[tauri::command]
+async fn reclaimer_latest() -> String {
+    async fn get() -> Option<String> {
+        let c = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build().ok()?;
+        let v = c.get(host::RELEASES).send().await.ok()?.json::<Value>().await.ok()?;
+        Some(v["tag_name"].as_str()?.trim_start_matches('v').to_string())
+    }
+    if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
+        return String::new();
+    }
+    get().await.unwrap_or_default()
+}
+
 /// Downloads the update, checks its signature, installs it and restarts the console.
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
@@ -1102,7 +1117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])

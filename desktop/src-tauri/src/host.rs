@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-const RELEASES: &str = "https://api.github.com/repos/ProjectReclaimer/project-reclaimer-releases/releases/latest";
+pub(crate) const RELEASES: &str = "https://api.github.com/repos/ProjectReclaimer/project-reclaimer-releases/releases/latest";
 const COMPOSE: &str = "https://projectreclaimer.dev/docker/compose.yaml";
 const GAME: &str = "Halo The Master Chief Collection";
 // the shell that runs on the game box

@@ -13,7 +13,7 @@ import { Engine, type Roles } from "./lib/rules";
 import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
-  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
+  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, mixedVersions, num, pick, playerIds, plain, reactionWords,
   pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line,
 } from "./lib/util";
@@ -164,6 +164,10 @@ class Oni {
   tunnels = new Map<string, { state: string; detail: string }>();
   fleet = false;
   demo = false;
+  /** The newest Project Reclaimer release ("0.9.18"), asked GitHub at most hourly; "" until known. */
+  reclaimer = "";
+  private reclaimerAt = -Infinity;
+  private mixedSaid = "";
   intro = "quick";
   hint = "";
   version = "";
@@ -247,6 +251,9 @@ class Oni {
     every(3000, () => this.pollFast());
     every(1000, () => this.pollSlow());
     every(2000, () => this.pluginTick());
+    every(60_000, () => this.checkReclaimer());
+    this.mixedSaid = "";
+    this.checkReclaimer();
     this.plugins = [];
     this.loadPlugins(performance.now() + 3000); // each asked once soon after start, for its badge
     for (const st of this.stations) if (st.online) this.fetch(st, "status");
@@ -342,6 +349,7 @@ class Oni {
       this.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
       st.polled = performance.now();
       this.logEvent(st, { event: "uplink", text: `SECURE  ${detail}` });
+      this.noteMixed();
       if (st === this.cur) bump("forge");
     } else if (state === "denied") {
       this.logEvent(st, { event: "uplink", text: `SIGN-IN REFUSED: ${detail}` });
@@ -506,6 +514,26 @@ class Oni {
       const empty = num(st.data.status?.players) === 0 && !st.players.length;
       this.fetch(st, "status", ...(empty ? [] : ["players"]));
     }
+  }
+
+  /** Asks GitHub for the newest Reclaimer release, at most hourly. Offline it stays quiet and asks again next hour.
+   *  Not in the demo: its servers are a made-up build. */
+  private checkReclaimer() {
+    if (this.demo || performance.now() - this.reclaimerAt < 3_600_000) return;
+    this.reclaimerAt = performance.now();
+    invoke<string>("reclaimer_latest").then((v) => {
+      if (!v || v === this.reclaimer) return;
+      this.reclaimer = v;
+      bump("cards", "ops");
+    }).catch(() => { /* offline: the cards just don't say */ });
+  }
+
+  /** One feed line when the connected stations run different versions: a player can join only those on theirs.
+   *  Said again only when the mix changes. */
+  private noteMixed() {
+    const mix = mixedVersions(this.stations.filter((s) => s.online).map((s) => ({ label: s.label, version: s.info.version })));
+    if (mix && mix !== this.mixedSaid) this.logEvent(null, { event: "uplink", text: `MIXED VERSIONS  ${mix}` });
+    this.mixedSaid = mix;
   }
 
   replyText(r: Reply) {
