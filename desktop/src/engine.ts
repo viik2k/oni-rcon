@@ -386,7 +386,7 @@ class Oni {
     this.sup.react(ev, classify(ev) ? reactionWords(ev, this.redact) : "");
     if (["join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"].includes(kind)) this.fetch(st, "players", "status");
     if (kind === "ban" || kind === "unban") this.fetch(st, "bans");
-    if (kind === "admin") this.fetch(st, "admins", "players");
+    if (kind === "admin_added" || kind === "admin_removed") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
   }
