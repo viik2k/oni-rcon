@@ -72,9 +72,10 @@ COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban",
 CATS = {"chat": WHITE, "combat": RED, "traffic": CYAN, "moderation": AMBER, "ops": GREY}
 KIND = {"chat": "chat", "kill": "combat", "join": "traffic", "leave": "traffic", "refused": "traffic",
         "kick": "moderation", "ban": "moderation", "unban": "moderation", "mute": "moderation",
-        "unmute": "moderation", "cheat": "moderation", "pardon": "moderation"}
+        "unmute": "moderation", "cheat": "moderation", "pardon": "moderation", "admin_added": "moderation",
+        "admin_removed": "moderation"}
 GLYPH = {"health": "⚠", "chat": "»", "kill": "✕", "join": "▲", "leave": "▼", "refused": "⊘", "kick": "◆", "ban": "■", "unban": "□", "pardon": "↺",
-         "mute": "◈", "unmute": "◇", "cheat": "!", "vote": "◉", "control": "•", "uplink": "≡", "forge": "⬢"}
+         "admin_added": "✦", "admin_removed": "✧", "mute": "◈", "unmute": "◇", "cheat": "!", "vote": "◉", "control": "•", "uplink": "≡", "forge": "⬢"}
 STATE = {"online": ("◉", GREEN), "connecting": ("◌", AMBER), "offline": ("○", RED), "denied": ("⊘", RED)}
 SPIN = "◐◓◑◒"
 PANE_FOCUS = {"assets": "#players", "intercepts": "#feed", "operations": "#op-load", "blacklist": "#bans",
@@ -478,6 +479,19 @@ def describe(ev: dict, names: dict, redact: bool = True) -> Text:
         if ev.get("by"):
             line.append("  by ", DIM)
             line.append(str(ev["by"]))
+    elif kind in ("admin_added", "admin_removed"):
+        line.append("ADMIN", AMBER)
+        line.append(f"  {ev['name'] if ev.get('name') else redact_text(clip_id(ev.get('id', '?')), redact)}", WHITE)
+        line.append("  made admin" if kind == "admin_added" else "  no longer admin", DIM)
+        if ev.get("by"):
+            line.append("  by ", DIM)
+            line.append(str(ev["by"]))
+    elif kind == "control" and ev.get("action") in ("reload", "reload_applied"):
+        failed = ev.get("ok") is False  # a reload that changed nothing says why
+        line.append("RELOAD FAILED" if failed else "RELOAD" if ev["action"] == "reload" else "RELOAD APPLIED",
+                    RED if failed else CYAN)
+        if ev.get("text"):
+            line.append(f"  {redact_text(str(ev['text']), redact)}")
     elif kind == "health":
         line.append("HEALTH  " + str(ev.get("text", "")), RED if ev.get("level") == "crit" else AMBER)
     else:
@@ -2359,7 +2373,7 @@ class OniApp(App):
             self.notify(describe(ev, names, self.redact).plain, title=f"ANTI-CHEAT · {st.label}", severity="error",
                         timeout=12)
             self.alert(st)
-        if kind in ("join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"):
+        if kind in ("join", "leave", "refused", "kick", "ban", "mute", "unmute", "control", "admin_added", "admin_removed"):
             self.fetch(st, "players", "status")
         if kind in ("ban", "unban"):
             self.fetch(st, "bans")

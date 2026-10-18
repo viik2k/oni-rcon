@@ -172,6 +172,17 @@ class Fake:
             name = self.kicked.pop(pid)
             await self.emit("pardon", target=args[0], name=[name], by=by)
             return ok(f"{name} may rejoin now.")
+        if cmd == "admin" and len(args) > 1 and args[0] in ("add", "remove"):
+            p = next((p for p in self.players if args[1] in (p["name"], p["player_id"])), None)
+            if p:
+                p["admin"] = args[0] == "add"
+            name = p["name"] if p else args[1]
+            await self.emit(f"admin_{args[0]}{'ed' if args[0] == 'add' else 'd'}", name=name,
+                            id=p["player_id"] if p else args[1], by=by)
+            return ok(f"{name} {'is now an admin' if args[0] == 'add' else 'is no longer an admin'}.")
+        if cmd == "reload":
+            await self.emit("control", action="reload", ok=True, text="Nothing changed.")
+            return ok("Nothing changed.")
         if cmd in ("map", "mode", "load", "nextmap"):
             self.status["next"] = " / ".join(args)
             if cmd != "nextmap":

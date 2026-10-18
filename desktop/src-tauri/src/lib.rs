@@ -12,6 +12,7 @@ mod hub;
 mod install;
 mod plugins;
 mod rcon;
+mod session;
 mod stats;
 mod util;
 
@@ -311,6 +312,7 @@ fn setup_open(app: State<'_, App>) {
     if let Some(h) = app.hub.lock().take() {
         h.stop();
     }
+    session::stop_all();
     *app.forced_setup.lock() = true;
 }
 
@@ -334,6 +336,7 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
     if let Some(h) = app.hub.lock().take() {
         h.stop();
     }
+    session::stop_all();
     let a = app.args.clone();
     let demo = demo || *app.demo.lock();
     *app.forced_setup.lock() = false;
@@ -862,14 +865,90 @@ async fn plugin_ask(app: &State<'_, App>, id: &str, request: Value, timeout: f64
     if !why.is_empty() {
         return Err(why);
     }
-    let raw = if demo { plugins::demo_call(&request).await } else { plugins::call(&m, &request, timeout).await? };
+    let raw = if demo {
+        plugins::demo_call(&request).await
+    } else if m.mode == "session" {
+        session::ask(id, request, timeout).await?
+    } else {
+        plugins::call(&m, &request, timeout).await?
+    };
     Ok((m, raw))
 }
 
-/// Its view for `server` (the selected server as a plug-in names it), shaped; `error` set when it gave none.
+/// Start a session plug-in that may run (it's kept going until the console stops). `servers` are `{index, name}`.
 #[tauri::command]
-async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) -> Result<Value, String> {
-    let (_, raw) = plugin_ask(&app, &id, json!({"type": "view", "server": server}), plugins::VIEW_TIMEOUT).await?;
+fn plugin_session_start(id: String, servers: Vec<Value>, handle: AppHandle, app: State<'_, App>) -> Result<(), String> {
+    let demo = *app.demo.lock();
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    let why = plugin_state(&m, demo);
+    if !why.is_empty() || demo || m.mode != "session" {
+        return Err(if why.is_empty() { "not a session plug-in".into() } else { why });
+    }
+    session::start(m, servers, std::sync::Arc::new(move |v| {
+        let _ = handle.emit("oni", vec![v]);
+    }));
+    Ok(())
+}
+
+/// What its git upstream has that its folder hasn't (`{behind, log, source, to}`), or null: up to date, not a git
+/// clone, or the demo.
+#[tauri::command]
+async fn plugin_update_check(id: String, app: State<'_, App>) -> Result<Value, String> {
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    if *app.demo.lock() {
+        return Ok(Value::Null);
+    }
+    Ok(plugins::update_check(&m).await?.unwrap_or(Value::Null))
+}
+
+/// Fast-forward its folder to its git upstream, stop its session and read its manifest again: a changed manifest
+/// needs approving again, and the window's next plugins_list starts it afresh.
+#[tauri::command]
+async fn plugin_update(id: String, app: State<'_, App>) -> Result<(), String> {
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    if *app.demo.lock() {
+        return Err("not in the demo".into());
+    }
+    plugins::update(&m).await?;
+    session::stop(&id);
+    if let (Some(f), Some(x)) = (&m.folder, app.plugins.lock().iter_mut().find(|x| x.id == id)) {
+        *x = plugins::load(f);
+    }
+    Ok(())
+}
+
+/// One message to a running session plug-in: an event, or the reply to its RCON.
+#[tauri::command]
+fn plugin_send(id: String, msg: Value) -> Result<(), String> {
+    session::send(&id, &msg)
+}
+
+/// One RCON command its page asked for (`{oni:"rcon"}`), through the same filter as an action's: `{rcon, dropped}`.
+#[tauri::command]
+fn plugin_filter(id: String, rcon: Value, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
+    let m = app.plugins.lock().iter().find(|m| m.id == id).cloned().ok_or("no such plug-in")?;
+    let why = plugin_state(&m, *app.demo.lock());
+    if !why.is_empty() {
+        return Err(why);
+    }
+    Ok(plugins::normalise_action(&json!({"rcon": [rcon]}), &m.rcon, &servers))
+}
+
+/// Its page's own request (`{oni:"call"}`), handed to its program as `{type:"call", data}`; the reply goes back to
+/// the page as it is, at most MAX_OUT bytes, never shown by Oni itself.
+#[tauri::command]
+async fn plugin_call(id: String, data: Value, server: Option<String>, app: State<'_, App>) -> Result<Value, String> {
+    let (_, raw) = plugin_ask(&app, &id, json!({"type": "call", "data": data, "server": server}), plugins::ACTION_TIMEOUT).await?;
+    Ok(raw)
+}
+
+/// Its view for `server` (the selected server as a plug-in names it), shaped; `error` set when it gave none.
+/// `snapshot` is that server's roster, map, mode and scores, already redacted to the plug-in's permissions; `replies`
+/// the RCON it asked for since its last view, with what each server answered.
+#[tauri::command]
+async fn plugin_view(id: String, server: Option<String>, snapshot: Option<Value>, replies: Option<Value>, app: State<'_, App>) -> Result<Value, String> {
+    let req = json!({"type": "view", "server": server, "snapshot": snapshot, "replies": replies.unwrap_or(json!([]))});
+    let (_, raw) = plugin_ask(&app, &id, req, plugins::VIEW_TIMEOUT).await?;
     let mut v = plugins::normalise_view(&raw);
     if let Some(e) = v["error"].as_str() {
         v["error"] = json!(health::scrub(e)); // its own words about a failure: no address in them
@@ -881,8 +960,8 @@ async fn plugin_view(id: String, server: Option<String>, app: State<'_, App>) ->
 /// Run an action: its reply shaped, with the RCON it asked for split into what its permissions and `servers` (every
 /// server as plug-ins name them) allow, and why the rest was dropped.
 #[tauri::command]
-async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
-    let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server});
+async fn plugin_action(id: String, action: String, params: Value, row: Option<String>, server: Option<String>, snapshot: Option<Value>, servers: Vec<String>, app: State<'_, App>) -> Result<Value, String> {
+    let req = json!({"type": "action", "id": action, "params": params, "row": row, "server": server, "snapshot": snapshot});
     let mut r = match plugin_ask(&app, &id, req, plugins::ACTION_TIMEOUT).await {
         Ok((m, raw)) => plugins::normalise_action(&raw, &m.rcon, &servers),
         Err(e) => plugins::normalise_action(&json!({"ok": false, "error": e}), &[], &[]),
@@ -1038,7 +1117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, update_check, update_install, reclaimer_latest,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])
@@ -1047,6 +1126,7 @@ pub fn run() {
                 if let Some(h) = w.app_handle().state::<App>().hub.lock().take() {
                     h.stop();
                 }
+                session::stop_all();
             }
         })
         .run(tauri::generate_context!())

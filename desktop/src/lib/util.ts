@@ -194,6 +194,19 @@ export function redactData(v: unknown, on: boolean): unknown {
   return v;
 }
 
+/** What a plug-in is told of a server as it stands: its roster, map, mode and team scores. Addresses are blanked
+ *  unless the plug-in's manifest grants `addresses`. */
+export function pluginSnapshot(status: Dict, players: Dict[], addresses: boolean): Dict {
+  return { players: redactData(players, !addresses), map: status.map ?? null, mode: status.mode ?? null,
+    score: sides(players).map(([team, players, score]) => ({ team, players, score })) };
+}
+
+/** What a plug-in hears back from one RCON command it had Oni send: the server's answer, with addresses blanked
+ *  unless its manifest grants them. */
+export function pluginReply(x: Dict, r: { ok: boolean | null; text?: string; data?: unknown }, addresses: boolean): Dict {
+  return { server: x.server, command: x.command, args: x.args, ok: r.ok, text: redactText(String(r.text ?? ""), !addresses), data: redactData(r.data ?? null, !addresses) };
+}
+
 /** A plug-in action's form answers (keyed p0, p1, ... in its params' order) as the contract types them: number as a
  *  JSON number, bool as true/false, the rest strings. A number that isn't one gives the words to say, and nothing is sent. */
 export function typedParams(params: Dict[], got: Dict): Dict | string {
@@ -381,9 +394,10 @@ export function explain(detail: string, state = "offline", short = false): strin
 
 export const CATS: Record<string, string> = { chat: WHITE, combat: RED, traffic: CYAN, moderation: AMBER, ops: GREY };
 export const KIND: Record<string, string> = { chat: "chat", kill: "combat", join: "traffic", leave: "traffic", refused: "traffic",
-  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation", pardon: "moderation" };
+  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", pardon: "moderation",
+  admin_added: "moderation", admin_removed: "moderation" };
 export const GLYPH: Record<string, string> = { health: "⚠", chat: "»", kill: "✕", join: "▲", leave: "▼", refused: "⊘", kick: "◆", ban: "■",
-  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
+  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin_added: "✦", admin_removed: "✧", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
 
 /** What an event says, after its time and station. Known kinds get a layout; anything else prints its fields. */
 export function describe(ev: Dict, redact = true): Line {
@@ -411,6 +425,14 @@ export function describe(ev: Dict, redact = true): Line {
     const names = [ev.name ?? []].flat().map(String).filter(Boolean);
     line.push(["PARDON", AMBER], [`  ${names.length ? names.join(", ") : redactText(String(ev.target ?? "?"), redact)}`, WHITE], ["  may rejoin", DIM]);
     if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "admin_added" || kind === "admin_removed") {
+    line.push(["ADMIN", AMBER], [`  ${ev.name ? String(ev.name) : redactText(clipId(ev.id ?? "?"), redact)}`, WHITE],
+      [kind === "admin_added" ? "  made admin" : "  no longer admin", DIM]);
+    if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "control" && (ev.action === "reload" || ev.action === "reload_applied")) {
+    const failed = ev.ok === false; // a reload that changed nothing says why
+    line.push([failed ? "RELOAD FAILED" : ev.action === "reload" ? "RELOAD" : "RELOAD APPLIED", failed ? RED : CYAN]);
+    if (ev.text) line.push([`  ${redactText(String(ev.text), redact)}`]);
   } else if (kind === "health") {
     line.push(["HEALTH  " + String(ev.text ?? ""), ev.level === "crit" ? RED : AMBER]);
   } else {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -59,6 +59,29 @@ describe("words", () => {
     expect(redactText("from 203.0.113.9 rfk_abcdefghij", true)).toBe("from ███.███.███.███ rfk_…████");
     expect(redactData({ address: "1.2.3.4", n: 1 }, true)).toEqual({ address: "███.███.███.███", n: 1 });
   });
+  it("gives a plug-in the server, with addresses only when its manifest grants them", () => {
+    const players = [{ name: "A", team: "red", score: 3, address: "203.0.113.9" }, { name: "B", team: "blue", score: 5, address: "203.0.113.10" }];
+    const s = pluginSnapshot({ map: "guardian", mode: "slayer" }, players, false);
+    expect(s).toMatchObject({ map: "guardian", mode: "slayer", score: [{ team: "red", players: 1, score: 3 }, { team: "blue", players: 1, score: 5 }] });
+    expect(s.players[0].address).toBe("███.███.███.███");
+    expect(pluginSnapshot({}, players, true).players[1].address).toBe("203.0.113.10");
+  });
+  it("gives a plug-in its RCON replies, with addresses only when granted", () => {
+    const x = { server: "A", command: "status", args: [] }, r = { ok: true, text: "ip 203.0.113.9", data: { address: "203.0.113.9" } };
+    expect(pluginReply(x, r, false)).toEqual({ ...x, ok: true, text: "ip ███.███.███.███", data: { address: "███.███.███.███" } });
+    expect(pluginReply(x, r, true).data.address).toBe("203.0.113.9");
+    expect(pluginReply(x, { ok: null }, false)).toMatchObject({ ok: null, text: "", data: null });
+  });
+  it("describes admin and reload events", () => {
+    const d = (ev: Record<string, unknown>) => plain(describeEvent(ev));
+    expect(d({ event: "admin_added", name: "Bravo", id: "76561198000000001", by: "RCON" })).toBe("ADMIN  Bravo  made admin  by RCON");
+    expect(d({ event: "admin_removed", id: "0123456789abcdef0123456789abcdef" })).toBe("ADMIN  01234567…  no longer admin");
+    expect(d({ event: "control", action: "reload", ok: true, text: "max_players 16 -> 12" })).toBe("RELOAD  max_players 16 -> 12");
+    expect(d({ event: "control", action: "reload", ok: false, text: "dedicated.toml: line 4" })).toBe("RELOAD FAILED  dedicated.toml: line 4");
+    expect(d({ event: "control", action: "reload_applied", ok: true, text: "playlist" })).toBe("RELOAD APPLIED  playlist");
+    expect(d({ event: "control", action: "kill_feed", ok: true, text: "x" }).startsWith("CONTROL  x")).toBe(true);
+  });
+
   it("describes a kill with its medals", () => {
     const l = describeEvent({ event: "kill", killer: "A", victim: "B", weapon: "shotgun", _medals: ["DOUBLE KILL"] });
     expect(plain(l)).toBe("A ✕ B  [shotgun]   DOUBLE KILL ");

@@ -262,10 +262,14 @@ function Console({ onSetup }: { onSetup: () => void }) {
               <button key={x} className={x === t ? "on" : ""} onClick={() => setTab(x)} title={TAB_TIPS[x]}><span className="f">{fkey(x)}</span>{NAMES[x]}</button>
             ))}
           </div>
-          <div className="pane" key={t}>
-            {t === "assets" ? <Assets /> : t === "intercepts" ? <Intercepts /> : t === "operations" ? <Operations /> : t === "blacklist" ? <Blacklist />
-              : t === "console" ? <ConsoleTab /> : t === "forge" ? <Forge /> : t === "health" ? <Health /> : <Plugins />}
-          </div>
+          {t !== "plugins" ? (
+            <div className="pane" key={t}>
+              {t === "assets" ? <Assets /> : t === "intercepts" ? <Intercepts /> : t === "operations" ? <Operations /> : t === "blacklist" ? <Blacklist />
+                : t === "console" ? <ConsoleTab /> : t === "forge" ? <Forge /> : <Health />}
+            </div>
+          ) : null}
+          {/* always mounted, hidden off F10, so a plug-in page with `persist` keeps running */}
+          <div className="pane" style={t === "plugins" ? undefined : { display: "none" }}><Plugins shown={t === "plugins"} /></div>
         </div>
       </div>
       <Footer />

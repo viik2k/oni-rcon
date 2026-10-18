@@ -14,7 +14,7 @@ import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, mixedVersions, num, pick, playerIds, plain, reactionWords,
-  redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
+  pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line,
 } from "./lib/util";
 
@@ -149,8 +149,13 @@ export interface Dialog { id: number; kind: string; props: Dict; resolve: (v: an
 export interface Reply { ok: boolean | null; text?: string; data?: any }
 
 /** A plug-in the config turns on (its manifest, and `state`: why it won't run, "" when it will), and what the console
- *  last heard from it. Its view is kept, greyed, when an ask fails. */
-export interface Plugin { m: Dict; view: Dict | null; error: string; busy: boolean; asked: boolean; due: number; note: string }
+ *  last heard from it. Its view is kept, greyed, when an ask fails. `replies` are the RCON answers it hasn't been told
+ *  of yet (sent in its next view request), `session` how its process is (session mode), `pages` its frames' inboxes. */
+export interface Plugin {
+  m: Dict; view: Dict | null; error: string; busy: boolean; asked: boolean; due: number; note: string;
+  replies: Dict[]; session: { state: string; detail: string; retry_in: number } | null; pages: Set<(msg: Dict) => void>;
+  update: { behind: number; log: string[]; source: string; to: string; asked: boolean } | null; // its git upstream is ahead
+}
 export const badgeOf = (p: Plugin): Dict | null => (p.view && !p.error ? p.view.badge : null);
 
 class Oni {
@@ -327,6 +332,7 @@ class Oni {
       case "forge-state": this.forgeState = m.state; return bump("forge", "ops", "mast");
       case "forge-refresh": return this.onForgeRefresh?.(m.lid);
       case "installed": return this.onInstalled?.(m);
+      case "plugin-session": case "plugin-view": case "plugin-notify": case "plugin-log": case "plugin-rcon": return this.onPlugin(m);
     }
   }
 
@@ -358,6 +364,7 @@ class Oni {
   }
 
   private onEvent(st: Station, raw: Dict) {
+    this.pluginEvent(st, raw);
     if (this.rawEvents) this.logLine([[`${st.label} ◂ `, CYAN], [JSON.stringify(redactData(raw, this.redact)), DIM]]);
     const names = st.names;
     const context = this.findingContext(st);
@@ -387,7 +394,7 @@ class Oni {
     this.sup.react(ev, classify(ev) ? reactionWords(ev, this.redact) : "");
     if (["join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"].includes(kind)) this.fetch(st, "players", "status");
     if (kind === "ban" || kind === "unban") this.fetch(st, "bans");
-    if (kind === "admin") this.fetch(st, "admins", "players");
+    if (kind === "admin_added" || kind === "admin_removed") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
   }
@@ -748,7 +755,10 @@ class Oni {
 
   refresh() {
     if (this.tab === "health") invoke("health_now").catch(() => {});
-    if (this.tab === "plugins") this.plugins.forEach((p) => (p.due = 0));
+    if (this.tab === "plugins") {
+      this.plugins.forEach((p) => (p.due = 0));
+      this.pluginUpdates();
+    }
     this.fetch(this.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
     for (const st of this.stations) this.fetch(st, "status");
   }
@@ -770,15 +780,110 @@ class Oni {
   /** How a plug-in names a server: its name in the config, or its address. Not the label, which changes once the
    *  server reports its own name. */
   serverName(st?: Station) { return st ? st.name || st.where : null; }
+  /** The selected server as a plug-in sees it, or null while it's offline. */
+  snapshot(p: Plugin) { return this.cur?.online ? pluginSnapshot(this.cur.data.status ?? {}, this.cur.players, !!p.m.addresses) : null; }
 
   /** The list from the backend, keeping what each already said; `due` for any it hasn't seen before. */
   async loadPlugins(due = 0) {
     try {
       const list = await invoke<Dict[]>("plugins_list");
       const had = new Map(this.plugins.map((p) => [p.m.id, p]));
-      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "" }, { m }));
+      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "", replies: [], session: null, pages: new Set<(msg: Dict) => void>(), update: null }, { m }));
     } catch { /* no console running */ }
+    const servers = this.stations.map((s) => ({ index: s.index, name: this.serverName(s) }));
+    for (const p of this.plugins) {
+      if (p.m.mode === "session" && !p.m.state && !this.demo) invoke("plugin_session_start", { id: p.m.id, servers }).catch((e) => (p.error = String(e)));
+    }
+    this.pluginUpdates();
     bump("plugins", "mast");
+  }
+
+  /** Fetch each plug-in's git upstream (at start, a window reload, and Ctrl+R on F10); offline or not a clone is just
+   *  no update. The same upstream commit is offered once. */
+  pluginUpdates() {
+    for (const p of this.demo ? [] : this.plugins.filter((x) => !x.m.error)) {
+      invoke<Dict | null>("plugin_update_check", { id: p.m.id }).then((u) => {
+        p.update = u ? { ...(u as NonNullable<Plugin["update"]>), asked: p.update?.to === u.to && !!p.update?.asked } : null;
+        bump("plugins");
+      }, () => {});
+    }
+  }
+
+  /** Offer its git upstream's new commits, and on yes fast-forward to them and start it afresh. */
+  async pluginUpdate(p: Plugin) {
+    const u = p.update, name = String(p.m.name || p.m.id);
+    if (!u) return;
+    u.asked = true;
+    const body = `${u.behind} new commit${u.behind === 1 ? "" : "s"} from ${u.source || "its repository"}:\n\n${u.log.join("\n")}${u.behind > u.log.length ? "\n…" : ""}`
+      + "\n\nThe new code runs as you, like the old. A change to its manifest asks for your approval again.";
+    if (!(await this.confirm(`UPDATE ${name.toUpperCase()}?`, redactText(body, this.redact), "UPDATE", false))) return bump("plugins");
+    try {
+      await invoke("plugin_update", { id: p.m.id });
+    } catch (e) {
+      return this.notify(redactText(String(e), this.redact), `${name.toUpperCase()} · NOT UPDATED`, "error", 12);
+    }
+    [p.update, p.session, p.view, p.due] = [null, null, null, 0];
+    this.notify(`Updated to ${u.to}.`, name.toUpperCase());
+    await this.loadPlugins();
+  }
+
+  private plugin(id: string) { return this.plugins.find((p) => p.m.id === id); }
+
+  /** What a session plug-in said by itself: how its process is, a view, a toast, a log line, or RCON to send. */
+  private onPlugin(m: Dict) {
+    const p = this.plugin(m.id);
+    if (!p) return;
+    const name = String(p.m.name || p.m.id);
+    const head: Line = [[new Date().toTimeString().slice(0, 9), DIM], [`plug-in ${p.m.id} `, CYAN]];
+    if (m.kind === "plugin-session") {
+      const was = p.session?.state;
+      p.session = { state: m.state, detail: m.detail, retry_in: m.retry_in };
+      if (m.state === "running") p.due = 0;
+      else if (was === "running") this.logLine([...head, [redactText(`stopped: ${m.detail}; restarting in ${m.retry_in}s`, this.redact), AMBER]]);
+    } else if (m.kind === "plugin-view") {
+      if (m.view.error) p.error = redactText(m.view.error, true);
+      else [p.view, p.error] = [m.view, ""];
+    } else if (m.kind === "plugin-notify") {
+      this.notify(redactText(m.text, this.redact), name.toUpperCase(), m.level);
+    } else if (m.kind === "plugin-log") {
+      this.logLine([...head, [redactText(m.text, this.redact), m.warn ? AMBER : DIM]]);
+    } else if (m.kind === "plugin-rcon") {
+      this.pluginRcon(p, m).then((r) => invoke("plugin_send", { id: p.m.id, msg: { type: "rcon-reply", id: m.ref, ok: r.ok, text: r.text, data: r.data } }).catch(() => {}));
+    }
+    bump("plugins", "mast");
+  }
+
+  /** Send one RCON command a plug-in asked for (already through its permissions), log it beside what's typed by hand,
+   *  and give back what it may hear of the answer. */
+  async pluginRcon(p: Plugin, x: Dict): Promise<Dict> {
+    const st = this.stations.find((s) => this.serverName(s) === x.server);
+    if (!st) return pluginReply(x, { ok: false, text: "no such server" }, true);
+    const res = await this.call(st, x.command, x.args);
+    this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [`${st.label} `, CYAN], [redactText(`plug-in ${p.m.id} ▸ ${cmdLine(x.command, x.args)}`, this.redact), WHITE]]);
+    this.logLine([["  "], [this.replyText(res), res.ok ? GREEN : res.ok === null ? AMBER : RED]]);
+    return pluginReply(x, res, !!p.m.addresses);
+  }
+
+  /** RCON its page asked for ({oni:"rcon", server?, command, args}): the same filter as an action's, on the selected
+   *  server unless it names one. */
+  async pluginPageRcon(p: Plugin, m: Dict): Promise<Dict> {
+    const want = { server: m.server == null ? this.serverName(this.cur) : String(m.server), command: m.command, args: Array.isArray(m.args) ? m.args : [] };
+    const n = await invoke<Dict>("plugin_filter", { id: p.m.id, rcon: want, servers: this.stations.map((s) => this.serverName(s)) })
+      .catch((e) => ({ rcon: [], dropped: [String(e)] }));
+    if (n.rcon.length) return this.pluginRcon(p, n.rcon[0]);
+    const why = String(n.dropped[0] ?? "refused");
+    this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [redactText(`plug-in ${p.m.id}'s page asked for ${why}: not sent`, this.redact), AMBER]]);
+    return pluginReply(want, { ok: false, text: `not sent: ${why}` }, true);
+  }
+
+  /** A server event, to each plug-in whose manifest asks for its kind: its session process and its pages. */
+  private pluginEvent(st: Station, raw: Dict) {
+    for (const p of this.plugins) {
+      if (p.m.state || !p.m.events?.includes(raw.event)) continue;
+      const msg = { server: this.serverName(st), ev: redactData(raw, !p.m.addresses) };
+      if (p.session?.state === "running") invoke("plugin_send", { id: p.m.id, msg: { type: "event", ...msg } }).catch(() => {});
+      p.pages.forEach((f) => f({ oni: "event", ...msg }));
+    }
   }
 
   /** Ask the plug-ins that are due: with F10 open every one that runs, every 30 s; shut, only one whose badge feeds
@@ -791,9 +896,10 @@ class Oni {
   async pluginView(p: Plugin) {
     p.busy = true;
     bump("plugins");
-    const server = this.serverName(this.cur);
+    const server = this.serverName(this.cur), told = p.replies;
     try {
-      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server });
+      const v = await invoke<Dict>("plugin_view", { id: p.m.id, server, snapshot: this.snapshot(p), replies: told });
+      p.replies = p.replies.filter((x) => !told.includes(x)); // it heard them, whatever it made of them
       if (v.error) p.error = v.error;
       else [p.view, p.error] = [v, ""];
     } catch (e) {
@@ -841,7 +947,7 @@ class Oni {
       params = typed;
     }
     if ((a.danger || a.confirm) && !(await this.confirm(title, a.confirm || `Run ${a.label}?`, a.label.toUpperCase().slice(0, 24), a.danger))) return;
-    const r: Dict = await invoke<Dict>("plugin_action", { id: p.m.id, action: a.id, params, row, server: this.serverName(this.cur),
+    const r: Dict = await invoke<Dict>("plugin_action", { id: p.m.id, action: a.id, params, row, server: this.serverName(this.cur), snapshot: this.snapshot(p),
       servers: this.stations.map((s) => this.serverName(s)) }).catch((e) => ({ ok: false, toast: "", error: String(e), view: null, rcon: [], dropped: [] }));
     const words = redactText(r.toast || r.error || (r.ok ? "done" : "failed"), this.redact);
     p.note = `${new Date().toTimeString().slice(0, 8)}  ${a.label}: ${words}`;
@@ -850,16 +956,18 @@ class Oni {
       this.notify(`Not sent: ${d}.`, title, "warning");
       this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [redactText(`plug-in ${p.m.id} asked for ${d}: not sent`, this.redact), AMBER]]);
     }
+    const replies: Dict[] = [];
     for (const x of r.rcon) {
-      const st = this.stations.find((s) => this.serverName(s) === x.server);
-      if (!st) continue;
-      const res = await this.call(st, x.command, x.args);
-      this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [`${st.label} `, CYAN], [redactText(`plug-in ${p.m.id} ▸ ${cmdLine(x.command, x.args)}`, this.redact), WHITE]]);
-      this.logLine([["  "], [this.replyText(res), res.ok ? GREEN : res.ok === null ? AMBER : RED]]);
-      if (!res.ok) this.notify(this.replyText(res), `${st.label} · ${x.command.toUpperCase()}`, res.ok === null ? "warning" : "error");
+      const res = await this.pluginRcon(p, x);
+      replies.push(res);
+      if (!res.ok) this.notify(redactText(res.text || "no reply", this.redact), `${x.server} · ${x.command.toUpperCase()}`, res.ok === null ? "warning" : "error");
+    }
+    if (replies.length) {
+      p.replies = [...p.replies, ...replies].slice(-20); // ponytail: the last 20 only; one that sends more reads its own logs
+      p.pages.forEach((f) => f({ oni: "rcon-reply", replies }));
     }
     if (r.view && !r.view.error) [p.view, p.error] = [r.view, ""];
-    else p.due = 0;
+    if (!r.view || r.view.error || replies.length) p.due = 0; // a fresh view tells it what the servers answered
     bump("plugins", "mast");
   }
 
