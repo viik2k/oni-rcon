@@ -47,6 +47,7 @@ pub struct Manifest {
     pub rcon: Vec<String>,
     pub addresses: bool,
     pub error: String, // why it can't run at all (a bad manifest, a newer api); it's still listed, with this
+    pub builtin: bool, // ships inside Oni (studio.rs): answered in this process, never needs approving or turning on
     #[serde(skip)]
     pub folder: Option<PathBuf>, // a local one runs here, so exec can name a file beside it
 }
@@ -361,7 +362,8 @@ fn block(b: &Value) -> Option<Value> {
         let html = b.get("html").and_then(Value::as_str).map(|h| cut(h, MAX_HTML)).unwrap_or_default();
         let height = b.get("height").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 4000.0) as u64;
         let persist = b.get("persist").and_then(Value::as_bool).unwrap_or(false); // its frame stays running while F10 is closed
-        return Some(json!({"type": "html", "html": html, "height": height, "persist": persist, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
+        let fill = b.get("fill").and_then(Value::as_bool).unwrap_or(false); // its frame takes the whole panel, not `height`
+        return Some(json!({"type": "html", "html": html, "height": height, "persist": persist, "fill": fill, "data": b.get("data").cloned().unwrap_or(Value::Null)}));
     }
     let (rs, more) = rows(b.get(if t == "log" { "lines" } else { "rows" }));
     Some(match t {

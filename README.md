@@ -107,6 +107,10 @@ Also:
   minute per server, Discord webhook URLs and Telegram bot tokens stay in the app and show hidden, and every run is written to
   the command log. Rules run while the console is open. See [docs/AUTOMATION.md](docs/AUTOMATION.md). (From ibigs/oni-rcon, by
   RifleJock.)
+- **Automation Studio.** A built-in F10 plug-in (desktop) for the automations rules can't express: write JavaScript in an
+  editor with suggestions, docs on hover, live problems and a command palette. RUN a script for real or TEST it as a dry
+  run, watch live events, simulate your own, and keep data that outlives restarts. Scripts run sandboxed, with no
+  network, RCON only through the plug-in filter, and chat and Discord rate limits. See [docs/STUDIO.md](docs/STUDIO.md).
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.

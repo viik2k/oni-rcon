@@ -72,19 +72,27 @@ function Gate({ p }: { p: Plugin }) {
 
 const THEME = ["ink", "surface", "panel", "panel-2", "line", "amber", "cyan", "red", "green", "warn", "white", "grey", "dim"];
 
-/** An html block: the page from oniplugin:, sent its `data` (redacted) and the theme; it may ask back for one of the
- * view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}), a height ({oni:"height", px}),
- * RCON within its permissions ({oni:"rcon", id, server?, command, args}) or its own program ({oni:"call", ref, data}).
+const LEVEL: Record<string, "information" | "warning" | "error"> = { warn: "warning", warning: "warning", error: "error" };
+
+/** An html block: the page from oniplugin:, sent its `data` (redacted), the servers and the theme; it may ask back for
+ * one of the view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}), a height
+ * ({oni:"height", px}), RCON within its permissions ({oni:"rcon", id, server?, command, args}), its own program
+ * ({oni:"call", ref, data}), a toast ({oni:"notify", text, level?}) or an F-key passed on to the window ({oni:"key"}).
  * It also hears the events its manifest asks for ({oni:"event"}) and what servers answered its actions' RCON. */
 function Frame({ p, b }: { p: Plugin; b: Dict }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [h, setH] = useState<number>(b.height || 420);
+  const told = useRef<number[]>([]);
+  useV((s) => s.cards);
+  const servers = JSON.stringify(oni.stations.map((s) => ({ name: oni.serverName(s), online: s.online })));
   const post = () => {
     const css = getComputedStyle(document.documentElement);
     ref.current?.contentWindow?.postMessage({ oni: "data", data: redactData(b.data, oni.redact), redact: oni.redact, server: oni.serverName(oni.cur),
-      theme: Object.fromEntries(THEME.map((k) => [k, css.getPropertyValue(`--${k}`).trim()])) }, "*"); // its origin is opaque: "*" is the only target
+      servers: JSON.parse(servers), theme: Object.fromEntries(THEME.map((k) => [k, css.getPropertyValue(`--${k}`).trim()])) }, "*"); // its origin is opaque: "*" is the only target
   };
-  useEffect(post, [b.data, oni.redact]);
+  const latest = useRef(post);
+  latest.current = post;
+  useEffect(post, [b.data, oni.redact, servers]);
   useEffect(() => {
     const f = (m: Dict) => ref.current?.contentWindow?.postMessage(m, "*");
     p.pages.add(f);
@@ -95,7 +103,7 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
     const on = (e: MessageEvent) => {
       const m = e.data;
       if (e.source !== ref.current?.contentWindow || !m || typeof m !== "object") return;
-      if (m.oni === "ready") post();
+      if (m.oni === "ready") latest.current();
       else if (m.oni === "refresh") oni.pluginView(p);
       else if (m.oni === "height" && Number.isFinite(m.px)) setH(Math.max(40, Math.min(4000, m.px)));
       // ponytail: no rate limit on a page's RCON or calls; each is logged, and only its permitted commands go out
@@ -105,6 +113,11 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
         invoke("plugin_call", { id: p.m.id, data: m.data ?? null, server: oni.serverName(oni.cur) })
           .then((data) => send({ ...r, ok: true, data }), (err) => send({ ...r, ok: false, error: String(err) }));
       }
+      else if (m.oni === "notify" && typeof m.text === "string") { // ponytail: 6 a minute per page, the rest dropped
+        const now = Date.now(), t = (told.current = told.current.filter((x) => now - x < 60_000));
+        if (t.length < 6 && t.push(now)) oni.notify(redactText(m.text, oni.redact).slice(0, 300), (p.m.name || p.m.id).toUpperCase(), LEVEL[m.level] ?? "information");
+      }
+      else if (m.oni === "key" && /^F([1-9]|1[0-2])$/.test(String(m.key))) window.dispatchEvent(new KeyboardEvent("keydown", { key: m.key, cancelable: true }));
       else if (m.oni === "action" && !oni.dialogs.length) { // only the actions its view declared, with their confirms
         const a = (p.view?.actions ?? []).find((x: Dict) => x.id === String(m.id));
         if (!a) return oni.notify(`Its page asked for '${String(m.id).slice(0, 40)}', which its view doesn't offer.`, (p.m.name || p.m.id).toUpperCase(), "warning");
@@ -114,9 +127,10 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
     window.addEventListener("message", on);
     return () => window.removeEventListener("message", on);
   }, [p]);
-  const src = `${convertFileSrc(b.src, "oniplugin")}?redact=${oni.redact ? 1 : 0}&v=${b.v}`;
+  // the Studio's page has no addresses to blank, and a reload would stop its scripts and drop unsaved edits: it reads redact from data
+  const src = `${convertFileSrc(b.src, "oniplugin")}?redact=${oni.redact && !p.m.builtin ? 1 : 0}&v=${b.v}`;
   return <iframe ref={ref} src={src} sandbox="allow-scripts" onLoad={post} title={`${p.m.name || p.m.id} page`}
-    style={{ width: "100%", height: h, flex: "none", colorScheme: "normal", border: "1px solid var(--panel-2)", borderRadius: 4, background: "transparent" }} />;
+    style={{ width: "100%", ...(b.fill ? { flex: "1 1 0", minHeight: 0 } : { height: h, flex: "none" }), colorScheme: "normal", border: "1px solid var(--panel-2)", borderRadius: 4, background: "transparent" }} />;
 }
 
 function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) {
@@ -158,19 +172,20 @@ function View({ p }: { p: Plugin }) {
   const acts = new Map<string, Dict>((v.actions ?? []).map((a: Dict) => [a.id, a]));
   // a view with its own page draws only that: the other blocks are its fallback for the terminal console
   const all: Dict[] = v.blocks ?? [], pages = all.filter((x) => x.type === "html"), blocks = pages.length ? pages : all;
+  const fill = fills(p) ? { flex: 1, minHeight: 0 } : {};
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, ...fill }}>
+      {p.m.builtin ? null : <div>
         <span style={{ color: AMBER }}>{v.title || p.m.name}</span><span style={{ color: DIM }}>  {p.m.version}</span>
         {b?.text ? <span style={{ marginLeft: 12, padding: "0 6px", color: INK, background: BADGE[b.level] }}>{b.text}</span> : null}
-      </div>
+      </div>}
       {p.m.mode === "session" && p.session?.state !== "running" ? (
         <div style={{ color: AMBER }}>{p.session ? redactText(`stopped: ${p.session.detail} · restarting in ${p.session.retry_in}s`, oni.redact) : "starting…"}</div>
       ) : null}
       {p.error ? <div style={{ color: RED }}>⚠ {redactText(p.error, oni.redact)}{p.view ? "   ·   showing its last answer" : ""}</div> : null}
       {p.note ? <div style={{ color: DIM }}>{redactText(p.note, oni.redact)}</div> : null}
       {!p.view && !p.error ? <div style={{ color: DIM }}>asking…</div> : null}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1, ...fill }}>
         {blocks.map((blk: Dict, i: number) => <Block key={`${p.m.id}:${i}:${blk.type}`} p={p} b={blk} acts={acts} />)}
         {v.actions?.length ? (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -182,8 +197,9 @@ function View({ p }: { p: Plugin }) {
   );
 }
 
-/** Whether its page asked to keep running while it isn't on screen. */
+/** Whether its page asked to keep running while it isn't on screen, and to take the whole panel. */
 const persists = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict) => b.type === "html" && b.persist);
+const fills = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict) => b.type === "html" && b.fill);
 
 /** Always mounted (App hides it off F10). The selected plug-in's view is drawn; any other whose page has `persist`
  *  stays mounted out of sight, so its timers keep going. Each view keeps one place in one list: moving it would
@@ -209,8 +225,8 @@ export function Plugins({ shown }: { shown: boolean }) {
         <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select} />
         <div style={{ marginTop: 8 }}><Btn label="+ ADD A PLUG-IN" variant={onboard ? "" : "primary"} onClick={() => setAdding(true)} disabled={onboard || oni.demo} title={oni.demo ? "Not in the demo" : undefined} id="plugin-add" /></div>
       </Panel>
-      <Panel title={onboard ? (p ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }}>
-        {!onboard ? (
+      <Panel title={onboard ? (p ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
+        {!onboard && !p.m.builtin ? (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             {p.update ? <>
               <span style={{ color: CYAN }}>▲ {p.update.behind} new commit{p.update.behind === 1 ? "" : "s"} upstream</span>

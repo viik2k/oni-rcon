@@ -364,7 +364,6 @@ class Oni {
   }
 
   private onEvent(st: Station, raw: Dict) {
-    this.pluginEvent(st, raw);
     if (this.rawEvents) this.logLine([[`${st.label} ◂ `, CYAN], [JSON.stringify(redactData(raw, this.redact)), DIM]]);
     const names = st.names;
     const context = this.findingContext(st);
@@ -389,6 +388,7 @@ class Oni {
       const killer = pick(ev, "killer");
       ev._medals = st.medals.kill(killer === undefined ? null : who(killer, names), who(pick(ev, "victim"), names), performance.now() / 1000);
     }
+    this.pluginEvent(st, kind === "kill" ? { ...raw, killer_name: who(ev.killer, names), victim_name: who(ev.victim, names), medals: ev._medals ?? [] } : raw);
     st.activity.push(performance.now());
     this.logEvent(st, ev);
     this.sup.react(ev, classify(ev) ? reactionWords(ev, this.redact) : "");
@@ -879,7 +879,7 @@ class Oni {
   /** A server event, to each plug-in whose manifest asks for its kind: its session process and its pages. */
   private pluginEvent(st: Station, raw: Dict) {
     for (const p of this.plugins) {
-      if (p.m.state || !p.m.events?.includes(raw.event)) continue;
+      if (p.m.state || !(p.m.builtin || p.m.events?.includes(raw.event))) continue; // the built-in Studio hears every kind
       const msg = { server: this.serverName(st), ev: redactData(raw, !p.m.addresses) };
       if (p.session?.state === "running") invoke("plugin_send", { id: p.m.id, msg: { type: "event", ...msg } }).catch(() => {});
       p.pages.forEach((f) => f({ oni: "event", ...msg }));

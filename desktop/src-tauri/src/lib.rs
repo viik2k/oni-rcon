@@ -14,6 +14,7 @@ mod plugins;
 mod rcon;
 mod session;
 mod stats;
+mod studio;
 mod util;
 
 use config::Server;
@@ -22,7 +23,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use util::Secret;
@@ -347,6 +348,7 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
     let (mut servers, hsetup, fsetup, state_dir) = if demo {
         *app.demo.lock() = true;
         let scratch = tempfile::Builder::new().prefix("oni-rcon-demo-").tempdir().map_err(|e| e.to_string())?.keep();
+        studio::demo(scratch.join("studio"));
         let folders: Vec<PathBuf> = (1..=3).map(|i| scratch.join(format!("content-{i}"))).collect();
         let (ports, host) = demo::serve_fakes("demo", &folders, &mut extra).await;
         let servers: Vec<Server> = ports
@@ -405,7 +407,10 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
             Some(config::user_config().parent().unwrap().to_path_buf()),
         )
     };
-    *app.plugins.lock() = if demo { vec![plugins::demo_manifest()] } else { load_plugins(path.as_deref())? };
+    *app.plugins.lock() = if demo { vec![plugins::demo_manifest(), studio::manifest()] } else { load_plugins(path.as_deref())? };
+    if !demo {
+        studio::use_dir(path.as_deref().and_then(Path::parent).map(|d| d.join("studio")));
+    }
     let waiting = config::resolve_passwords(&mut servers).await?;
     let by = {
         let typed_by = app.by.lock().clone();
@@ -816,9 +821,9 @@ fn prefs_intro(full: Option<bool>, seen: Option<bool>) -> Value {
 }
 
 // --- plug-ins (F10) ------------------------------------------------------------------------------------------------
-/// Why a plug-in won't run, or "" when it will. The demo's own counts as approved.
+/// Why a plug-in won't run, or "" when it will. The demo's own, and the one built in, count as approved.
 fn plugin_state(m: &plugins::Manifest, demo: bool) -> String {
-    if demo {
+    if demo || m.builtin {
         m.error.clone()
     } else {
         plugins::state(m, &prefs_raw()["plugins_trusted"])
@@ -845,10 +850,13 @@ fn plugins_dir(config: &std::path::Path) -> PathBuf {
     config.parent().unwrap_or(std::path::Path::new(".")).join("plugins")
 }
 
-/// The plug-ins the config turns on, read from disk.
+/// The plug-ins the config turns on, read from disk, then the one built in (which a folder can't stand in for).
 fn load_plugins(path: Option<&std::path::Path>) -> Result<Vec<plugins::Manifest>, String> {
     let ids = plugins::enabled(&config::top_level(path, "plugins")).map_err(|e| format!("{}: {e}", path.map(|p| p.display().to_string()).unwrap_or_default()))?;
-    Ok(plugins::discover(path.map(plugins_dir).as_deref(), &ids))
+    let mut list = plugins::discover(path.map(plugins_dir).as_deref(), &ids);
+    list.retain(|m| m.id != studio::ID);
+    list.push(studio::manifest());
+    Ok(list)
 }
 
 /// The config file onboarding edits and installs beside; the demo has none.
@@ -911,7 +919,9 @@ async fn plugin_ask(app: &State<'_, App>, id: &str, request: Value, timeout: f64
     if !why.is_empty() {
         return Err(why);
     }
-    let raw = if demo {
+    let raw = if m.builtin {
+        studio::call(&request, app).await
+    } else if demo {
         plugins::demo_call(&request).await
     } else if m.mode == "session" {
         session::ask(id, request, timeout).await?
@@ -1018,15 +1028,18 @@ async fn plugin_action(id: String, action: String, params: Value, row: Option<St
 
 /// An html block's page for its frame, at oniplugin://localhost/<id>.<n>?redact=1 (http://oniplugin.localhost/... on Windows).
 /// Its own CSP: inline script and style, data: images and fonts, and no network at all, so a page can't phone home.
+/// The built-in studio's page may also start blob: workers, its scripts' sandboxes, which inherit the same CSP.
 fn plugin_frame(uri: &tauri::http::Uri) -> tauri::http::Response<Vec<u8>> {
-    let page = plugins::frame(uri.path().trim_start_matches('/'));
+    let path = uri.path().trim_start_matches('/');
+    let page = plugins::frame(path);
     let redact = uri.query().is_some_and(|q| q.split('&').any(|x| x == "redact=1"));
     let Some(page) = page else {
         return tauri::http::Response::builder().status(404).body(b"gone: open the plug-in again".to_vec()).unwrap();
     };
+    let workers = if path.starts_with(&format!("{}.", studio::ID)) { " worker-src blob:;" } else { "" };
     tauri::http::Response::builder()
         .header("Content-Type", "text/html; charset=utf-8")
-        .header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'")
+        .header("Content-Security-Policy", format!("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none';{workers}"))
         .header("Cache-Control", "no-store")
         .body((if redact { health::hide_ips(&page) } else { page }).into_bytes())
         .unwrap()

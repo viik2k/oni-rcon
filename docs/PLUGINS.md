@@ -151,9 +151,11 @@ can be the terminal console's fallback without drawing twice.
   is selected, so its timers keep going (a countdown, a scheduled broadcast). Without it the page is unloaded then. Its
   `action` messages still work while hidden; a `danger`/`confirm` action shows its dialog over whatever tab is open.
   Views are still asked for only as above, so `data` doesn't change while F10 is closed (unless it has a badge).
+- `"fill": true` (after desktop 1.8.0) lets the frame take the whole panel instead of a fixed `height`.
 - The frame reloads only when `html` changes. Send changing values in `data` instead: Oni posts it to the page on load
   and whenever a view arrives, redacted like everything else. With redaction on, IPv4 addresses in `html` are blanked too.
-- Oni → page (`message` event): `{"oni": "data", "data": …, "redact": true, "server": "3", "theme": {"amber": "#d9a441", …}}`.
+- Oni → page (`message` event): `{"oni": "data", "data": …, "redact": true, "server": "3", "servers": [{"name": "3",
+  "online": true}, …], "theme": {"amber": "#d9a441", …}}`.
 - Page → Oni (`parent.postMessage(msg, "*")`):
   `{"oni": "action", "id": "undo", "row": "<row id>", "params": {"name": value}}` runs one of the view's own `actions`
   (any other id is refused), with its `confirm`/`danger` dialog, skipping the form when `params` is given;
@@ -165,7 +167,14 @@ can be the terminal console's fallback without drawing twice.
   `exec` with `{"type": "call", "data": {...}, "server": "3"}` (a session plug-in answers with the request's `ref`) and is
   answered `{"oni": "reply", "ref": 1, "ok": true, "data": <its reply>}` or `{… "ok": false, "error": "…"}`: the page's
   way to fetch, store or compute without a view round trip. The page hears `{"oni": "event", "server", "ev"}` for each
-  event kind in `permissions.events`, and `{"oni": "rcon-reply", "replies": [...]}` after an action's RCON.
+  event kind in `permissions.events`, and `{"oni": "rcon-reply", "replies": [...]}` after an action's RCON. A `kill`
+  event also carries `killer_name`, `victim_name` and `medals`, as the console names them.
+- Also (after desktop 1.8.0): `{"oni": "notify", "text": "…", "level": "info" | "warn" | "error"}` pops up a
+  notification (6 a minute, the rest dropped), and `{"oni": "key", "key": "F1"}` (F1–F12) passes an F-key the page
+  caught on to Oni, so its tabs still switch while the frame has focus.
+- **Built in: [Automation Studio](STUDIO.md)** is an html-block plug-in shipped inside the desktop app (`studio.rs`,
+  `studio.html`). It needs no folder, config entry or approval, hears every event kind, and its `call`s go to the app
+  itself, which keeps its scripts in `studio/` beside the config.
 
 **action**: Oni → plug-in `{"type":"action","id":"undo","params":{},"row":"<row id>","server":"3","snapshot":{...}}`. Reply:
 
