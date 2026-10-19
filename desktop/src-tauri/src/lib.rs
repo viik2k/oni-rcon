@@ -575,6 +575,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
     let v: toml_edit::Value = match (key.as_str(), value.as_i64()) {
         ("max_players", Some(n)) if (1..=63).contains(&n) => n.into(),
         ("max_players", _) => return Err("A server holds 1 to 63 players.".into()),
+        ("camera", _) => value.as_str().filter(|c| host::CAMERAS.contains(c)).ok_or_else(|| format!("{value} isn't a camera setting"))?.into(),
         ("playlist", _) => install::safe_path(value.as_str().unwrap_or_default()).map_err(|_| format!("Not a playlist in the server folder: {value}"))?.into(),
         ("admin_add" | "admin_remove", _) => value.as_str().ok_or("That's not a player ID.")?.into(),
         _ => return Err(format!("{key} can't be set from here")),
