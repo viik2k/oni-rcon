@@ -13,7 +13,7 @@ import { Engine, type Roles } from "./lib/rules";
 import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
-  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
+  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, mixedVersions, num, pick, playerIds, plain, reactionWords,
   pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line,
 } from "./lib/util";
@@ -164,6 +164,10 @@ class Oni {
   tunnels = new Map<string, { state: string; detail: string }>();
   fleet = false;
   demo = false;
+  /** The newest Project Reclaimer release ("0.9.18"), asked GitHub at most hourly; "" until known. */
+  reclaimer = "";
+  private reclaimerAt = -Infinity;
+  private mixedSaid = "";
   intro = "quick";
   hint = "";
   version = "";
@@ -247,6 +251,9 @@ class Oni {
     every(3000, () => this.pollFast());
     every(1000, () => this.pollSlow());
     every(2000, () => this.pluginTick());
+    every(60_000, () => this.checkReclaimer());
+    this.mixedSaid = "";
+    this.checkReclaimer();
     this.plugins = [];
     this.loadPlugins(performance.now() + 3000); // each asked once soon after start, for its badge
     for (const st of this.stations) if (st.online) this.fetch(st, "status");
@@ -342,6 +349,7 @@ class Oni {
       this.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins");
       st.polled = performance.now();
       this.logEvent(st, { event: "uplink", text: `SECURE  ${detail}` });
+      this.noteMixed();
       if (st === this.cur) bump("forge");
     } else if (state === "denied") {
       this.logEvent(st, { event: "uplink", text: `SIGN-IN REFUSED: ${detail}` });
@@ -356,7 +364,6 @@ class Oni {
   }
 
   private onEvent(st: Station, raw: Dict) {
-    this.pluginEvent(st, raw);
     if (this.rawEvents) this.logLine([[`${st.label} ◂ `, CYAN], [JSON.stringify(redactData(raw, this.redact)), DIM]]);
     const names = st.names;
     const context = this.findingContext(st);
@@ -381,12 +388,13 @@ class Oni {
       const killer = pick(ev, "killer");
       ev._medals = st.medals.kill(killer === undefined ? null : who(killer, names), who(pick(ev, "victim"), names), performance.now() / 1000);
     }
+    this.pluginEvent(st, kind === "kill" ? { ...raw, killer_name: who(ev.killer, names), victim_name: who(ev.victim, names), medals: ev._medals ?? [] } : raw);
     st.activity.push(performance.now());
     this.logEvent(st, ev);
     this.sup.react(ev, classify(ev) ? reactionWords(ev, this.redact) : "");
     if (["join", "leave", "refused", "kick", "ban", "mute", "unmute", "control"].includes(kind)) this.fetch(st, "players", "status");
     if (kind === "ban" || kind === "unban") this.fetch(st, "bans");
-    if (kind === "admin") this.fetch(st, "admins", "players");
+    if (kind === "admin_added" || kind === "admin_removed") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
   }
@@ -506,6 +514,26 @@ class Oni {
       const empty = num(st.data.status?.players) === 0 && !st.players.length;
       this.fetch(st, "status", ...(empty ? [] : ["players"]));
     }
+  }
+
+  /** Asks GitHub for the newest Reclaimer release, at most hourly. Offline it stays quiet and asks again next hour.
+   *  Not in the demo: its servers are a made-up build. */
+  private checkReclaimer() {
+    if (this.demo || performance.now() - this.reclaimerAt < 3_600_000) return;
+    this.reclaimerAt = performance.now();
+    invoke<string>("reclaimer_latest").then((v) => {
+      if (!v || v === this.reclaimer) return;
+      this.reclaimer = v;
+      bump("cards", "ops");
+    }).catch(() => { /* offline: the cards just don't say */ });
+  }
+
+  /** One feed line when the connected stations run different versions: a player can join only those on theirs.
+   *  Said again only when the mix changes. */
+  private noteMixed() {
+    const mix = mixedVersions(this.stations.filter((s) => s.online).map((s) => ({ label: s.label, version: s.info.version })));
+    if (mix && mix !== this.mixedSaid) this.logEvent(null, { event: "uplink", text: `MIXED VERSIONS  ${mix}` });
+    this.mixedSaid = mix;
   }
 
   replyText(r: Reply) {
@@ -851,7 +879,7 @@ class Oni {
   /** A server event, to each plug-in whose manifest asks for its kind: its session process and its pages. */
   private pluginEvent(st: Station, raw: Dict) {
     for (const p of this.plugins) {
-      if (p.m.state || !p.m.events?.includes(raw.event)) continue;
+      if (p.m.state || !(p.m.builtin || p.m.events?.includes(raw.event))) continue; // the built-in Studio hears every kind
       const msg = { server: this.serverName(st), ev: redactData(raw, !p.m.addresses) };
       if (p.session?.state === "running") invoke("plugin_send", { id: p.m.id, msg: { type: "event", ...msg } }).catch(() => {});
       p.pages.forEach((f) => f({ oni: "event", ...msg }));
@@ -900,6 +928,70 @@ class Oni {
     }
     p.due = 0;
     await this.loadPlugins();
+  }
+
+  // --- onboarding: get a plug-in, turn it on, approve it ------------------------------------------------------------
+  /** Where plug-ins go, and the folders already there that the config doesn't turn on (F10's "add a plug-in"). */
+  pluginsDir = "";
+  pluginsFound: Dict[] = [];
+
+  async pluginScan() {
+    try {
+      const r = await invoke<Dict>("plugins_found");
+      [this.pluginsDir, this.pluginsFound] = [r.dir, r.found];
+    } catch {
+      [this.pluginsDir, this.pluginsFound] = ["", []]; // the demo, or no console running
+    }
+    bump("plugins");
+  }
+
+  /** Put a folder of plugins/ in the config, select it and go straight to its approval. False if it didn't get on. */
+  async pluginTurnOn(id: string) {
+    try {
+      await invoke("plugin_enable", { id, on: true });
+    } catch (e) {
+      this.notify(redactText(String(e), this.redact), "PLUG-IN NOT TURNED ON", "error", 12);
+      return false;
+    }
+    await this.loadPlugins();
+    await this.pluginScan();
+    const p = this.plugin(id);
+    if (!p) return true;
+    this.psel = this.plugins.indexOf(p);
+    bump("plugins");
+    if (p.m.state === "needs approval") await this.pluginApprove(p);
+    return true;
+  }
+
+  /** Ask for a git address, clone it into plugins/ and turn it on. Downloading runs nothing: approval comes next. */
+  async pluginInstall() {
+    const got = await this.form("ADD A PLUG-IN", [["url", "Git address  (https://…, ssh://… or git@host:path)", ""]], { verb: "NEXT", danger: false });
+    const url = String(got?.url ?? "").trim();
+    if (!url) return false;
+    const shown = url.replace(/\/\/[^/@]*@/, "//"); // never echo a login
+    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `git clone ${shown}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
+    let id: string;
+    try {
+      id = await invoke<string>("plugin_install", { url });
+    } catch (e) {
+      this.notify(redactText(String(e), this.redact), "PLUG-IN NOT DOWNLOADED", "error", 12);
+      return false;
+    }
+    return this.pluginTurnOn(id);
+  }
+
+  /** Take it out of the config's plugins list and stop it. Its folder and approval stay, so turning it on again is one click. */
+  async pluginTurnOff(p: Plugin) {
+    const name = String(p.m.name || p.m.id);
+    if (!(await this.confirm(`TURN OFF ${name.toUpperCase()}?`, `It stops, and ${p.m.id} comes out of plugins = [...] in your config. Its folder and your approval stay: turn it on again from ADD A PLUG-IN.`, "TURN OFF", false))) return;
+    try {
+      await invoke("plugin_enable", { id: p.m.id, on: false });
+    } catch (e) {
+      return this.notify(redactText(String(e), this.redact), "NOT TURNED OFF", "error", 12);
+    }
+    this.psel = 0;
+    await this.loadPlugins();
+    await this.pluginScan();
   }
 
   /** Its params asked for, then its confirm if it has one (ABORT is the default), then run. Esc or ABORT at either

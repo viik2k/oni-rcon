@@ -313,10 +313,37 @@ const EXPLAIN: [string[], string, string][] = [
 
 /** Server 0.9.18 and later apply dedicated.toml edits without a restart, and `reload` says what changed. */
 export function hotReloads(version: unknown): boolean {
+  const v = semver(version);
+  return !!v && cmpVer(v, [0, 9, 18]) >= 0;
+}
+
+/** A version's major.minor.patch ("v0.9.18-rc1" is [0, 9, 18]); null when it isn't one. */
+export function semver(version: unknown): number[] | null {
   const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version ?? "").trim());
-  if (!m) return false;
-  const [major, minor, patch] = m.slice(1).map(Number);
-  return major > 0 || minor > 9 || (minor === 9 && patch >= 18);
+  return m ? m.slice(1).map(Number) : null;
+}
+const cmpVer = (a: number[], b: number[]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+/** The newer Project Reclaimer release a server is behind, as "0.9.18"; "" when it is current, ahead, or either
+ *  version is unknown. Servers admit only players on exactly their version, and players' clients update themselves. */
+export function behind(have: unknown, latest: unknown): string {
+  const [h, l] = [semver(have), semver(latest)];
+  return h && l && cmpVer(h, l) < 0 ? l.join(".") : "";
+}
+
+/** "0.9.17 on F1 · 0.9.18 on F2, F3", oldest first, when the stations run different versions; "" when they agree.
+ *  Unknown versions don't count. */
+export function mixedVersions(stations: { label: string; version: unknown }[]): string {
+  const by = new Map<string, { v: number[]; labels: string[] }>();
+  for (const s of stations) {
+    const v = semver(s.version);
+    if (!v) continue;
+    const k = v.join(".");
+    if (!by.has(k)) by.set(k, { v, labels: [] });
+    by.get(k)!.labels.push(s.label);
+  }
+  if (by.size < 2) return "";
+  return [...by].sort((a, b) => cmpVer(a[1].v, b[1].v)).map(([k, g]) => `${k} on ${g.labels.join(", ")}`).join(" · ");
 }
 
 /** Someone this station saw kicked: `pardon` (server 0.9.16 or later) lets them back in now. `until` is 0 when unknown. */
@@ -367,9 +394,10 @@ export function explain(detail: string, state = "offline", short = false): strin
 
 export const CATS: Record<string, string> = { chat: WHITE, combat: RED, traffic: CYAN, moderation: AMBER, ops: GREY };
 export const KIND: Record<string, string> = { chat: "chat", kill: "combat", join: "traffic", leave: "traffic", refused: "traffic",
-  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", admin: "moderation", pardon: "moderation" };
+  kick: "moderation", ban: "moderation", unban: "moderation", mute: "moderation", unmute: "moderation", cheat: "moderation", pardon: "moderation",
+  admin_added: "moderation", admin_removed: "moderation" };
 export const GLYPH: Record<string, string> = { health: "⚠", chat: "»", kill: "✕", join: "▲", leave: "▼", refused: "⊘", kick: "◆", ban: "■",
-  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin: "✦", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
+  unban: "□", pardon: "↺", mute: "◈", unmute: "◇", admin_added: "✦", admin_removed: "✧", cheat: "!", vote: "◉", control: "•", uplink: "≡", forge: "⬢" };
 
 /** What an event says, after its time and station. Known kinds get a layout; anything else prints its fields. */
 export function describe(ev: Dict, redact = true): Line {
@@ -397,6 +425,14 @@ export function describe(ev: Dict, redact = true): Line {
     const names = [ev.name ?? []].flat().map(String).filter(Boolean);
     line.push(["PARDON", AMBER], [`  ${names.length ? names.join(", ") : redactText(String(ev.target ?? "?"), redact)}`, WHITE], ["  may rejoin", DIM]);
     if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "admin_added" || kind === "admin_removed") {
+    line.push(["ADMIN", AMBER], [`  ${ev.name ? String(ev.name) : redactText(clipId(ev.id ?? "?"), redact)}`, WHITE],
+      [kind === "admin_added" ? "  made admin" : "  no longer admin", DIM]);
+    if (ev.by) line.push(["  by ", DIM], [String(ev.by)]);
+  } else if (kind === "control" && (ev.action === "reload" || ev.action === "reload_applied")) {
+    const failed = ev.ok === false; // a reload that changed nothing says why
+    line.push([failed ? "RELOAD FAILED" : ev.action === "reload" ? "RELOAD" : "RELOAD APPLIED", failed ? RED : CYAN]);
+    if (ev.text) line.push([`  ${redactText(String(ev.text), redact)}`]);
   } else if (kind === "health") {
     line.push(["HEALTH  " + String(ev.text ?? ""), ev.level === "crit" ? RED : AMBER]);
   } else {

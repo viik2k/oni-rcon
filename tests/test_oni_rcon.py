@@ -232,6 +232,32 @@ def test_self_update(tmp_path, monkeypatch):
     assert update.check(exe) == ""
 
 
+def test_reclaimer_drift():
+    from oni_rcon.update import behind, mixed_versions
+    assert behind("0.9.9", "v0.9.18") == "0.9.18"  # numeric, not text: 9 < 18
+    assert behind("0.9.18", "0.9.18") == behind("0.9.19", "0.9.18") == ""  # current or ahead
+    assert behind("?", "0.9.18") == behind("0.9.17", "") == ""  # unknown never counts as behind
+    assert behind("0.9.17-rc1", "0.9.18") == "0.9.18"
+    assert mixed_versions([("F1", "0.9.18"), ("F2", "0.9.17"), ("F3", "0.9.18"), ("F4", None)]) == \
+        "0.9.17 on F2 · 0.9.18 on F1, F3"
+    assert mixed_versions([("F1", "0.9.18"), ("F2", "v0.9.18"), ("F3", "?")]) == ""
+
+    async def go():
+        ports, keep = await serve_fakes(tick=False)  # they report 0.9.7-demo
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False,
+                     reclaimer=lambda: "0.9.18")
+        async with app.run_test(size=(160, 48)) as pilot:
+            await until(pilot, lambda: all(st.online for st in app.stations) and app.reclaimer_latest)
+            await pilot.pause()
+            st = app.stations[0]
+            assert app.lag(st) == "0.9.18" and st.drawn[-1][-1] == "0.9.18"  # the card shows it
+            assert not any("MIXED" in str(e.get("text")) for _, e in app.feed)  # all on one version
+            st.rcon.info["version"] = "0.9.18"
+            app.note_mixed()
+            assert app.lag(st) == "" and any("MIXED VERSIONS  0.9.7 on" in str(e.get("text")) for _, e in app.feed)
+    asyncio.run(go())
+
+
 def test_medals():
     m = Medals()
     assert m.kill("Viper", "Rook", 0) == []
@@ -662,6 +688,19 @@ def test_kicked_list_follows_kick_refused_and_pardon():
     assert note_kick(kicks, {"event": "pardon", "target": "Bravo", "name": "Bravo", "by": "RCON"}) and not kicks
     assert appmod.describe({"event": "pardon", "target": "x", "name": ["Bravo", "Bravo2"], "by": "Alice (RCON)"}, {}).plain \
         == "PARDON  Bravo, Bravo2  may rejoin  by Alice (RCON)"
+
+
+def test_admin_and_reload_events_get_a_layout():
+    d = lambda ev: appmod.describe(ev, {}).plain
+    assert d({"event": "admin_added", "name": "Bravo", "id": "76561198000000001", "by": "RCON"}) \
+        == "ADMIN  Bravo  made admin  by RCON"
+    assert d({"event": "admin_removed", "id": "0123456789abcdef0123456789abcdef"}) == "ADMIN  01234567…  no longer admin"
+    assert d({"event": "control", "action": "reload", "ok": True, "text": "max_players 16 -> 12"}) \
+        == "RELOAD  max_players 16 -> 12"
+    assert d({"event": "control", "action": "reload", "ok": False, "text": "dedicated.toml: line 4"}) \
+        == "RELOAD FAILED  dedicated.toml: line 4"
+    assert d({"event": "control", "action": "reload_applied", "ok": True, "text": "playlist"}) == "RELOAD APPLIED  playlist"
+    assert d({"event": "control", "action": "kill_feed", "ok": True, "text": "x"}).startswith("CONTROL  x")
 
 
 def test_f4_pardons_a_kick():

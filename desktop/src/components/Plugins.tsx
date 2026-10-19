@@ -21,13 +21,31 @@ function entry(p: Plugin): Row {
   return { id: p.m.id, cells: [[light], [[p.m.name || p.m.id, why ? DIM : WHITE]], p.update ? [["▲ ", CYAN], ...tail] : tail] };
 }
 
-function Howto() {
+const STEPS: [string, string][] = [
+  ["GET IT", "download it from git, or put its folder in plugins/"],
+  ["TURN IT ON", "Oni adds it to plugins = [...] in your config"],
+  ["APPROVE IT", "you read what it runs and may do, then allow it; it never runs before this"],
+  ["WATCH IT", "its panel appears on this tab, and a badge it sets feeds CONDITION"],
+];
+
+/** The empty tab, and ADD A PLUG-IN: the four steps, with the first two done from here. `onDone` runs once one is on. */
+function Onboarding({ first, onDone }: { first: boolean; onDone: () => void }) {
+  const found = oni.pluginsFound, go = (r: Promise<boolean>) => void r.then((ok) => ok && onDone());
   return (
-    <div style={{ whiteSpace: "pre-wrap" }}>
-      <div style={{ color: AMBER }}>NO PLUG-INS</div><br />
-      <div>A plug-in is a program that draws its own panel here, such as Gryphon's moderation log. Put its folder in plugins/ next to the config file and turn it on at the top of the config, above the first [table]:</div><br />
-      <div><span style={{ color: CYAN }}>  plugins = </span>["gryphon"]</div><br />
-      <div style={{ color: DIM }}>It asks for your approval before it ever runs. docs/PLUGINS.md says how to write one.</div>
+    <div style={{ whiteSpace: "pre-wrap", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ color: AMBER }}>{first ? "NO PLUG-INS YET" : "ADD A PLUG-IN"}</div>
+      <div>A plug-in is a separate program that draws its own panel here, such as Gryphon's moderation log. Adding one takes four steps, and Oni does the first two for you:</div>
+      <div className="facts">{STEPS.flatMap(([k, v], i) => [<span key={i} style={{ color: CYAN }}>{i + 1} · {k}</span>, <span key={`${i}v`} style={{ color: DIM }}>{v}</span>])}</div>
+      {found.length ? <div style={{ color: AMBER }}>WAITING IN PLUGINS/</div> : null}
+      {found.map((m) => (
+        <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ color: m.error ? RED : WHITE }}>{m.name || m.id}</span>
+          <span style={{ color: DIM, flex: 1 }}>{redactText(m.error || m.description || "", oni.redact)}</span>
+          {m.error ? null : <Btn label="TURN ON…" variant="primary" onClick={() => go(oni.pluginTurnOn(m.id))} id={`plugin-on-${m.id}`} />}
+        </div>
+      ))}
+      <div><Btn label="DOWNLOAD FROM GIT…" variant="primary" onClick={() => go(oni.pluginInstall())} id="plugin-install" /></div>
+      <div style={{ color: DIM }}>{oni.pluginsDir ? `Plug-ins live in ${oni.pluginsDir}. ` : ""}A folder you put there with an oni-plugin.toml in it shows up above. docs/PLUGINS.md says how to write one.</div>
     </div>
   );
 }
@@ -54,19 +72,27 @@ function Gate({ p }: { p: Plugin }) {
 
 const THEME = ["ink", "surface", "panel", "panel-2", "line", "amber", "cyan", "red", "green", "warn", "white", "grey", "dim"];
 
-/** An html block: the page from oniplugin:, sent its `data` (redacted) and the theme; it may ask back for one of the
- * view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}), a height ({oni:"height", px}),
- * RCON within its permissions ({oni:"rcon", id, server?, command, args}) or its own program ({oni:"call", ref, data}).
+const LEVEL: Record<string, "information" | "warning" | "error"> = { warn: "warning", warning: "warning", error: "error" };
+
+/** An html block: the page from oniplugin:, sent its `data` (redacted), the servers and the theme; it may ask back for
+ * one of the view's own actions ({oni:"action", id, row?, params?}), a fresh view ({oni:"refresh"}), a height
+ * ({oni:"height", px}), RCON within its permissions ({oni:"rcon", id, server?, command, args}), its own program
+ * ({oni:"call", ref, data}), a toast ({oni:"notify", text, level?}) or an F-key passed on to the window ({oni:"key"}).
  * It also hears the events its manifest asks for ({oni:"event"}) and what servers answered its actions' RCON. */
 function Frame({ p, b }: { p: Plugin; b: Dict }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [h, setH] = useState<number>(b.height || 420);
+  const told = useRef<number[]>([]);
+  useV((s) => s.cards);
+  const servers = JSON.stringify(oni.stations.map((s) => ({ name: oni.serverName(s), online: s.online })));
   const post = () => {
     const css = getComputedStyle(document.documentElement);
     ref.current?.contentWindow?.postMessage({ oni: "data", data: redactData(b.data, oni.redact), redact: oni.redact, server: oni.serverName(oni.cur),
-      theme: Object.fromEntries(THEME.map((k) => [k, css.getPropertyValue(`--${k}`).trim()])) }, "*"); // its origin is opaque: "*" is the only target
+      servers: JSON.parse(servers), theme: Object.fromEntries(THEME.map((k) => [k, css.getPropertyValue(`--${k}`).trim()])) }, "*"); // its origin is opaque: "*" is the only target
   };
-  useEffect(post, [b.data, oni.redact]);
+  const latest = useRef(post);
+  latest.current = post;
+  useEffect(post, [b.data, oni.redact, servers]);
   useEffect(() => {
     const f = (m: Dict) => ref.current?.contentWindow?.postMessage(m, "*");
     p.pages.add(f);
@@ -77,7 +103,7 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
     const on = (e: MessageEvent) => {
       const m = e.data;
       if (e.source !== ref.current?.contentWindow || !m || typeof m !== "object") return;
-      if (m.oni === "ready") post();
+      if (m.oni === "ready") latest.current();
       else if (m.oni === "refresh") oni.pluginView(p);
       else if (m.oni === "height" && Number.isFinite(m.px)) setH(Math.max(40, Math.min(4000, m.px)));
       // ponytail: no rate limit on a page's RCON or calls; each is logged, and only its permitted commands go out
@@ -87,6 +113,11 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
         invoke("plugin_call", { id: p.m.id, data: m.data ?? null, server: oni.serverName(oni.cur) })
           .then((data) => send({ ...r, ok: true, data }), (err) => send({ ...r, ok: false, error: String(err) }));
       }
+      else if (m.oni === "notify" && typeof m.text === "string") { // ponytail: 6 a minute per page, the rest dropped
+        const now = Date.now(), t = (told.current = told.current.filter((x) => now - x < 60_000));
+        if (t.length < 6 && t.push(now)) oni.notify(redactText(m.text, oni.redact).slice(0, 300), (p.m.name || p.m.id).toUpperCase(), LEVEL[m.level] ?? "information");
+      }
+      else if (m.oni === "key" && /^F([1-9]|1[0-2])$/.test(String(m.key))) window.dispatchEvent(new KeyboardEvent("keydown", { key: m.key, cancelable: true }));
       else if (m.oni === "action" && !oni.dialogs.length) { // only the actions its view declared, with their confirms
         const a = (p.view?.actions ?? []).find((x: Dict) => x.id === String(m.id));
         if (!a) return oni.notify(`Its page asked for '${String(m.id).slice(0, 40)}', which its view doesn't offer.`, (p.m.name || p.m.id).toUpperCase(), "warning");
@@ -96,9 +127,10 @@ function Frame({ p, b }: { p: Plugin; b: Dict }) {
     window.addEventListener("message", on);
     return () => window.removeEventListener("message", on);
   }, [p]);
-  const src = `${convertFileSrc(b.src, "oniplugin")}?redact=${oni.redact ? 1 : 0}&v=${b.v}`;
+  // the Studio's page has no addresses to blank, and a reload would stop its scripts and drop unsaved edits: it reads redact from data
+  const src = `${convertFileSrc(b.src, "oniplugin")}?redact=${oni.redact && !p.m.builtin ? 1 : 0}&v=${b.v}`;
   return <iframe ref={ref} src={src} sandbox="allow-scripts" onLoad={post} title={`${p.m.name || p.m.id} page`}
-    style={{ width: "100%", height: h, flex: "none", colorScheme: "normal", border: "1px solid var(--panel-2)", borderRadius: 4, background: "transparent" }} />;
+    style={{ width: "100%", ...(b.fill ? { flex: "1 1 0", minHeight: 0 } : { height: h, flex: "none" }), colorScheme: "normal", border: "1px solid var(--panel-2)", borderRadius: 4, background: "transparent" }} />;
 }
 
 function Block({ p, b, acts }: { p: Plugin; b: Dict; acts: Map<string, Dict> }) {
@@ -140,19 +172,20 @@ function View({ p }: { p: Plugin }) {
   const acts = new Map<string, Dict>((v.actions ?? []).map((a: Dict) => [a.id, a]));
   // a view with its own page draws only that: the other blocks are its fallback for the terminal console
   const all: Dict[] = v.blocks ?? [], pages = all.filter((x) => x.type === "html"), blocks = pages.length ? pages : all;
+  const fill = fills(p) ? { flex: 1, minHeight: 0 } : {};
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, ...fill }}>
+      {p.m.builtin ? null : <div>
         <span style={{ color: AMBER }}>{v.title || p.m.name}</span><span style={{ color: DIM }}>  {p.m.version}</span>
         {b?.text ? <span style={{ marginLeft: 12, padding: "0 6px", color: INK, background: BADGE[b.level] }}>{b.text}</span> : null}
-      </div>
+      </div>}
       {p.m.mode === "session" && p.session?.state !== "running" ? (
         <div style={{ color: AMBER }}>{p.session ? redactText(`stopped: ${p.session.detail} · restarting in ${p.session.retry_in}s`, oni.redact) : "starting…"}</div>
       ) : null}
       {p.error ? <div style={{ color: RED }}>⚠ {redactText(p.error, oni.redact)}{p.view ? "   ·   showing its last answer" : ""}</div> : null}
       {p.note ? <div style={{ color: DIM }}>{redactText(p.note, oni.redact)}</div> : null}
       {!p.view && !p.error ? <div style={{ color: DIM }}>asking…</div> : null}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: p.error ? 0.5 : 1, ...fill }}>
         {blocks.map((blk: Dict, i: number) => <Block key={`${p.m.id}:${i}:${blk.type}`} p={p} b={blk} acts={acts} />)}
         {v.actions?.length ? (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -164,19 +197,24 @@ function View({ p }: { p: Plugin }) {
   );
 }
 
-/** Whether its page asked to keep running while it isn't on screen. */
+/** Whether its page asked to keep running while it isn't on screen, and to take the whole panel. */
 const persists = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict) => b.type === "html" && b.persist);
+const fills = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict) => b.type === "html" && b.fill);
 
 /** Always mounted (App hides it off F10). The selected plug-in's view is drawn; any other whose page has `persist`
  *  stays mounted out of sight, so its timers keep going. Each view keeps one place in one list: moving it would
  *  reload its frame. */
 export function Plugins({ shown }: { shown: boolean }) {
   useV((s) => s.plugins);
+  const [adding, setAdding] = useState(false);
   const p = oni.plugins[Math.min(oni.psel, oni.plugins.length - 1)];
+  const onboard = !p || adding;
   const select = (id: string) => {
+    setAdding(false);
     oni.psel = Math.max(0, oni.plugins.findIndex((x) => x.m.id === id));
     useV.setState((s) => ({ plugins: s.plugins + 1 }));
   };
+  useEffect(() => { if (shown) void oni.pluginScan(); }, [shown, oni.plugins.length]); // what's waiting in plugins/
   const live = oni.plugins.filter((x) => (shown && x === p && !x.m.state) || persists(x));
   useEffect(() => { // its update is offered once per new upstream commit, when its panel is on screen
     if (shown && p?.update && !p.update.asked && !oni.dialogs.length) oni.pluginUpdate(p);
@@ -184,17 +222,21 @@ export function Plugins({ shown }: { shown: boolean }) {
   return (
     <div className="hsplit grow">
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
-        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={p?.m.id ?? null} onSelect={select} />
+        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select} />
+        <div style={{ marginTop: 8 }}><Btn label="+ ADD A PLUG-IN" variant={onboard ? "" : "primary"} onClick={() => setAdding(true)} disabled={onboard || oni.demo} title={oni.demo ? "Not in the demo" : undefined} id="plugin-add" /></div>
       </Panel>
-      <Panel title={p ? String(p.m.name || p.m.id).toUpperCase() : "PLUG-IN"} style={{ flex: 3 }}>
-        {p?.update ? (
+      <Panel title={onboard ? (p ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
+        {!onboard && !p.m.builtin ? (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-            <span style={{ color: CYAN }}>▲ {p.update.behind} new commit{p.update.behind === 1 ? "" : "s"} upstream</span>
-            <Btn label="UPDATE…" variant="primary" onClick={() => oni.pluginUpdate(p)} id="plugin-update" />
+            {p.update ? <>
+              <span style={{ color: CYAN }}>▲ {p.update.behind} new commit{p.update.behind === 1 ? "" : "s"} upstream</span>
+              <Btn label="UPDATE…" variant="primary" onClick={() => oni.pluginUpdate(p)} id="plugin-update" />
+            </> : null}
+            {oni.demo ? null : <span style={{ marginLeft: "auto" }}><Btn label="TURN OFF…" onClick={() => oni.pluginTurnOff(p)} id="plugin-off" /></span>}
           </div>
         ) : null}
-        {!p ? <Howto /> : p.m.state ? <Gate p={p} /> : null}
-        {live.map((x) => <div key={x.m.id} style={{ display: x === p ? "contents" : "none" }}><View p={x} /></div>)}
+        {onboard ? <Onboarding first={!p} onDone={() => setAdding(false)} /> : p.m.state ? <Gate p={p} /> : null}
+        {live.map((x) => <div key={x.m.id} style={{ display: x === p && !onboard ? "contents" : "none" }}><View p={x} /></div>)}
       </Panel>
     </div>
   );

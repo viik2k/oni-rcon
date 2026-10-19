@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeEvent, explain, hotReloads, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -72,6 +72,16 @@ describe("words", () => {
     expect(pluginReply(x, r, true).data.address).toBe("203.0.113.9");
     expect(pluginReply(x, { ok: null }, false)).toMatchObject({ ok: null, text: "", data: null });
   });
+  it("describes admin and reload events", () => {
+    const d = (ev: Record<string, unknown>) => plain(describeEvent(ev));
+    expect(d({ event: "admin_added", name: "Bravo", id: "76561198000000001", by: "RCON" })).toBe("ADMIN  Bravo  made admin  by RCON");
+    expect(d({ event: "admin_removed", id: "0123456789abcdef0123456789abcdef" })).toBe("ADMIN  01234567…  no longer admin");
+    expect(d({ event: "control", action: "reload", ok: true, text: "max_players 16 -> 12" })).toBe("RELOAD  max_players 16 -> 12");
+    expect(d({ event: "control", action: "reload", ok: false, text: "dedicated.toml: line 4" })).toBe("RELOAD FAILED  dedicated.toml: line 4");
+    expect(d({ event: "control", action: "reload_applied", ok: true, text: "playlist" })).toBe("RELOAD APPLIED  playlist");
+    expect(d({ event: "control", action: "kill_feed", ok: true, text: "x" }).startsWith("CONTROL  x")).toBe(true);
+  });
+
   it("describes a kill with its medals", () => {
     const l = describeEvent({ event: "kill", killer: "A", victim: "B", weapon: "shotgun", _medals: ["DOUBLE KILL"] });
     expect(plain(l)).toBe("A ✕ B  [shotgun]   DOUBLE KILL ");
@@ -413,6 +423,23 @@ describe("hot reload", () => {
   it("is 0.9.18 and later; older, unknown and demo servers keep the restart", () => {
     for (const v of ["0.9.18", "v0.9.18", "0.9.19-rc1", "0.10.0", "1.0.0"]) expect(hotReloads(v), v).toBe(true);
     for (const v of ["0.9.17", "0.9.7-demo", "0.8.30", "", "?", undefined, null]) expect(hotReloads(v), String(v)).toBe(false);
+  });
+});
+
+describe("server version", () => {
+  it("is behind only when both versions are known and the server's is older", () => {
+    expect(behind("0.9.17", "0.9.18")).toBe("0.9.18");
+    expect(behind("v0.9.9", "v0.9.18")).toBe("0.9.18"); // numbers, not strings
+    expect(behind("0.9.18", "0.10.0")).toBe("0.10.0");
+    for (const [have, latest] of [["0.9.18", "0.9.18"], ["0.9.19-rc1", "0.9.18"], ["?", "0.9.18"], [undefined, "0.9.18"], ["0.9.17", ""]])
+      expect(behind(have, latest), `${have} vs ${latest}`).toBe("");
+  });
+
+  it("names a mixed fleet once, oldest first, and stays quiet when it agrees", () => {
+    const st = (label: string, version: unknown) => ({ label, version });
+    expect(mixedVersions([st("F1", "0.9.18"), st("F2", "0.9.17"), st("F3", "0.9.18")])).toBe("0.9.17 on F2 · 0.9.18 on F1, F3");
+    expect(mixedVersions([st("F1", "0.9.18"), st("F2", "v0.9.18"), st("F3", "?")])).toBe("");
+    expect(mixedVersions([])).toBe("");
   });
 });
 

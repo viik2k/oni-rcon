@@ -415,9 +415,42 @@ pub fn remove_server(path: &Path, index: usize) -> Result<usize, String> {
     Ok(left)
 }
 
+/// Turn a plug-in on or off in the config's top-level `plugins = [...]`, the rest of the file as it was (a config that
+/// doesn't exist yet is made).
+pub fn set_plugin(path: &Path, id: &str, on: bool) -> Result<(), String> {
+    let at = |e: String| format!("{}: {e}", path.display());
+    let text = if path.exists() { std::fs::read_to_string(path).map_err(|e| at(e.to_string()))? } else { String::new() };
+    let mut doc = text.parse::<toml_edit::DocumentMut>().map_err(|e| at(e.to_string()))?;
+    let list = doc.entry("plugins").or_insert(toml_edit::value(toml_edit::Array::new())).as_array_mut().ok_or_else(|| at("plugins must be a list of plug-in folder names".into()))?;
+    let at_index = list.iter().position(|v| v.as_str() == Some(id));
+    match (on, at_index) {
+        (true, None) => list.push(id),
+        (false, Some(i)) => drop(list.remove(i)),
+        _ => return Ok(()),
+    }
+    write_atomic(path, &doc.to_string(), true).map_err(|e| at(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_is_listed_above_the_tables_and_taken_off_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        std::fs::write(&p, "# mine\nby = \"op\"\n[[server]]\nport = 1\n").unwrap();
+        set_plugin(&p, "gryphon", true).unwrap();
+        set_plugin(&p, "gryphon", true).unwrap(); // once
+        set_plugin(&p, "hello", true).unwrap();
+        assert_eq!(read_toml(&p).unwrap()["plugins"].as_array().unwrap().len(), 2); // top level, not inside [[server]]
+        assert_eq!(load_config(&p).unwrap().1.len(), 1);
+        set_plugin(&p, "gryphon", false).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("# mine") && text.contains("\"hello\"") && !text.contains("gryphon"));
+        set_plugin(&dir.path().join("new.toml"), "hello", true).unwrap(); // no config yet
+        assert!(read_toml(&dir.path().join("new.toml")).unwrap().contains_key("plugins"));
+    }
 
     #[test]
     fn a_removed_server_leaves_the_rest() {

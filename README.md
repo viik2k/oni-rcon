@@ -48,6 +48,9 @@ Also:
   server, the busiest first, to type a name into. Each card shows how full the server is and a trace of its activity
   over the last 100 seconds. Names that share a community tag ("ALPHA · Big Team") are shortened to what tells them
   apart, with the tag on the card's second line.
+- **Version drift.** A server lets in only players on exactly its version, and players' games update themselves, so a
+  server behind the newest Project Reclaimer release says so on its card and in F3 (`▲ 0.9.18 out` in the TUI), and
+  the feed says `MIXED VERSIONS` when your servers disagree. Checked hourly; `ONI_RCON_NO_UPDATE=1` turns it off.
 - **Built for fleets.** Past 12 servers the cards slim to two lines, the boot screen tallies the stations instead of
   listing each one, and the console stays light enough for a web terminal: a card is redrawn only when what it shows
   changes, status polls are spread over 15 seconds instead of fired together, and servers sign in 8 at a time with
@@ -104,6 +107,10 @@ Also:
   minute per server, Discord webhook URLs and Telegram bot tokens stay in the app and show hidden, and every run is written to
   the command log. Rules run while the console is open. See [docs/AUTOMATION.md](docs/AUTOMATION.md). (From ibigs/oni-rcon, by
   RifleJock.)
+- **Automation Studio.** A built-in F10 plug-in (desktop) for the automations rules can't express: write JavaScript in an
+  editor with suggestions, docs on hover, live problems and a command palette. RUN a script for real or TEST it as a dry
+  run, watch live events, simulate your own, and keep data that outlives restarts. Scripts run sandboxed, with no
+  network, RCON only through the plug-in filter, and chat and Discord rate limits. See [docs/STUDIO.md](docs/STUDIO.md).
 - **Player addresses are redacted by default,** in the tables, the feed, the toasts and the console's replies and raw
   events. Press `x` to reveal them. This helps when you stream or share screenshots.
 - **SSH tunnels are built in.** One `ssh -L` per host carries every server on it, and it reconnects with backoff.
@@ -122,7 +129,7 @@ Also:
 
 ## Install
 
-You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.7), or let the desktop app
+You need a Project Reclaimer dedicated server with RCON turned on (tested against 0.9.18), or let the desktop app
 [host one](#host-a-server) for you.
 
 **Windows:** download [`oni-rcon-windows-x64.exe`](https://github.com/viik2k/oni-rcon/releases/download/v0.9.0/oni-rcon-windows-x64.exe) and double-click it. The build
