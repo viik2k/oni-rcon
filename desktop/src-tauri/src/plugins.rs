@@ -57,7 +57,7 @@ impl Manifest {
     }
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
@@ -147,6 +147,51 @@ pub fn discover(folder: Option<&Path>, ids: &[String]) -> Vec<Manifest> {
             None => Manifest::bad(id, "no config file, so no plugins folder"),
         })
         .collect()
+}
+
+/// The folders in plugins/ that hold a manifest but aren't in `on`: what onboarding offers to turn on.
+pub fn available(folder: &Path, on: &[String]) -> Vec<Manifest> {
+    let mut found: Vec<Manifest> = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join(MANIFEST).is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|id| valid_id(id) && !on.contains(id))
+        .map(|id| load(&folder.join(id)))
+        .collect();
+    found.sort_by(|a, b| a.id.cmp(&b.id));
+    found
+}
+
+/// The folder a git address clones to: its last path segment without `.git`, as a plug-in id. Only https, http, ssh and
+/// `git@host:path` are taken (so no `ext::` command transport), and never a word git would read as an option.
+pub fn id_for(url: &str) -> Result<String, String> {
+    let ok = ["https://", "http://", "ssh://", "git@"].iter().any(|p| url.starts_with(p)) && !url.contains(char::is_whitespace);
+    if !ok {
+        return Err("Give the plug-in's git address: https://…, ssh://… or git@host:path.".into());
+    }
+    let last = url.trim_end_matches('/').rsplit(['/', ':']).next().unwrap_or_default();
+    let id: String = last.trim_end_matches(".git").to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let id = id.trim_matches('-').to_string();
+    if valid_id(&id) { Ok(id) } else { Err("Can't tell a folder name from that address.".into()) }
+}
+
+/// `git clone` the address into plugins/<id>/ (made if need be). Nothing runs: approval is a separate step. A repository
+/// without a manifest isn't a plug-in, and its clone is removed again. The id.
+pub async fn install(folder: &Path, url: &str) -> Result<String, String> {
+    let id = id_for(url)?;
+    let dest = folder.join(&id);
+    if dest.exists() {
+        return Err(format!("plugins/{id} is already there."));
+    }
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    git(folder, &["clone", "--quiet", "--", url, &id]).await.map_err(|e| scrub(&e))?;
+    if !dest.join(MANIFEST).is_file() {
+        let _ = std::fs::remove_dir_all(&dest); // ours: it didn't exist a moment ago
+        return Err(format!("That repository has no {MANIFEST}, so it isn't a plug-in."));
+    }
+    Ok(id)
 }
 
 /// Why a plug-in won't run, or "" when it will: the manifest's own fault first, then a missing approval (also when
@@ -570,6 +615,23 @@ mod tests {
         assert_eq!((got[3].error.as_str(), got[3].mode.as_str()), ("", "session"));
         assert!(got[4].error.contains("lower-case"));
         assert!(got[5].error.contains("no oni-plugin.toml"));
+    }
+
+    #[test]
+    fn onboarding_offers_unlisted_folders_and_names_a_clone_by_its_address() {
+        let d = tempfile::tempdir().unwrap();
+        plugin(d.path(), "on", GOOD);
+        plugin(d.path(), "off", GOOD);
+        plugin(d.path(), "Bad_Name", GOOD);
+        std::fs::create_dir(d.path().join("empty")).unwrap();
+        let got = available(d.path(), &["on".to_string()]);
+        assert_eq!(got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["off"]);
+        assert_eq!(id_for("https://github.com/you/Your-Plugin.git/").unwrap(), "your-plugin");
+        assert_eq!(id_for("git@github.com:you/gryphon.git").unwrap(), "gryphon");
+        assert_eq!(id_for("ssh://host/x_y").unwrap(), "x-y");
+        for bad in ["ext::sh -c id", "--upload-pack=x", "C:\\plugins\\x", "https://a/b c", "https://a/.git"] {
+            assert!(id_for(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

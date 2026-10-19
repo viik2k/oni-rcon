@@ -405,12 +405,7 @@ async fn start_console(demo: bool, handle: AppHandle, app: State<'_, App>) -> Re
             Some(config::user_config().parent().unwrap().to_path_buf()),
         )
     };
-    *app.plugins.lock() = if demo {
-        vec![plugins::demo_manifest()]
-    } else {
-        let ids = plugins::enabled(&config::top_level(path.as_deref(), "plugins")).map_err(|e| format!("{}: {e}", path.as_ref().unwrap().display()))?;
-        plugins::discover(path.as_ref().and_then(|p| p.parent()).map(|d| d.join("plugins")).as_deref(), &ids)
-    };
+    *app.plugins.lock() = if demo { vec![plugins::demo_manifest()] } else { load_plugins(path.as_deref())? };
     let waiting = config::resolve_passwords(&mut servers).await?;
     let by = {
         let typed_by = app.by.lock().clone();
@@ -845,6 +840,57 @@ fn plugins_list(app: State<'_, App>) -> Vec<Value> {
         .collect()
 }
 
+/// plugins/ beside the config file.
+fn plugins_dir(config: &std::path::Path) -> PathBuf {
+    config.parent().unwrap_or(std::path::Path::new(".")).join("plugins")
+}
+
+/// The plug-ins the config turns on, read from disk.
+fn load_plugins(path: Option<&std::path::Path>) -> Result<Vec<plugins::Manifest>, String> {
+    let ids = plugins::enabled(&config::top_level(path, "plugins")).map_err(|e| format!("{}: {e}", path.map(|p| p.display().to_string()).unwrap_or_default()))?;
+    Ok(plugins::discover(path.map(plugins_dir).as_deref(), &ids))
+}
+
+/// The config file onboarding edits and installs beside; the demo has none.
+fn plugin_config(app: &App) -> Result<PathBuf, String> {
+    if *app.demo.lock() {
+        return Err("Not in the demo: it has no config file to turn a plug-in on in.".into());
+    }
+    Ok(config_path(&app.args).unwrap_or_else(config::user_config))
+}
+
+/// Onboarding's first step: where plug-ins go (`dir`), and the folders already in it that the config doesn't turn on.
+#[tauri::command]
+fn plugins_found(app: State<'_, App>) -> Result<Value, String> {
+    let path = plugin_config(&app)?;
+    let dir = plugins_dir(&path);
+    let on = plugins::enabled(&config::top_level(Some(&path), "plugins")).unwrap_or_default();
+    Ok(json!({"dir": dir.display().to_string(), "found": plugins::available(&dir, &on)}))
+}
+
+/// `git clone` a plug-in into plugins/ (nothing runs, nothing is turned on): its id.
+#[tauri::command]
+async fn plugin_install(url: String, app: State<'_, App>) -> Result<String, String> {
+    let dir = plugins_dir(&plugin_config(&app)?);
+    plugins::install(&dir, url.trim()).await
+}
+
+/// Put a folder of plugins/ in, or take it out of, the config's `plugins = [...]` and read the list again. Taking one
+/// out stops its session; its files and its approval stay, so turning it back on needs nothing more.
+#[tauri::command]
+fn plugin_enable(id: String, on: bool, app: State<'_, App>) -> Result<(), String> {
+    let path = plugin_config(&app)?;
+    if on && !(plugins::valid_id(&id) && plugins_dir(&path).join(&id).join(plugins::MANIFEST).is_file()) {
+        return Err(format!("plugins/{id} has no {}.", plugins::MANIFEST));
+    }
+    config::set_plugin(&path, &id, on)?;
+    if !on {
+        session::stop(&id);
+    }
+    *app.plugins.lock() = load_plugins(Some(&path))?;
+    Ok(())
+}
+
 /// Record the operator's approval against the hash of the manifest as it is now: any change asks again.
 #[tauri::command]
 fn plugin_approve(id: String, app: State<'_, App>) -> Result<(), String> {
@@ -1117,7 +1163,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])

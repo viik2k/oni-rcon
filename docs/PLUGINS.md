@@ -47,9 +47,19 @@ older Oni exits on a key it doesn't know inside `[defaults]` or `[[server]]`, an
 
 A plug-in is a program that runs as you. Oni does not sandbox it and says so. Before the first run Oni shows the plug-in's
 name, author, the exact `exec` line, its host and its permissions, and asks. The answer is stored with a hash of the
-manifest in `prefs.json`; **any change to the manifest asks again**. Oni never installs, updates or starts a plug-in by
-itself, and the self-updater never touches `plugins/`. `permissions` limits what Oni will *do for* a plug-in (events it
+manifest in `prefs.json`; **any change to the manifest asks again**. Oni never installs, updates, turns on or starts a
+plug-in by itself (each is a click of yours in F10), and the self-updater never touches `plugins/`. `permissions` limits what Oni will *do for* a plug-in (events it
 forwards, RCON commands it sends, whether it sees addresses); it is not a promise about what the process itself can do.
+
+## Adding one (desktop app)
+
+F10 walks you through it, from the empty tab or **+ ADD A PLUG-IN**: **get it** (a folder already in `plugins/` is offered
+with TURN ON…; DOWNLOAD FROM GIT… asks for an `https://`, `ssh://` or `git@host:path` address, shows it, and `git clone`s it
+into `plugins/<name>/`; a repository without an `oni-plugin.toml` is removed again), **turn it on** (Oni adds the folder to
+the config's top-level `plugins = [...]`, keeping the rest of the file, and makes the config if there is none), **approve
+it** (the dialog under Trust: the plug-in doesn't run before it), and **watch it** (its panel, and its badge in CONDITION).
+TURN OFF… on a plug-in's panel takes it out of the list and stops it; its folder and approval stay. Editing the config
+and cloning by hand still work.
 
 ## Updates (desktop app)
 

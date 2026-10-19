@@ -930,6 +930,70 @@ class Oni {
     await this.loadPlugins();
   }
 
+  // --- onboarding: get a plug-in, turn it on, approve it ------------------------------------------------------------
+  /** Where plug-ins go, and the folders already there that the config doesn't turn on (F10's "add a plug-in"). */
+  pluginsDir = "";
+  pluginsFound: Dict[] = [];
+
+  async pluginScan() {
+    try {
+      const r = await invoke<Dict>("plugins_found");
+      [this.pluginsDir, this.pluginsFound] = [r.dir, r.found];
+    } catch {
+      [this.pluginsDir, this.pluginsFound] = ["", []]; // the demo, or no console running
+    }
+    bump("plugins");
+  }
+
+  /** Put a folder of plugins/ in the config, select it and go straight to its approval. False if it didn't get on. */
+  async pluginTurnOn(id: string) {
+    try {
+      await invoke("plugin_enable", { id, on: true });
+    } catch (e) {
+      this.notify(redactText(String(e), this.redact), "PLUG-IN NOT TURNED ON", "error", 12);
+      return false;
+    }
+    await this.loadPlugins();
+    await this.pluginScan();
+    const p = this.plugin(id);
+    if (!p) return true;
+    this.psel = this.plugins.indexOf(p);
+    bump("plugins");
+    if (p.m.state === "needs approval") await this.pluginApprove(p);
+    return true;
+  }
+
+  /** Ask for a git address, clone it into plugins/ and turn it on. Downloading runs nothing: approval comes next. */
+  async pluginInstall() {
+    const got = await this.form("ADD A PLUG-IN", [["url", "Git address  (https://…, ssh://… or git@host:path)", ""]], { verb: "NEXT", danger: false });
+    const url = String(got?.url ?? "").trim();
+    if (!url) return false;
+    const shown = url.replace(/\/\/[^/@]*@/, "//"); // never echo a login
+    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `git clone ${shown}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
+    let id: string;
+    try {
+      id = await invoke<string>("plugin_install", { url });
+    } catch (e) {
+      this.notify(redactText(String(e), this.redact), "PLUG-IN NOT DOWNLOADED", "error", 12);
+      return false;
+    }
+    return this.pluginTurnOn(id);
+  }
+
+  /** Take it out of the config's plugins list and stop it. Its folder and approval stay, so turning it on again is one click. */
+  async pluginTurnOff(p: Plugin) {
+    const name = String(p.m.name || p.m.id);
+    if (!(await this.confirm(`TURN OFF ${name.toUpperCase()}?`, `It stops, and ${p.m.id} comes out of plugins = [...] in your config. Its folder and your approval stay: turn it on again from ADD A PLUG-IN.`, "TURN OFF", false))) return;
+    try {
+      await invoke("plugin_enable", { id: p.m.id, on: false });
+    } catch (e) {
+      return this.notify(redactText(String(e), this.redact), "NOT TURNED OFF", "error", 12);
+    }
+    this.psel = 0;
+    await this.loadPlugins();
+    await this.pluginScan();
+  }
+
   /** Its params asked for, then its confirm if it has one (ABORT is the default), then run. Esc or ABORT at either
    *  step sends nothing. Then: toast what it said, send the RCON its permissions allow, and show the view it sent back
    *  or ask for a fresh one. */
