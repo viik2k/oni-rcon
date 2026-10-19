@@ -48,6 +48,7 @@ from .forge import (CREDIT, SITE, SORTS, WINDOWED, WINDOWS, WITHDRAWN, ForgeClie
 from .health import BARE, OOM, RESTART, SIGNATURE, HealthSetup, Monitor, Notice, mem_level, swap_level
 from .install import SSH_OPTS, InstallError, place, plan, size_words, target_for
 from . import plugins as pl
+from .update import behind, mixed_versions
 from .plugins import ACTION_TIMEOUT, VIEW_TIMEOUT, Manifest, PluginError, PluginSetup, server_name
 from .medals import Medals
 from .prefs import Prefs
@@ -867,6 +868,10 @@ GUIDE = [
                     "and server settings. Anything that ends a game asks first."),
         ("Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and "
                    "whoever made it."),
+        ("Version", "A server lets in only players on exactly its version, and players' games update themselves as "
+                    "soon as Project Reclaimer releases. A server behind the newest release says ▲ 0.9.N out on its "
+                    "card and the sitrep's UPDATE line: update it, or players who updated can't join. The feed says "
+                    "MIXED VERSIONS when your servers disagree. Asked hourly; ONI_RCON_NO_UPDATE=1 turns it off."),
     ]),
     ("F4  BLACKLIST  ·  bans", [
         ("Lists", "Every ban by player, address and device, and who may join through a VPN. Pick a row, then UNBAN "
@@ -1306,8 +1311,12 @@ class OniApp(App):
 
     def __init__(self, servers: list[Server], by: str, intro: bool | str = True, updater: Callable[[], str] | None = None,
                  hint: str = "", forge: ForgeSetup | None = None, prefs: Prefs | None = None,
-                 health: HealthSetup | None = None, plugins: PluginSetup | None = None):
+                 health: HealthSetup | None = None, plugins: PluginSetup | None = None,
+                 reclaimer: Callable[[], str] | None = None):
         super().__init__()
+        # reclaimer: asks for the newest Project Reclaimer release, so a server that's behind it says so. None in
+        # the demo: its servers are a made-up build
+        self.reclaimer, self.reclaimer_latest, self.mixed_said = reclaimer, "", ""
         # intro: "full" (the archive, then the clearance check), "quick" (the clearance check), "off"; True is quick
         self.by, self.intro, self.updater, self.hint = by, {True: "quick", False: "off"}.get(intro, intro), updater, hint
         self.prefs = prefs or Prefs()
@@ -1542,6 +1551,9 @@ class OniApp(App):
         self.on_resize()
         if self.updater:  # a thread of its own rather than a worker: a slow download must not hold up quitting
             threading.Thread(target=self.check_update, daemon=True).start()
+        if self.reclaimer:
+            self.check_reclaimer()
+            self.set_interval(3600, self.check_reclaimer)
 
     async def follow_pings(self, st: Station) -> None:
         """Follows the server's log for the ping each player joined with. Restarts, slowing down, if it ends."""
@@ -2034,6 +2046,33 @@ class OniApp(App):
             with contextlib.suppress(RuntimeError):  # quit in the meantime
                 self.call_from_thread(self.notify, msg, title="UPDATE", timeout=20)
 
+    def check_reclaimer(self) -> None:
+        """Hourly, in a thread: the newest Reclaimer release. Offline it stays quiet and asks again next hour."""
+        def ask() -> None:
+            with contextlib.suppress(Exception):  # best effort; quit in the meantime is a RuntimeError
+                if (v := self.reclaimer()) and v != self.reclaimer_latest:
+                    self.call_from_thread(self.got_reclaimer, v)
+        threading.Thread(target=ask, daemon=True).start()
+
+    def got_reclaimer(self, version: str) -> None:
+        self.reclaimer_latest = version
+        if self.is_running:
+            for st in self.stations:
+                self.paint_card(st)
+            self.paint_ops()
+
+    def lag(self, st: Station) -> str:
+        """The newer Reclaimer release an online station is behind, or empty."""
+        return behind(st.rcon.info.get("version"), self.reclaimer_latest) if st.online else ""
+
+    def note_mixed(self) -> None:
+        """One feed line when the connected stations run different versions: a player can join only those on theirs.
+        Said again only when the mix changes."""
+        mix = mixed_versions([(st.label, st.rcon.info.get("version")) for st in self.stations if st.online])
+        if mix and mix != self.mixed_said:
+            self.log_event(None, {"event": "uplink", "text": f"MIXED VERSIONS  {mix}"})
+        self.mixed_said = mix
+
     def welcome(self) -> None:
         """Once the boot screen is gone: a pointer for someone new, if __main__ asked for one."""
         if self.hint:
@@ -2143,6 +2182,7 @@ class OniApp(App):
             self.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn")
             st.polled = time.monotonic()
             self.log_event(st, {"event": "uplink", "text": f"SECURE  {detail}"})
+            self.note_mixed()
         elif state == "denied":
             self.log_event(st, {"event": "uplink", "text": f"SIGN-IN REFUSED: {detail}"})
             self.notify(f"{explain(detail, state)}\nNot retried by itself. RECONNECT (F3) asks for the password again.",
@@ -2530,7 +2570,7 @@ class OniApp(App):
             # what's been happening there, in 5 s steps across what the card has room for. A fleet's cards move on
             # a step at a time: redrawn with every event, a few busy servers keep the whole sidebar repainting
             steps = 10 if self.fleet else max(4, width - 13)
-            detail = (tuple(where), phase, tuple(st.rate(steps, 5, whole=self.fleet)))
+            detail = (tuple(where), phase, tuple(st.rate(steps, 5, whole=self.fleet)), self.lag(st))
         key = (state, glyph, color, st.label, st.alerts, n, mx, width, self.fleet, detail)
         if key == st.drawn:
             return
@@ -2548,15 +2588,17 @@ class OniApp(App):
                       Text(f"↻ {left}s", DIM) if left else Text("F3 ↻", DIM) if state == "denied" else Text())
             card.show(g)
             return
-        where, phase, trace = detail
+        where, phase, trace, lag = detail
         place = Text("   ") + Text(" · ").join(Text(str(x).replace("_", " "), CYAN if x == st.tag else DIM)
                                                 for x in where)
+        # behind the newest Reclaimer release: players who updated can't join, so it takes the phase's place
+        late = Text(f"▲ {lag} out", AMBER) if lag else None  # short: the card's columns are shared by its rows
         if self.fleet:  # two lines: who and how full, then where and what's been happening
-            g.add_row(place, spark(list(trace)))
+            g.add_row(place, late or spark(list(trace)))
             card.show(g)
             return
-        g.add_row(place, Text("" if phase.lower() in QUIET_PHASES else phase.replace("_", " ").upper(),
-                              GREEN if phase == "in_game" else DIM))
+        g.add_row(place, late or Text("" if phase.lower() in QUIET_PHASES else phase.replace("_", " ").upper(),
+                                      GREEN if phase == "in_game" else DIM))
         full = n / mx if n is not None and mx else 0
         card.show(Group(g, Text("   ") + gauge(full, 8, RED if full >= 1 else AMBER if full >= .75 else GREEN)
                         + Text("  ") + spark(list(trace))))
@@ -2703,6 +2745,7 @@ class OniApp(App):
         g.add_column()
         for a, b in [("STATION", Text(str(s.get("name") or info.get("server") or st.label), AMBER)),
                      ("UPLINK", f"{st.server.where}   v{info.get('version', '?')}"),
+                     *[("UPDATE", Text(f"▲ {lag} out", AMBER)) for lag in [self.lag(st)] if lag],
                      ("PUBLIC ADDRESS", Text(redact_addr(s.get("address"), self.redact), RED if self.redact else WHITE)),
                      ("PHASE", Text(str(s.get("phase") or "—").replace("_", " ").upper(), CYAN)
                                 if str(s.get("phase") or "").lower() not in QUIET_PHASES else Text("—", DIM)),

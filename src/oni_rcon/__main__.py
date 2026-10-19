@@ -91,7 +91,7 @@ def main() -> None:
         prefs = Prefs.load(user_config().with_name("prefs.json"))
         result = OniApp(servers, by=a.by or cfg_by or login(), updater=updater, hint=hint, forge=forge, prefs=prefs,
                         intro="off" if a.no_intro else a.intro or prefs.intro_mode(), health=health,
-                        plugins=plugins).run()
+                        plugins=plugins, reclaimer=None if demo else update.reclaimer_latest).run()
         if result != "setup":
             return
         setup, updater = True, None  # + ADD SERVER: back to the setup screen, then round again; updates checked once
