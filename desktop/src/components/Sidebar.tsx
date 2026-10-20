@@ -95,17 +95,17 @@ function Crest() {
 export function Super({ size, width }: { size: number; width: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [words, setWords] = useState(["WATCHING", CYAN, ""]);
-  useV((s) => s.ui);
   const below = size >= 160 && width < size + 140;
   const n = Math.round(size / 2); // two screen pixels to one of its: four times the terminal's finest
   useEffect(() => {
     let raf = 0, lastKey = "", lastT = 0;
+    const still = matchMedia("(prefers-reduced-motion: reduce)");
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
       if (t - lastT < 33) return;
       lastT = t;
-      oni.sup.motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const [cur, e, key] = oni.sup.look();
+      oni.sup.motion = !still.matches;
+      const [cur, e, key] = oni.sup.look(); // the key has sup.last in it: new words repaint here, no subscription needed
       if (key + n === lastKey) return;
       lastKey = key + n;
       if (canvas.current) paint(canvas.current, faceCached(e, n));
@@ -156,7 +156,6 @@ function faceSize(h: number, cards: number, card: number) {
 
 export function Sidebar({ onSetup }: { onSetup: () => void }) {
   const [ref, { w, h }] = useSize<HTMLDivElement>();
-  useV((s) => s.cards);
   const [cw, setCw] = useState(8.1);
   useLayoutEffect(() => {
     const c = document.createElement("canvas").getContext("2d")!;

@@ -30,8 +30,8 @@ const PLUGIN_EVERY = 30_000, PLUGIN_BADGE_EVERY = 60_000; // ms between asks: wi
 
 // --- what the window repaints, by counter ----------------------------------------------------------------------
 type Counters = { cards: number; roster: number; ops: number; bans: number; feed: number; log: number; forge: number;
-  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number; plugins: number };
-export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0, plugins: 0 }));
+  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number; plugins: number; clock: number }; // clock: once a second, for what counts down or blinks
+export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0, plugins: 0, clock: 0 }));
 const pending = new Set<keyof Counters>();
 let flushQueued = false;
 // the feed and the log repaint at most this often: a fleet's events arrive as a stream, and a repaint per event
@@ -666,7 +666,7 @@ class Oni {
     const latest = this.findings.recent().find((r) => r.at > this.findings.acknowledgedAt);
     if (latest && Date.now() / 1000 - latest.at <= 300) this.sup.last = redactText(`${this.stations[Number(latest.server)]?.label ?? latest.server}: ${latest.title} · F8`, this.redact);
     else if (this.sup.last.endsWith(" · F8")) this.sup.last = "";
-    bump("mast", "cards", "ui");
+    bump("mast", "cards", "clock");
   }
 
   // --- labels ------------------------------------------------------------------------------------------------------

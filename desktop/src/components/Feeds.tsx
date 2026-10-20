@@ -1,6 +1,6 @@
 // F2 Intercepts and F5 Console: the feed from every server and the command log. Each follows new lines only while
 // it's scrolled to the bottom, so reading back isn't yanked away, and counts what came in meanwhile.
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, RED, INK, blend } from "../art/palette";
 import { oni, useV, type FeedEntry } from "../engine";
 import { COMMANDS, sayText } from "../actions";
@@ -64,22 +64,25 @@ const FeedRow = memo(function FeedRow({ e, redact, width }: { e: FeedEntry; reda
   return <div><L line={[...head, ...describe(e.ev, redact)]} /></div>;
 });
 
-export function Intercepts() {
-  const v = useV((s) => s.feed);
-  useV((s) => s.ui);
-  const shown = oni.feed.filter((e) => oni.shown(e)).slice(-800);
-  const last = shown.length ? shown[shown.length - 1].id : 0;
-  const f = useFollow(last);
+/** The feed's title, on its own clock: the dot blinks and the rate moves each second without refiltering the feed. */
+function FeedTitle() {
+  useV((s) => s.clock);
   const live = oni.stations.some((s) => s.online);
   const rate = oni.stations.reduce((a, s) => a + s.rate(1, 60_000)[0], 0);
   const blink = Date.now() % 2000 < 1000;
-  const [say, setSay] = useState("");
-  const title: ReactNode = <>
+  return <>
     <span style={{ color: AMBER }}>SIGINT FEED  </span>
     <span style={{ color: live ? (blink ? RED : blend(RED, INK, 0.4)) : DIM }}>{live ? "●" : "○"}</span>
     <span style={{ color: DIM }}>{live ? ` LIVE · ${rate}/min` : " NO SIGNAL"}</span>
   </>;
-  void v;
+}
+
+export function Intercepts() {
+  const v = useV((s) => s.feed); // filters, THIS STATION ONLY, redact and relabels bump it too
+  const shown = useMemo(() => oni.feed.filter((e) => oni.shown(e)).slice(-800), [v]);
+  const last = shown.length ? shown[shown.length - 1].id : 0;
+  const f = useFollow(last);
+  const [say, setSay] = useState("");
   return (
     <>
       <div className="bar" style={{ gap: 18 }}>
@@ -89,7 +92,7 @@ export function Intercepts() {
         <Check label="THIS STATION ONLY" on={oni.localOnly} title="Show only what happens on the selected server."
           onChange={(on) => { oni.localOnly = on; useV.setState((s) => ({ feed: s.feed + 1 })); }} />
       </div>
-      <Panel title={title} sub={f.unread ? <span onClick={f.toEnd} style={{ cursor: "pointer" }}>▼ {f.unread} NEW  ·  End to follow</span> : null} className="grow" col>
+      <Panel title={<FeedTitle />} sub={f.unread ? <span onClick={f.toEnd} style={{ cursor: "pointer" }}>▼ {f.unread} NEW  ·  End to follow</span> : null} className="grow" col>
         <div className="log" id="feed" ref={f.ref} onScroll={f.onScroll} tabIndex={0} onKeyDown={(e) => e.key === "End" && f.toEnd()}>
           {shown.map((e) => <FeedRow key={e.id} e={e} redact={oni.redact} width={oni.labelWidth} label={e.st !== null ? oni.stations[e.st].label : ""} />)}
         </div>

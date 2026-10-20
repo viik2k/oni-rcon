@@ -134,6 +134,7 @@ export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn 
 
 export function Blacklist() {
   useV((s) => s.bans);
+  useV((s) => s.clock); // the EXPIRES and kick countdowns
   const [, force] = useState(0);
   const st = oni.cur, b: Dict = st.data.bans ?? {}, v: Dict = st.data.vpn ?? {}, a: Dict | undefined = st.data.admins;
   const rows: Row[] = [];
