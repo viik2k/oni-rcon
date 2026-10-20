@@ -1,17 +1,21 @@
-# ONI RCON desktop 1.9.0
+# ONI RCON desktop 1.10.0
 
-Automation Studio, a JavaScript editor for the automations rules can't express, and a guided way to add plug-ins.
+One-click plug-ins from the oni-rcon index, update notices while the app runs, and a lighter console.
 
 ## New
 
-- **Automation Studio.** A built-in F10 plug-in (no install or approval) for scripted automations: counters that outlive restarts, `!commands` with arguments, strike systems, rotating announcements, Discord logs. The editor has suggestions, docs on hover, live problems and a command palette. RUN a script for real or TEST it as a dry run, watch live events, simulate your own, and keep data that survives restarts. See [docs/STUDIO.md](docs/STUDIO.md).
-- **Adding plug-ins is guided.** The empty Plug-ins tab and ADD A PLUG-IN walk through get it, turn it on, approve it, watch it. Oni lists plug-in folders it finds in `plugins/` and adds them to your config on TURN ON, and DOWNLOAD FROM GIT… clones one for you.
-- **Version drift.** A server behind the newest Project Reclaimer release says so on its card, and the feed says `MIXED VERSIONS` when your servers disagree. Checked hourly.
+- **Plug-in index.** ADD A PLUG-IN lists the plug-ins from the oni-rcon index. INSTALL… on one downloads it, then asks the usual download and approval questions. The list is cached, so it still shows offline. Pasting a git URL still works for any other plug-in.
+- **Update notices.** The app checks for a new release when it starts and every 6 hours. When there is one, you get a toast and Shift+U in the footer. Shift+U shows the release notes and installs the update.
+- **What's new.** The first start after an update shows that version's notes once.
+- **Camera (Project Reclaimer 0.9.20).** Host setup offers Camera. CAMERA on F3 switches a running 0.9.20+ server between first person, third person and letting players choose. The change applies from the next game.
+- **ODST playlists (0.9.19).** Host setup and SWITCH PLAYLIST also clear a server's `odst` table.
 
-## Security
+## Fixes
 
-Studio scripts run sandboxed: no network, RCON only through the plug-in filter and its `permissions.rcon`, and chat and Discord rate limits.
+- The console no longer re-renders everything once a second, so it uses less CPU, most of all with many servers.
+- A plug-in download that times out no longer leaves a half-written folder that blocks every retry.
+- The Plug-ins tab keeps showing its getting-started steps while Automation Studio is the only plug-in.
 
 ## Upgrading
 
-Desktop installs update in place from the app. Existing plug-ins and config work unchanged.
+Desktop installs update in place from the app. Config and plug-ins work unchanged. `ONI_RCON_NO_UPDATE=1` turns off update checks and the plug-in index download.
