@@ -342,7 +342,8 @@ async def until(pilot, ok, tries=100):  # a fixed pause is a guess on a slow run
     for _ in range(tries):
         await pilot.pause(0.05)
         if ok():
-            return
+            return True
+    return False  # a caller that can't go on without it asserts on this
 
 
 def plain(widget) -> str:
@@ -519,10 +520,13 @@ def test_feed_holds_still_and_keeps_its_width(monkeypatch):
             chat = lambda i: {"type": "event", "event": "chat", "channel": "all", "name": "Rook", "text": f"line {i}"}
             for i in range(120):
                 app.on_rcon_event(st.rcon, chat(i))
-            await pilot.pause(0.3)
+            # every write queued a scroll to the end for after the next refresh; one still pending when the view is
+            # scrolled up drags it back down and turns following on again
+            assert await until(pilot, lambda: len(feed.lines) >= 120 and feed.scroll_y == feed.max_scroll_y)
+            await pilot.pause()  # idle: whatever was queued has run
             assert feed.is_vertical_scroll_end  # following the tail
             feed.scroll_to(y=10, animate=False)
-            await until(pilot, lambda: feed.scroll_y == 10 and not feed.auto_scroll)
+            assert await until(pilot, lambda: feed.scroll_y == 10 and not feed.auto_scroll)
             for i in range(20):
                 app.on_rcon_event(st.rcon, chat(i))
             await pilot.pause(0.3)
