@@ -970,10 +970,20 @@ class Oni {
     const url = String(got?.url ?? "").trim();
     if (!url) return false;
     const shown = url.replace(/\/\/[^/@]*@/, "//"); // never echo a login
-    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `git clone ${shown}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
+    return this.pluginDownload(`git clone ${shown}`, () => invoke<string>("plugin_install", { url }));
+  }
+
+  /** Install one the plug-in index lists (by id: the backend holds its address) and turn it on, approval next. */
+  pluginIndexInstall(e: Dict) {
+    const from = `${e.url}${e.path ? `, folder ${e.path}` : ""}${e.commit ? `, commit ${String(e.commit).slice(0, 12)}` : ""}`;
+    return this.pluginDownload(`${e.name} from the oni-rcon index:\n${from}`, () => invoke("plugin_index_install", { id: e.id }).then(() => String(e.id)));
+  }
+
+  private async pluginDownload(what: string, get: () => Promise<string>) {
+    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `${what}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
     let id: string;
     try {
-      id = await invoke<string>("plugin_install", { url });
+      id = await get();
     } catch (e) {
       this.notify(redactText(String(e), this.redact), "PLUG-IN NOT DOWNLOADED", "error", 12);
       return false;

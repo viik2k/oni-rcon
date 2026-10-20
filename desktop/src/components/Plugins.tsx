@@ -22,7 +22,7 @@ function entry(p: Plugin): Row {
 }
 
 const STEPS: [string, string][] = [
-  ["GET IT", "download it from git, or put its folder in plugins/"],
+  ["GET IT", "install it from the index below, download it from git, or put its folder in plugins/"],
   ["TURN IT ON", "Oni adds it to plugins = [...] in your config"],
   ["APPROVE IT", "you read what it runs and may do, then allow it; it never runs before this"],
   ["WATCH IT", "its panel appears on this tab, and a badge it sets feeds CONDITION"],
@@ -31,6 +31,9 @@ const STEPS: [string, string][] = [
 /** The empty tab, and ADD A PLUG-IN: the four steps, with the first two done from here. `onDone` runs once one is on. */
 function Onboarding({ first, onDone }: { first: boolean; onDone: () => void }) {
   const found = oni.pluginsFound, go = (r: Promise<boolean>) => void r.then((ok) => ok && onDone());
+  const [index, setIndex] = useState<Dict[]>([]); // the oni-rcon plug-in index; its offline copy, or nothing, without a network
+  useEffect(() => void invoke<Dict[]>("plugin_index").then(setIndex, () => {}), []);
+  const has = (id: string) => oni.plugins.some((p) => p.m.id === id) || found.some((m) => m.id === id);
   return (
     <div style={{ whiteSpace: "pre-wrap", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ color: AMBER }}>{first ? "NO PLUG-INS YET" : "ADD A PLUG-IN"}</div>
@@ -42,6 +45,15 @@ function Onboarding({ first, onDone }: { first: boolean; onDone: () => void }) {
           <span style={{ color: m.error ? RED : WHITE }}>{m.name || m.id}</span>
           <span style={{ color: DIM, flex: 1 }}>{redactText(m.error || m.description || "", oni.redact)}</span>
           {m.error ? null : <Btn label="TURN ON…" variant="primary" onClick={() => go(oni.pluginTurnOn(m.id))} id={`plugin-on-${m.id}`} />}
+        </div>
+      ))}
+      {index.length ? <div style={{ color: AMBER }}>FROM THE ONI-RCON INDEX</div> : null}
+      {index.map((e) => (
+        <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ color: WHITE }}>{e.name}</span>
+          <span style={{ color: DIM, flex: 1 }}>{e.description}{e.author ? ` · ${e.author}` : ""}</span>
+          {has(e.id) ? <span style={{ color: GREEN }}>INSTALLED</span>
+            : <Btn label="INSTALL…" variant="primary" onClick={() => go(oni.pluginIndexInstall(e))} id={`plugin-get-${e.id}`} />}
         </div>
       ))}
       <div><Btn label="DOWNLOAD FROM GIT…" variant="primary" onClick={() => go(oni.pluginInstall())} id="plugin-install" /></div>

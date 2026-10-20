@@ -127,6 +127,7 @@ struct App {
     hint: Mutex<String>,
     picked: Mutex<Vec<PathBuf>>, // files the operator chose to publish; the window never names a path itself
     plugins: Mutex<Vec<plugins::Manifest>>, // the ones the config turns on, read at start; none runs unapproved
+    index: Mutex<Vec<plugins::Entry>>, // the plug-in index as last read: what plugin_index_install may install
 }
 
 fn config_path(a: &Args) -> Option<PathBuf> {
@@ -974,6 +975,46 @@ async fn plugin_update(id: String, app: State<'_, App>) -> Result<(), String> {
     Ok(())
 }
 
+const PLUGIN_INDEX: &str = "https://raw.githubusercontent.com/viik2k/oni-rcon/main/plugins/index.json";
+
+/// The plug-in index: fetched, and kept beside the config for offline, or that copy when the fetch fails or updates are
+/// turned off (ONI_RCON_NO_UPDATE=1). Empty when there's neither.
+#[tauri::command]
+async fn plugin_index(app: State<'_, App>) -> Result<Vec<plugins::Entry>, String> {
+    async fn get() -> Option<Value> {
+        let c = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(5)).build().ok()?;
+        let mut r = c.get(PLUGIN_INDEX).send().await.ok()?.error_for_status().ok()?;
+        let mut body = Vec::new();
+        while let Some(b) = r.chunk().await.ok()? {
+            body.extend_from_slice(&b);
+            if body.len() > 1 << 20 {
+                return None;
+            }
+        }
+        serde_json::from_slice(&body).ok()
+    }
+    let cache = config::user_config().with_file_name("plugin-index.json");
+    let fresh = if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() { None } else { get().await };
+    let raw = match fresh {
+        Some(v) => {
+            let _ = util::write_atomic(&cache, &format!("{v}\n"), false);
+            v
+        }
+        None => std::fs::read_to_string(&cache).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null),
+    };
+    let index = plugins::index(&raw);
+    *app.index.lock() = index.clone();
+    Ok(index)
+}
+
+/// Install a plug-in the index lists into plugins/ (nothing runs, nothing is turned on). The window names only its id.
+#[tauri::command]
+async fn plugin_index_install(id: String, app: State<'_, App>) -> Result<(), String> {
+    let dir = plugins_dir(&plugin_config(&app)?);
+    let e = app.index.lock().iter().find(|e| e.id == id).cloned().ok_or("That plug-in isn't in the index.")?;
+    plugins::install_entry(&dir, &e).await
+}
+
 /// One message to a running session plug-in: an event, or the reply to its RCON.
 #[tauri::command]
 fn plugin_send(id: String, msg: Value) -> Result<(), String> {
@@ -1165,6 +1206,7 @@ pub fn run() {
             hint: Mutex::new(String::new()),
             picked: Mutex::new(Vec::new()),
             plugins: Mutex::new(Vec::new()),
+            index: Mutex::new(Vec::new()),
         })
         .setup(move |app| {
             if devtools {
@@ -1177,7 +1219,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, plugin_index, plugin_index_install, update_check, update_install, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])
