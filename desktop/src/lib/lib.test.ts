@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -440,6 +440,12 @@ describe("server version", () => {
     expect(mixedVersions([st("F1", "0.9.18"), st("F2", "0.9.17"), st("F3", "0.9.18")])).toBe("0.9.17 on F2 · 0.9.18 on F1, F3");
     expect(mixedVersions([st("F1", "0.9.18"), st("F2", "v0.9.18"), st("F3", "?")])).toBe("");
     expect(mixedVersions([])).toBe("");
+  });
+});
+
+describe("release notes", () => {
+  it("reads markdown as plain lines", () => {
+    expect(notesText("## What's new\r\n\n\n- **Fast** boot, see [docs](https://x)\n  * `--intro` off\n")).toBe("WHAT'S NEW\n\n• Fast boot, see docs\n  • --intro off");
   });
 });
 

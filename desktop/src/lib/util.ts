@@ -331,6 +331,10 @@ export function behind(have: unknown, latest: unknown): string {
   return h && l && cmpVer(h, l) < 0 ? l.join(".") : "";
 }
 
+/** Release notes' markdown as plain lines: headings in capitals, bullets as •, links as their words, no ** __ or `. */
+export const notesText = (md: string) => md.replace(/\r/g, "").split("\n").map((l) => l.replace(/^#{1,6}\s+(.*)/, (_, h: string) => h.toUpperCase())
+  .replace(/^(\s*)[-*+]\s+/, "$1• ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\*\*|__|`/g, "")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
 /** "0.9.17 on F1 · 0.9.18 on F2, F3", oldest first, when the stations run different versions; "" when they agree.
  *  Unknown versions don't count. */
 export function mixedVersions(stations: { label: string; version: unknown }[]): string {

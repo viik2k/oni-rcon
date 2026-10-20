@@ -15,7 +15,7 @@ import { L, Pixel, Table, type Row } from "./ui";
 const Keys = ({ hints }: { hints: string[] }) => <div className="keys">{hints.join("   ·   ")}</div>;
 
 function Confirm({ d }: { d: Dialog }) {
-  const { title, body, verb, danger } = d.props;
+  const { title, body, verb, danger, notice } = d.props; // a notice has only its verb, to close it
   const no = useRef<HTMLButtonElement>(null);
   useEffect(() => no.current?.focus(), []);
   return (
@@ -28,10 +28,10 @@ function Confirm({ d }: { d: Dialog }) {
       <div className="dt">{title}</div>
       <div className="db">{body}</div>
       <div className="btns">
-        <button ref={no} className="btn" onClick={() => d.resolve(false)}>ABORT</button>
-        <button className={`btn ${danger ? "error" : "primary"}`} onClick={() => d.resolve(true)}>{verb}</button>
+        {notice ? null : <button ref={no} className="btn" onClick={() => d.resolve(false)}>ABORT</button>}
+        <button ref={notice ? no : undefined} className={`btn ${danger ? "error" : "primary"}`} onClick={() => d.resolve(true)}>{verb}</button>
       </div>
-      <Keys hints={["Esc cancel", "← → choose", "Enter confirm"]} />
+      <Keys hints={notice ? ["Esc or Enter close"] : ["Esc cancel", "← → choose", "Enter confirm"]} />
     </div>
   );
 }
@@ -166,6 +166,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Find a player", "Ctrl+F searches every server's players at once. Type a name (a typo of 4+ letters still finds them), or narrow it: @tag, clan:x, team:red, id:…, server:…, node:…, port:… All the words must match the same player; \"quotes\" keep a phrase together. Enter opens their server with them selected."],
     ["Tabs", "F1 to F7 and F10, or click the names along the top."],
     ["Anything", "Ctrl+P opens a searchable list of every action. Rest the mouse on a button to see what it does."],
+    ["Updates", "oni-rcon asks GitHub for a newer version at start and every 6 hours. One that's out gets a toast and ⇧U in the footer: Shift+U shows what's new and, on INSTALL, updates and restarts the console. Nothing installs by itself. The first start of a new version shows its notes once."],
     ["Superintendent", "The green face on the left, on every tab, watches every server's feed. It welcomes a join, startles at a call for an admin, scowls at a cheat flag, approves a kick or ban, is impressed by a medal and unimpressed by a mute; the word beside it says how it feels. Click it, or press F8, for what it has noticed."],
     ["Findings", "F8 lists what the Superintendent noticed in the last hour, with the evidence behind each: a repeated vote, a vote fight, a kill burst, an unusual kill rate, a cheat flag, a request for an admin or a report of another player. They are observations to review, never grounds for action by themselves, and nothing is moderated for you. CLEAR ALL acknowledges them. Chat from 2 minutes either side is kept with a request."],
   ]],

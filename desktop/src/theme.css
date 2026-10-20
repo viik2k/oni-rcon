@@ -183,7 +183,7 @@ pre.json .k { color: var(--cyan); } pre.json .s { color: var(--green); } pre.jso
 .dialog.wide { width: min(900px, 94vw); height: 88vh; }
 .dialog .dt { color: var(--amber); margin-bottom: 10px; }
 .dialog.danger .dt { color: var(--red); }
-.dialog .db { color: var(--grey); margin-bottom: 10px; white-space: pre-wrap; }
+.dialog .db { color: var(--grey); margin-bottom: 10px; white-space: pre-wrap; overflow-y: auto; min-height: 0; }
 .dialog label { display: block; color: var(--cyan); margin: 10px 0 2px; }
 .dialog .btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .dialog .keys { color: var(--dim); text-align: right; margin-top: 10px; }
