@@ -2,11 +2,11 @@
 // command on the selected station.
 import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
-import { oni, type Station } from "./engine";
+import { bump, oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { hotReloads, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
+import { hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
@@ -493,6 +493,36 @@ export async function askPassword() {
   if (!f) return;
   await invoke("set_password", { password: f.pw, indices: oni.waiting });
   oni.waiting = [];
+}
+
+let watching = false;
+/** Asks GitHub for a newer desktop release now and every 6 hours while the console runs. Each new one gets a toast
+ *  once and stays in the footer until it's installed; nothing asks by itself. */
+export function watchUpdates() {
+  if (watching) return;
+  watching = true;
+  const check = () => invoke<Dict | null>("update_check").then((u) => {
+    if (!u || u.version === oni.appUpdate?.version) return;
+    oni.appUpdate = { version: u.version, notes: u.notes };
+    oni.notify(`ONI RCON ${u.version} is out  ·  Shift+U to update`, "UPDATE", "information", 20);
+    bump("ui");
+  });
+  check();
+  window.setInterval(check, 6 * 3600_000);
+}
+
+/** The newer release's notes, and on yes it downloads, installs and restarts the console. */
+export async function installUpdate() {
+  const u = oni.appUpdate;
+  if (!u || !(await oni.confirm(`UPDATE TO ONI RCON ${u.version}?`, `${notesText(u.notes) || "No release notes."}\n\nThe console restarts and reconnects.`, "INSTALL", false))) return;
+  oni.notify("Downloading the update...", "UPDATE", "information", 60);
+  invoke("update_install").catch((e) => oni.notify(String(e), "UPDATE FAILED", "error", 20));
+}
+
+/** This version's release notes, once, on its first start after an update. */
+export async function whatsNew() {
+  const n = await invoke<Dict | null>("whats_new", { fresh: oni.intro === "full" && !oni.fullIntro });
+  if (n) await oni.ask("confirm", { title: `WHAT'S NEW IN ONI RCON ${n.version}`, body: notesText(n.notes), verb: "OK", danger: false, notice: true });
 }
 
 export function sayText(text: string) {

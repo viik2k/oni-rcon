@@ -1,6 +1,7 @@
 // The frame around the tabs: the masthead with the condition, the alert banner, the key hints along the bottom, and
 // the toasts.
 import { AMBER, CYAN, DIM, INK, RED, WHITE, blend } from "../art/palette";
+import { installUpdate } from "../actions";
 import { oni, useV } from "../engine";
 import { hms, num } from "../lib/util";
 import { Logo } from "./Logo";
@@ -54,6 +55,7 @@ export function Footer() {
     <div className="footer">
       {keys.map(([k, v]) => <span key={k + v}><span className="k">{k}</span>{v}</span>)}
       <span className="sp" />
+      {oni.appUpdate ? <span style={{ color: CYAN, cursor: "pointer" }} onClick={installUpdate}><span className="k">⇧U</span>update to {oni.appUpdate.version}</span> : null}
       <span><span className="k">^P</span>palette</span>
     </div>
   );

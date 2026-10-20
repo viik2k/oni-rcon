@@ -1045,9 +1045,9 @@ fn plugin_frame(uri: &tauri::http::Uri) -> tauri::http::Response<Vec<u8>> {
         .unwrap()
 }
 
-/// The newest desktop release newer than `current`, as (version, page): the terminal console's v* releases share
-/// the repository, so only desktop-v* tags count, read without their prefix.
-fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
+/// The newest desktop release newer than `current`, as (version, page, notes): the terminal console's v* releases
+/// share the repository, so only desktop-v* tags count, read without their prefix.
+fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String, String)> {
     let parse = |v: &str| v.split(['.', '-', '+']).take(3).map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
     releases
         .as_array()?
@@ -1055,32 +1055,64 @@ fn newer_desktop(releases: &Value, current: &str) -> Option<(String, String)> {
         .filter(|r| r["draft"] != true && r["prerelease"] != true)
         .filter_map(|r| {
             let v = r["tag_name"].as_str()?.strip_prefix("desktop-v")?;
-            Some((v.to_string(), r["html_url"].as_str().unwrap_or("https://github.com/viik2k/oni-rcon/releases").to_string()))
+            Some((v.to_string(), r["html_url"].as_str().unwrap_or("https://github.com/viik2k/oni-rcon/releases").to_string(), r["body"].as_str().unwrap_or("").to_string()))
         })
         .max_by(|a, b| parse(&a.0).cmp(&parse(&b.0)))
-        .filter(|(v, _)| parse(v) > parse(current))
+        .filter(|(v, _, _)| parse(v) > parse(current))
 }
 
-/// The signed update for a newer desktop release, and that release's page for when installing it fails. Each
-/// release carries its own latest.json: the repository's /releases/latest is the terminal console. None when up to
-/// date, offline or turned off (ONI_RCON_NO_UPDATE=1).
-async fn find_update(app: &AppHandle) -> Option<(tauri_plugin_updater::Update, String)> {
+fn github() -> Option<reqwest::Client> {
+    reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build().ok()
+}
+
+/// The signed update for a newer desktop release, that release's page for when installing it fails, and its notes.
+/// Each release carries its own latest.json: the repository's /releases/latest is the terminal console. None when up
+/// to date, offline or turned off (ONI_RCON_NO_UPDATE=1).
+async fn find_update(app: &AppHandle) -> Option<(tauri_plugin_updater::Update, String, String)> {
     use tauri_plugin_updater::UpdaterExt;
     if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
         return None;
     }
-    let c = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build().ok()?;
-    let v = c.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await.ok()?.json::<Value>().await.ok()?;
-    let (ver, page) = newer_desktop(&v, env!("CARGO_PKG_VERSION"))?;
+    let v = github()?.get("https://api.github.com/repos/viik2k/oni-rcon/releases?per_page=30").send().await.ok()?.json::<Value>().await.ok()?;
+    let (ver, page, notes) = newer_desktop(&v, env!("CARGO_PKG_VERSION"))?;
     let latest = format!("https://github.com/viik2k/oni-rcon/releases/download/desktop-v{ver}/latest.json").parse().ok()?;
     let update = app.updater_builder().endpoints(vec![latest]).ok()?.build().ok()?.check().await.ok()??;
-    Some((update, page))
+    Some((update, page, notes))
 }
 
-/// The version of a newer desktop release; empty when there is none.
+/// A newer desktop release, as {version, notes}; null when there is none.
 #[tauri::command]
-async fn update_check(app: AppHandle) -> String {
-    find_update(&app).await.map(|(u, _)| u.version).unwrap_or_default()
+async fn update_check(app: AppHandle) -> Value {
+    find_update(&app).await.map_or(Value::Null, |(u, _, notes)| json!({"version": u.version, "notes": notes}))
+}
+
+/// This version's release notes, as {version, notes}, on its first start: after an update, or after one from before
+/// prefs remembered the version. Null on every other start, on a first run ever (`fresh`), with no notes, offline
+/// (asked again next start) or with updates turned off (ONI_RCON_NO_UPDATE=1).
+#[tauri::command]
+async fn whats_new(fresh: bool) -> Value {
+    let now = env!("CARGO_PKG_VERSION");
+    let seen = prefs_raw()["seen_version"].as_str().map(String::from);
+    if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() || seen.as_deref() == Some(now) {
+        return Value::Null;
+    }
+    let notes = if seen.is_none() && fresh {
+        String::new()
+    } else {
+        let url = format!("https://api.github.com/repos/viik2k/oni-rcon/releases/tags/desktop-v{now}");
+        let Some(rel) = async { github()?.get(url).send().await.ok()?.error_for_status().ok()?.json::<Value>().await.ok() }.await else {
+            return Value::Null;
+        };
+        rel["body"].as_str().unwrap_or("").to_string()
+    };
+    let mut p = prefs_raw();
+    p["seen_version"] = json!(now);
+    let _ = util::write_atomic(&prefs_path(), &format!("{p}\n"), false);
+    if notes.trim().is_empty() {
+        Value::Null
+    } else {
+        json!({"version": now, "notes": notes})
+    }
 }
 
 /// The newest Project Reclaimer release, as "0.9.18", so a card can say its server is behind: servers admit only
@@ -1088,8 +1120,7 @@ async fn update_check(app: AppHandle) -> String {
 #[tauri::command]
 async fn reclaimer_latest() -> String {
     async fn get() -> Option<String> {
-        let c = reqwest::Client::builder().user_agent(format!("oni-rcon/{}", env!("CARGO_PKG_VERSION"))).timeout(std::time::Duration::from_secs(10)).build().ok()?;
-        let v = c.get(host::RELEASES).send().await.ok()?.json::<Value>().await.ok()?;
+        let v = github()?.get(host::RELEASES).send().await.ok()?.json::<Value>().await.ok()?;
         Some(v["tag_name"].as_str()?.trim_start_matches('v').to_string())
     }
     if std::env::var_os("ONI_RCON_NO_UPDATE").is_some() {
@@ -1101,7 +1132,7 @@ async fn reclaimer_latest() -> String {
 /// Downloads the update, checks its signature, installs it and restarts the console.
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
-    let (update, page) = find_update(&app).await.ok_or("no update found")?;
+    let (update, page, _) = find_update(&app).await.ok_or("no update found")?;
     update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("{e}. Download it from {page}"))?;
     app.restart()
 }
@@ -1112,9 +1143,9 @@ mod tests {
 
     #[test]
     fn only_desktop_releases_are_updates() {
-        let rel = |tag: &str| json!({"tag_name": tag, "html_url": format!("https://x/{tag}"), "draft": false, "prerelease": false});
+        let rel = |tag: &str| json!({"tag_name": tag, "html_url": format!("https://x/{tag}"), "body": format!("## {tag}"), "draft": false, "prerelease": false});
         let list = json!([rel("v0.9.5"), rel("desktop-v1.0.0"), rel("desktop-v1.2.0"), rel("desktop-v1.10.0"), {"tag_name": "desktop-v9.0.0", "draft": true}]);
-        assert_eq!(newer_desktop(&list, "1.0.0"), Some(("1.10.0".into(), "https://x/desktop-v1.10.0".into())));
+        assert_eq!(newer_desktop(&list, "1.0.0"), Some(("1.10.0".into(), "https://x/desktop-v1.10.0".into(), "## desktop-v1.10.0".into())));
         assert_eq!(newer_desktop(&list, "1.10.0"), None);
         assert_eq!(newer_desktop(&json!([rel("v2.0.0")]), "1.0.0"), None);
     }
@@ -1176,7 +1207,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
-            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, reclaimer_latest,
+            forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, update_check, update_install, whats_new, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
             automation::telegram_add, automation::telegram_remove, automation::telegram_post, automation::telegram_find_chats
         ])

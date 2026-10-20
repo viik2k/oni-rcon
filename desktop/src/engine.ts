@@ -171,6 +171,8 @@ class Oni {
   intro = "quick";
   hint = "";
   version = "";
+  /** A newer desktop release, asked GitHub every 6 hours; null until one is out. */
+  appUpdate: { version: string; notes: string } | null = null;
   sel = 0;
   tab: Tab = "assets";
   redact = true;
