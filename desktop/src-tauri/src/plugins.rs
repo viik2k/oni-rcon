@@ -285,6 +285,84 @@ pub async fn update(m: &Manifest) -> Result<(), String> {
     git(f, &["merge", "--ff-only", "--quiet", "@{u}"]).await.map(|_| ())
 }
 
+// --- the index: plugins/index.json in the oni-rcon repository, plug-ins to install in one click ----------------------
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Entry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub url: String,    // https only
+    pub path: String,   // the plug-in's folder in that repository, "" for its root
+    pub commit: String, // a pinned commit, "" for the default branch's tip
+    pub author: String,
+    pub tags: Vec<String>,
+}
+
+/// The index's entries that hold up. It comes off the network, so an entry with an odd id, address, path or commit is
+/// dropped, and every string is cut.
+pub fn index(raw: &Value) -> Vec<Entry> {
+    let seg = |p: &str| p != "." && p != ".." && !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    let mut out: Vec<Entry> = Vec::new();
+    for e in list(raw.get("plugins")).iter().take(200) {
+        let g = |k| e.get(k).and_then(Value::as_str).unwrap_or_default();
+        let (id, url, path, commit) = (g("id"), g("url"), g("path"), g("commit"));
+        let ok = valid_id(id) && id.len() <= 64 && !out.iter().any(|x| x.id == id)
+            && url.starts_with("https://") && url.len() <= 300 && url.bytes().all(|b| b.is_ascii_graphic()) && id_for(url).is_ok()
+            && path.len() <= 200 && (path.is_empty() || path.split('/').all(seg))
+            && (commit.is_empty() || (7..=40).contains(&commit.len()) && commit.bytes().all(|b| b.is_ascii_hexdigit()));
+        if ok {
+            let name = sn(e.get("name"), 80);
+            out.push(Entry {
+                id: id.into(),
+                name: if name.is_empty() { id.into() } else { name },
+                description: sn(e.get("description"), 300),
+                url: url.into(),
+                path: path.into(),
+                commit: commit.into(),
+                author: sn(e.get("author"), 80),
+                tags: list(e.get("tags")).iter().take(8).map(|t| sn(Some(t), 24)).filter(|t| !t.is_empty()).collect(),
+            });
+        }
+    }
+    out
+}
+
+/// An index entry into plugins/<id>/, the way `install` does a pasted address. One at its repository's root is a clone,
+/// so it gets updates; one in a subfolder is that folder's files alone, so it doesn't.
+pub async fn install_entry(folder: &Path, e: &Entry) -> Result<(), String> {
+    let dest = folder.join(&e.id);
+    if dest.exists() {
+        return Err(format!("plugins/{} is already there.", e.id));
+    }
+    std::fs::create_dir_all(folder).map_err(|x| x.to_string())?;
+    let src = format!(".{}.src", e.id); // a dot: never listed, so a killed install leaves nothing that looks like a plug-in
+    let _ = std::fs::remove_dir_all(folder.join(&src));
+    let got = async {
+        if e.path.is_empty() {
+            git(folder, &["clone", "--quiet", "--", &e.url, &e.id]).await?;
+            if !e.commit.is_empty() {
+                git(&dest, &["reset", "--hard", "--quiet", &e.commit]).await?; // still tracks its branch: newer commits are updates
+            }
+        } else {
+            // ponytail: the whole repository's history, since a partial clone (--filter=blob:none) fails the checkout below; sparse-checkout if one gets big
+            git(folder, &["clone", "--quiet", "--no-checkout", "--", &e.url, &src]).await?;
+            let rev = if e.commit.is_empty() { "HEAD" } else { &e.commit };
+            git(&folder.join(&src), &["checkout", "--quiet", rev, "--", &e.path]).await?;
+            std::fs::rename(folder.join(&src).join(&e.path), &dest).map_err(|x| x.to_string())?;
+        }
+        Ok::<_, String>(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(folder.join(&src));
+    let err = match got {
+        Err(x) => scrub(&x),
+        Ok(()) if !dest.join(MANIFEST).is_file() => format!("{} has no {MANIFEST} there, so it isn't a plug-in.", e.url),
+        Ok(()) => return Ok(()),
+    };
+    let _ = std::fs::remove_dir_all(&dest); // ours: it didn't exist a moment ago
+    Err(err)
+}
+
 /// Run a service plug-in once: one JSON line in, one JSON object out. Valid JSON wins whatever the exit code;
 /// otherwise the last stderr line, scrubbed of addresses.
 pub async fn call(m: &Manifest, request: &Value, timeout: f64) -> Result<Value, String> {
@@ -737,5 +815,37 @@ mod tests {
         assert!(d.path().join("echo/echo.py").exists());
         assert_eq!(update_check(&m).await.unwrap(), None);
         assert_eq!(no_login("https://me:tok@github.com/a/b.git"), "https://github.com/a/b.git");
+    }
+
+    #[tokio::test]
+    async fn the_index_keeps_sound_entries_and_installs_a_whole_repository_or_one_folder_of_it() {
+        let gh = "https://github.com/a/b";
+        let i = index(&json!({"plugins": [
+            {"id": "hello", "url": gh, "path": "examples/hello", "commit": "abc1234", "tags": ["x", 1]},
+            {"id": "hello", "url": "https://github.com/a/c"}, {"id": "Bad", "url": gh}, {"id": "ext", "url": "ext::sh -c x"},
+            {"id": "http", "url": "http://github.com/a/b"}, {"id": "sp", "url": "https://github.com/a/b c"},
+            {"id": "up", "url": gh, "path": "x/../y"}, {"id": "abs", "url": gh, "path": "/etc"}, {"id": "opt", "url": gh, "commit": "--upload-pack=x"},
+        ]}));
+        assert_eq!(i.iter().map(|e| (e.id.as_str(), e.name.as_str())).collect::<Vec<_>>(), [("hello", "hello")]);
+        assert_eq!(i[0].tags, ["x", "1"]);
+        let ours: Value = serde_json::from_str(include_str!("../../../plugins/index.json")).unwrap();
+        assert_eq!(index(&ours).len(), list(ours.get("plugins")).len()); // the repository's own index holds up
+
+        let d = tempfile::tempdir().unwrap();
+        let run = |dir: &Path, args: &[&str]| assert!(std::process::Command::new("git").current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]).args(args).status().unwrap().success());
+        let up = plugin(d.path(), "upstream", GOOD);
+        plugin(&up, "sub/echo", GOOD);
+        run(&up, &["init", "-q"]);
+        run(&up, &["add", "."]);
+        run(&up, &["commit", "-qm", "first"]);
+        let (into, url) = (d.path().join("plugins"), up.display().to_string());
+        let e = |id: &str, path: &str| Entry { id: id.into(), url: url.clone(), path: path.into(), ..Default::default() };
+        install_entry(&into, &e("whole", "")).await.unwrap();
+        install_entry(&into, &e("echo", "sub/echo")).await.unwrap();
+        assert!(into.join("whole/.git").exists() && !into.join("echo/.git").exists() && !into.join(".echo.src").exists());
+        assert!(install_entry(&into, &e("echo", "sub/echo")).await.unwrap_err().contains("already there"));
+        assert!(install_entry(&into, &e("none", "nope")).await.is_err() && !into.join("none").exists() && !into.join(".none.src").exists());
+        assert_eq!(available(&into, &[]).iter().map(|m| (m.id.as_str(), m.error.as_str())).collect::<Vec<_>>(), [("echo", ""), ("whole", "")]);
     }
 }
