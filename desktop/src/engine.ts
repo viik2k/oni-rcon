@@ -894,6 +894,7 @@ class Oni {
   }
 
   async pluginView(p: Plugin) {
+    if (p.busy) return; // a page's refresh during the tick's ask: two at once would hand it the same replies twice
     p.busy = true;
     bump("plugins");
     const server = this.serverName(this.cur), told = p.replies;

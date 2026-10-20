@@ -187,7 +187,10 @@ pub async fn install(folder: &Path, url: &str) -> Result<String, String> {
         return Err(format!("plugins/{id} is already there."));
     }
     std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
-    git(folder, &["clone", "--quiet", "--", url, &id]).await.map_err(|e| scrub(&e))?;
+    if let Err(e) = git(folder, &["clone", "--quiet", "--", url, &id]).await {
+        let _ = std::fs::remove_dir_all(&dest); // a timed-out clone is killed half-written, and would block every retry
+        return Err(scrub(&e));
+    }
     if !dest.join(MANIFEST).is_file() {
         let _ = std::fs::remove_dir_all(&dest); // ours: it didn't exist a moment ago
         return Err(format!("That repository has no {MANIFEST}, so it isn't a plug-in."));

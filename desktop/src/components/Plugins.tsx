@@ -206,9 +206,10 @@ const fills = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict)
  *  reload its frame. */
 export function Plugins({ shown }: { shown: boolean }) {
   useV((s) => s.plugins);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<boolean | null>(null); // null: not chosen yet, so onboard while only the Studio is here
   const p = oni.plugins[Math.min(oni.psel, oni.plugins.length - 1)];
-  const onboard = !p || adding;
+  const real = oni.plugins.some((x) => !x.m.builtin);
+  const onboard = !p || (adding ?? !real);
   const select = (id: string) => {
     setAdding(false);
     oni.psel = Math.max(0, oni.plugins.findIndex((x) => x.m.id === id));
@@ -222,10 +223,11 @@ export function Plugins({ shown }: { shown: boolean }) {
   return (
     <div className="hsplit grow">
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
-        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select} />
+        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select}
+          cursor={!onboard} /* with a cursor, Table picks the first row when none is selected, which would end onboarding at once */ />
         <div style={{ marginTop: 8 }}><Btn label="+ ADD A PLUG-IN" variant={onboard ? "" : "primary"} onClick={() => setAdding(true)} disabled={onboard || oni.demo} title={oni.demo ? "Not in the demo" : undefined} id="plugin-add" /></div>
       </Panel>
-      <Panel title={onboard ? (p ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
+      <Panel title={onboard ? (real ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
         {!onboard && !p.m.builtin ? (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             {p.update ? <>
@@ -235,7 +237,7 @@ export function Plugins({ shown }: { shown: boolean }) {
             {oni.demo ? null : <span style={{ marginLeft: "auto" }}><Btn label="TURN OFF…" onClick={() => oni.pluginTurnOff(p)} id="plugin-off" /></span>}
           </div>
         ) : null}
-        {onboard ? <Onboarding first={!p} onDone={() => setAdding(false)} /> : p.m.state ? <Gate p={p} /> : null}
+        {onboard ? <Onboarding first={!real} onDone={() => setAdding(false)} /> : p.m.state ? <Gate p={p} /> : null}
         {live.map((x) => <div key={x.m.id} style={{ display: x === p && !onboard ? "contents" : "none" }}><View p={x} /></div>)}
       </Panel>
     </div>

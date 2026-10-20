@@ -872,7 +872,8 @@ fn plugin_config(app: &App) -> Result<PathBuf, String> {
 fn plugins_found(app: State<'_, App>) -> Result<Value, String> {
     let path = plugin_config(&app)?;
     let dir = plugins_dir(&path);
-    let on = plugins::enabled(&config::top_level(Some(&path), "plugins")).unwrap_or_default();
+    let mut on = plugins::enabled(&config::top_level(Some(&path), "plugins")).unwrap_or_default();
+    on.push(studio::ID.into()); // load_plugins drops a folder by the built-in's name, so don't offer one
     Ok(json!({"dir": dir.display().to_string(), "found": plugins::available(&dir, &on)}))
 }
 
