@@ -84,6 +84,10 @@ jobs:
       run:
         working-directory: .
     steps:
+      - uses: actions/checkout@v4  # the release notes alone: the app shows them before and after it updates
+        with:
+          sparse-checkout: /RELEASE-NOTES-*.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -99,6 +103,10 @@ jobs:
           nsis=$(entry *-setup.exe); msi=$(entry *.msi); appimage=$(entry *.AppImage); mac=$(entry *.app.tar.gz)
           jq -n --arg v "${GITHUB_REF_NAME#desktop-v}" --argjson nsis "$nsis" --argjson msi "$msi" --argjson appimage "$appimage" --argjson mac "$mac" '{version: $v, pub_date: (now | todate), platforms: {"windows-x86_64": $nsis, "windows-x86_64-nsis": $nsis, "windows-x86_64-msi": $msi, "linux-x86_64": $appimage, "darwin-aarch64": $mac}}' > latest.json
           cat latest.json
-      - run: find dist -type f -print0 | xargs -0 gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "ONI RCON desktop ${GITHUB_REF_NAME#desktop-v}" --generate-notes --latest
+      - shell: bash  # RELEASE-NOTES-<version>.md when there is one, else GitHub's list of merged pull requests
+        run: |
+          notes="RELEASE-NOTES-${GITHUB_REF_NAME#desktop-v}.md"
+          if [ -f "$notes" ]; then src=(--notes-file "$notes"); else src=(--generate-notes); fi
+          find dist -type f -print0 | xargs -0 gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "ONI RCON desktop ${GITHUB_REF_NAME#desktop-v}" "${src[@]}" --latest
         env:
           GH_TOKEN: ${{ github.token }}
