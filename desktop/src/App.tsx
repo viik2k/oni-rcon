@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { bump, fkey, oni, TABS, useV, type Tab } from "./engine";
-import { OPS, BAN_OPS, TAB_TIPS, askPassword, automation, bl, broadcast, goto, op, player } from "./actions";
+import { OPS, BAN_OPS, TAB_TIPS, askPassword, automation, bl, broadcast, goto, installUpdate, op, player, watchUpdates, whatsNew } from "./actions";
 import { Sidebar } from "./components/Sidebar";
 import { Banner, Footer, Masthead, Toasts } from "./components/Chrome";
 import { Assets, assetsUi } from "./components/Assets";
@@ -71,6 +71,7 @@ function palette(onSetup: () => void) {
       () => bl(o, ...blSel())] as [string, string, () => void]),
     ...oni.plugins.filter((p) => !p.m.state).flatMap((p) => (p.view?.actions ?? []).map((a: Dict) =>
       [`${p.m.name || p.m.id} › ${a.label}`, "plug-in action  (F10)", () => { setTab("plugins"); oni.pluginAction(p, a); }] as [string, string, () => void])),
+    ...(oni.appUpdate ? [[`Update to ${oni.appUpdate.version}`, "what's new, then install and restart  (Shift+U)", installUpdate] as [string, string, () => void]] : []),
     ["Toggle address redaction", "hide or show player IPs", () => oni.toggleRedact()],
     [`Boot sequence: ${oni.fullIntro ? "quick after the first run" : "full every time"}`, oni.fullIntro ? "now: the full sequence plays every time" : "now: full the first time, quick after",
       async () => {
@@ -157,7 +158,7 @@ function useKeys(onSetup: () => void) {
       }
       if (/^[1-9]$/.test(k)) return oni.select(Number(k) - 1);
       const global: Record<string, () => void> = {
-        g: goto, x: () => oni.toggleRedact(), "?": () => oni.ask("help", {}),
+        g: goto, x: () => oni.toggleRedact(), "?": () => oni.ask("help", {}), U: installUpdate,
         "/": () => {
           if (oni.tab === "forge") return document.getElementById("forge-q")?.focus();
           if (oni.tab !== "intercepts") setTab("console");
@@ -298,7 +299,8 @@ export function App() {
       if (info.intro === "full" && motion) {
         invoke("prefs_intro", { full: null, seen: true });
         setScreen({ kind: "archive" });
-      } else setScreen({ kind: info.intro === "off" ? "console" : "boot" });
+      } else if (info.intro === "off") welcome();
+      else setScreen({ kind: "boot" });
     } catch (e) {
       setScreen({ kind: "error", text: String(e) });
     }
@@ -315,12 +317,8 @@ export function App() {
       oni.notify(oni.hint, "WELCOME, OPERATOR", "information", 15);
       oni.hint = "";
     }
-    askPassword();
-    invoke<string>("update_check").then(async (v) => {
-      if (!v || !(await oni.confirm("UPDATE", `ONI RCON ${v} is out. Install it now? The console restarts and reconnects.`, "INSTALL", false))) return;
-      oni.notify("Downloading the update...", "UPDATE", "information", 60);
-      invoke("update_install").catch((e) => oni.notify(String(e), "UPDATE FAILED", "error", 20));
-    });
+    askPassword().then(whatsNew);
+    watchUpdates();
   }, []);
   const toBoot = useCallback(() => setScreen({ kind: "boot" }), []);
   const onSetup = useCallback(async () => {

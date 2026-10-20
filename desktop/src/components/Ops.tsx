@@ -82,7 +82,7 @@ export function Operations() {
     ["VPN BLOCK", yesNo(s.block_vpn)], ["TEXT CHAT", yesNo(s.text_chat)], ["VOICE", yesNo(s.voice)], ["HIDDEN", yesNo(s.hidden, "YES", "NO")],
   ];
   const voting = "vote" in st.data ? !!vote.vote : null;
-  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
+  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "camera", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
   const ops = Object.fromEntries(OPS.map(([o, l, v]) => [o, [l, v]]));
   const here = norm(s.map);
   const pulledRefs = new Set<string>();
@@ -134,6 +134,7 @@ export const blSel = () => [blUi.ban ? blUi.bans.get(blUi.ban) : null, blUi.vpn 
 
 export function Blacklist() {
   useV((s) => s.bans);
+  useV((s) => s.clock); // the EXPIRES and kick countdowns
   const [, force] = useState(0);
   const st = oni.cur, b: Dict = st.data.bans ?? {}, v: Dict = st.data.vpn ?? {}, a: Dict | undefined = st.data.admins;
   const rows: Row[] = [];

@@ -165,6 +165,7 @@ pub struct Settings {
     pub internet: bool,   // UPnP: ask the router to forward the ports
     pub auto_update: bool,
     pub playlist: String, // a playlist .json picked on this PC; empty keeps the server's own default rotation
+    pub camera: String, // one of CAMERAS; empty leaves the key out (first person)
 }
 
 impl Settings {
@@ -176,6 +177,9 @@ impl Settings {
         }
         if self.max_players > 63 {
             return Err("A server holds at most 63 players.".into());
+        }
+        if !self.camera.is_empty() && !CAMERAS.contains(&self.camera.as_str()) {
+            return Err(format!("{} isn't a camera setting.", self.camera));
         }
         if ![&self.name, &self.host, &self.password].into_iter().all(|s| plain(s)) {
             return Err("Names and passwords can't contain control characters.".into());
@@ -201,6 +205,11 @@ impl Settings {
         write_atomic(&dest, &text, false).map_err(|e| format!("couldn't save the playlist in {}: {e}", dest.display()))
     }
 }
+
+/// What a [[server]] plays from besides a playlist: one map and game type, a variant, a campaign, or (0.9.19) ODST.
+const SOURCE_KEYS: [&str; 6] = ["map", "game", "base_map", "variant", "campaign", "odst"];
+/// dedicated.toml's `camera` (0.9.20): how players see their own character on foot. Left out, it's first person.
+pub const CAMERAS: [&str; 3] = ["first_person", "player_choice", "third_person"];
 
 /// dedicated.toml with the settings in it and the comments left alone. `dedicated init` writes two servers; a custom
 /// one is a single server, so the first enabled [[server]] is kept and any other turned off (not deleted).
@@ -240,8 +249,11 @@ pub fn apply_settings(text: &str, s: &Settings) -> Result<String, String> {
         if s.hidden {
             t["hidden"] = value(true);
         }
+        if !s.camera.is_empty() {
+            t["camera"] = value(&s.camera);
+        }
         if let Some((path, _)) = s.chosen_playlist()? {
-            for other in ["map", "game", "base_map", "variant", "campaign"] {
+            for other in SOURCE_KEYS {
                 t.remove(other); // a server plays from one source
             }
             t["playlist"] = value(path);
@@ -368,7 +380,7 @@ pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options:
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
     edit_server(text, rcon_port, |t| {
         if key == "playlist" {
-            for other in ["map", "game", "base_map", "variant", "campaign"] {
+            for other in SOURCE_KEYS {
                 t.remove(other); // a server plays from one source
             }
         }
@@ -1094,6 +1106,9 @@ map = \"Valhalla\"
 game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwrap();
         let t: toml::Table = text.parse().unwrap();
         assert_eq!((t["server"][1].get("map"), t["server"][1]["playlist"].as_str()), (None, Some("playlists/a.playlist.json")), "a playlist replaces map + game");
+        let odst = TOML.replace("rcon_port = 50177", "rcon_port = 50177\nodst = { mode = \"firefight\", mission = \"lost_platoon\" }");
+        let t: toml::Table = set_server_key(&odst, 50177, "playlist", "playlists/a.playlist.json".into()).unwrap().parse().unwrap();
+        assert_eq!((t["server"][1].get("odst"), t["server"][1]["playlist"].as_str()), (None, Some("playlists/a.playlist.json")), "and replaces ODST");
     }
 
     #[test]
@@ -1229,18 +1244,20 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
 
     #[test]
     fn settings_make_one_custom_server() {
-        let s = Settings { name: "Friday \"Slayer\"".into(), host: "Finn".into(), password: "letmein".into(), max_players: 8, hidden: true, internet: true, auto_update: true, ..Default::default() };
+        let s = Settings { name: "Friday \"Slayer\"".into(), host: "Finn".into(), password: "letmein".into(), max_players: 8, hidden: true, internet: true, auto_update: true, camera: "player_choice".into(), ..Default::default() };
         let out = apply_settings(TOML, &s).unwrap();
         assert!(out.contains("# set one to turn on the remote console")); // the file's comments stay
         let t: toml::Table = out.parse().unwrap();
         assert_eq!((t["upnp"].as_bool(), t["auto_update"].as_bool(), t["host_name"].as_str()), (Some(true), Some(true), Some("Finn")));
         assert_eq!(servers_of(&out), [Found { name: "Friday \"Slayer\"".into(), port: 49176, game_port: 49176, password: String::new(), hidden: true }]);
         assert_eq!((t["server"][0]["password"].as_str(), t["server"][0]["max_players"].as_integer()), (Some("letmein"), Some(8)));
+        assert_eq!(t["server"][0]["camera"].as_str(), Some("player_choice"));
         assert_eq!(t["server"][1]["enabled"].as_bool(), Some(false)); // the other default server is off, not deleted
         // nothing chosen: still one server, as dedicated init named it, and nothing else changed
         let plain = apply_settings(TOML, &Settings::default()).unwrap();
         let (f, t) = (servers_of(&plain), plain.parse::<toml::Table>().unwrap());
         assert_eq!((f.len(), f[0].name.as_str(), t.contains_key("upnp"), t.contains_key("host_name")), (1, "Community Rotation", false, false));
+        assert!(t["server"][0].get("camera").is_none(), "no camera chosen, no key written");
     }
 
     #[test]
@@ -1248,6 +1265,7 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
         let bad = |s: Settings| s.check().is_err();
         assert!(bad(Settings { name: "x".repeat(49), ..Default::default() }));
         assert!(bad(Settings { max_players: 64, ..Default::default() }));
+        assert!(bad(Settings { camera: "over_the_shoulder".into(), ..Default::default() }));
         assert!(bad(Settings { password: "a\nb".into(), ..Default::default() }));
         assert!(Settings { name: "x".repeat(48), max_players: 63, ..Default::default() }.check().is_ok());
         assert!(apply_settings("game = \"game\"\n", &Settings::default()).is_err());

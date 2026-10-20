@@ -61,6 +61,14 @@ it** (the dialog under Trust: the plug-in doesn't run before it), and **watch it
 TURN OFF… on a plug-in's panel takes it out of the list and stops it; its folder and approval stay. Editing the config
 and cloning by hand still work.
 
+The same page lists **the oni-rcon index**, [`plugins/index.json`](../plugins/index.json) in this repository: plug-ins
+reviewed here, each one INSTALL… away, through the same turn-on and approval steps. Oni fetches it each time the page
+opens (never with `ONI_RCON_NO_UPDATE=1`) and keeps a copy, `plugin-index.json` beside `prefs.json`, for offline. Each
+entry is `{id, name, description, url, path, commit, author, tags}`: `url` is an `https://` git address, `path` the
+plug-in's folder in it (`""` for the root) and `commit` the reviewed one (`""` for the tip). An entry at its repository's
+root is a clone and gets updates as below; one in a subfolder is a copy of that folder alone, so it doesn't. To list
+yours, open a pull request adding it.
+
 ## Updates (desktop app)
 
 A plug-in folder that is a `git clone` follows its upstream branch. Install one with

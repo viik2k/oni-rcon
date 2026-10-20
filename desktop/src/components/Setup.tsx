@@ -4,12 +4,12 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, GREEN, RED, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
-import { explain, type Dict } from "../lib/util";
+import { CAMERAS, explain, type Dict } from "../lib/util";
 import { Check, Pixel, useSize } from "./ui";
 
 interface Spec { address: string; port: string; password: string; name: string; ssh: string }
 // what the operator picks for a server made here: the backend's host::Settings
-interface Plan { name: string; host: string; password: string; max: string; listed: boolean; internet: boolean; auto: boolean; playlist: string }
+interface Plan { name: string; host: string; password: string; max: string; listed: boolean; internet: boolean; auto: boolean; playlist: string; camera: string }
 type Mode = "start" | "host" | "connect";
 const SPIN = "◐◓◑◒";
 
@@ -17,7 +17,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
   const s = info.setup;
   const [mode, setMode] = useState<Mode>("start");
   const [f, setF] = useState<Spec>({ address: "127.0.0.1", port: "49176", password: "", name: "", ssh: "" });
-  const [plan, setPlan] = useState<Plan>({ name: "", host: s.by ?? "", password: "", max: "", listed: true, internet: false, auto: false, playlist: "" });
+  const [plan, setPlan] = useState<Plan>({ name: "", host: s.by ?? "", password: "", max: "", listed: true, internet: false, auto: false, playlist: "", camera: "" });
   const [hs, setHs] = useState<Dict | null>(null); // where a server made here goes, and what's missing for it
   const [by, setBy] = useState(s.by);
   const [remember, setRemember] = useState(true);
@@ -108,7 +108,7 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
         setStatus([false, "Max players is a number from 1 to 63, or empty for the default."]);
         return;
       }
-      settings = { name: plan.name, host: plan.host, password: plan.password, max_players: max, hidden: !plan.listed, internet: plan.internet, auto_update: plan.auto, playlist: plan.playlist };
+      settings = { name: plan.name, host: plan.host, password: plan.password, max_players: max, hidden: !plan.listed, internet: plan.internet, auto_update: plan.auto, playlist: plan.playlist, camera: plan.camera };
     }
     setBusy(true);
     setStatus([null, what === "setup_host" ? "Setting up a server on this computer…" : `Looking on ${f.ssh.trim()}…`]);
@@ -190,9 +190,13 @@ export function Setup({ info, onDone }: { info: Dict; onDone: (demo: boolean) =>
                 <div><label className="lbl">Server name</label><input ref={nm} className="input" maxLength={48} value={plan.name} onChange={plant("name")} placeholder="what players see in the browser" disabled={busy} /></div>
                 <div><label className="lbl">Hosted by</label><input className="input" value={plan.host} onChange={plant("host")} placeholder="shown under the name" disabled={busy} /></div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 170px", gap: 16 }}>
                 <div><label className="lbl">Join password</label><input className="input" value={plan.password} onChange={plant("password")} placeholder="empty lets anyone in" disabled={busy} /></div>
                 <div><label className="lbl">Max players</label><input className="input" value={plan.max} onChange={plant("max")} placeholder="default" disabled={busy} /></div>
+                <div><label className="lbl">Camera</label>
+                  <select className="input" value={plan.camera} onChange={(e) => setPlan({ ...plan, camera: e.target.value })} disabled={busy} title="How players see their own character on foot. Characters made for third person play in first person unless players may choose.">
+                    {[["First person", ""], ...CAMERAS.slice(1)].map(([l, v]) => <option key={v} value={v}>{l}</option>)}
+                  </select></div>
               </div>
               <div style={{ marginTop: 14 }}>
                 <label className="lbl">Playlist</label>

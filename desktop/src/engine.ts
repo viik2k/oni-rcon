@@ -30,8 +30,8 @@ const PLUGIN_EVERY = 30_000, PLUGIN_BADGE_EVERY = 60_000; // ms between asks: wi
 
 // --- what the window repaints, by counter ----------------------------------------------------------------------
 type Counters = { cards: number; roster: number; ops: number; bans: number; feed: number; log: number; forge: number;
-  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number; plugins: number };
-export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0, plugins: 0 }));
+  auto: number; health: number; mast: number; ui: number; toasts: number; dialog: number; plugins: number; clock: number }; // clock: once a second, for what counts down or blinks
+export const useV = create<Counters>(() => ({ cards: 0, roster: 0, ops: 0, bans: 0, feed: 0, log: 0, forge: 0, auto: 0, health: 0, mast: 0, ui: 0, toasts: 0, dialog: 0, plugins: 0, clock: 0 }));
 const pending = new Set<keyof Counters>();
 let flushQueued = false;
 // the feed and the log repaint at most this often: a fleet's events arrive as a stream, and a repaint per event
@@ -171,6 +171,8 @@ class Oni {
   intro = "quick";
   hint = "";
   version = "";
+  /** A newer desktop release, asked GitHub every 6 hours; null until one is out. */
+  appUpdate: { version: string; notes: string } | null = null;
   sel = 0;
   tab: Tab = "assets";
   redact = true;
@@ -666,7 +668,7 @@ class Oni {
     const latest = this.findings.recent().find((r) => r.at > this.findings.acknowledgedAt);
     if (latest && Date.now() / 1000 - latest.at <= 300) this.sup.last = redactText(`${this.stations[Number(latest.server)]?.label ?? latest.server}: ${latest.title} · F8`, this.redact);
     else if (this.sup.last.endsWith(" · F8")) this.sup.last = "";
-    bump("mast", "cards", "ui");
+    bump("mast", "cards", "clock");
   }
 
   // --- labels ------------------------------------------------------------------------------------------------------
@@ -894,6 +896,7 @@ class Oni {
   }
 
   async pluginView(p: Plugin) {
+    if (p.busy) return; // a page's refresh during the tick's ask: two at once would hand it the same replies twice
     p.busy = true;
     bump("plugins");
     const server = this.serverName(this.cur), told = p.replies;
@@ -969,10 +972,20 @@ class Oni {
     const url = String(got?.url ?? "").trim();
     if (!url) return false;
     const shown = url.replace(/\/\/[^/@]*@/, "//"); // never echo a login
-    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `git clone ${shown}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
+    return this.pluginDownload(`git clone ${shown}`, () => invoke<string>("plugin_install", { url }));
+  }
+
+  /** Install one the plug-in index lists (by id: the backend holds its address) and turn it on, approval next. */
+  pluginIndexInstall(e: Dict) {
+    const from = `${e.url}${e.path ? `, folder ${e.path}` : ""}${e.commit ? `, commit ${String(e.commit).slice(0, 12)}` : ""}`;
+    return this.pluginDownload(`${e.name} from the oni-rcon index:\n${from}`, () => invoke("plugin_index_install", { id: e.id }).then(() => String(e.id)));
+  }
+
+  private async pluginDownload(what: string, get: () => Promise<string>) {
+    if (!(await this.confirm("DOWNLOAD THIS PLUG-IN?", `${what}\ninto ${this.pluginsDir}\n\nDownloading doesn't run it. You are asked to approve it next, with what it runs and what it may do.`, "DOWNLOAD", false))) return false;
     let id: string;
     try {
-      id = await invoke<string>("plugin_install", { url });
+      id = await get();
     } catch (e) {
       this.notify(redactText(String(e), this.redact), "PLUG-IN NOT DOWNLOADED", "error", 12);
       return false;

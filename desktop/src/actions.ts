@@ -2,11 +2,11 @@
 // command on the selected station.
 import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
-import { oni, type Station } from "./engine";
+import { bump, oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { hotReloads, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, CAMERAS, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
@@ -17,10 +17,10 @@ export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "ban
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
-  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""],
+  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""],
   ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
   ["pardon", "PARDON  o", ""]];
@@ -45,6 +45,7 @@ export const TIPS: Record<string, string> = {
   "op-password": "Make players type a password to join (or remove it).",
   "op-maxping": "Stop players with a high ping from joining.",
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart. Server 0.9.18 or later applies it at once; an older one needs a restart.",
+  "op-camera": "First person, third person, or each player's choice, for players on foot. Saved in its dedicated.toml; server 0.9.20 or later applies it from the next game.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml: server 0.9.18 or later takes it up without a restart; an older one needs one.",
   "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
@@ -336,6 +337,13 @@ export async function op(name: string, st = oni.cur) {
     if (f) return saveSetting(st, "max_players", Number(f.n), "CAPACITY", `${f.n} players`);
     return;
   }
+  if (name === "camera") {
+    if (behind(st.info.version, "0.9.20")) return oni.notify(`${st.label} runs ${st.info.version}: the camera setting needs server 0.9.20 or later.`, `CAMERA · ${st.label}`, "warning");
+    const f = await oni.form("CAMERA", [["c", "Players on foot see", CAMERAS]], { verb: "SAVE",
+      note: "Saved in the server's dedicated.toml and applied from the next game; a campaign or ODST server restarts once it's empty. Characters made for third person play in first person unless players may choose." });
+    if (f) return saveSetting(st, "camera", f.c, "CAMERA", CAMERAS.find(([, v]) => v === f.c)![0].toLowerCase());
+    return;
+  }
   if (name === "newgametype") return newGameType(st);
   if (name === "playlists") return playlistsManager(st);
   if (name === "newplaylist") {
@@ -493,6 +501,36 @@ export async function askPassword() {
   if (!f) return;
   await invoke("set_password", { password: f.pw, indices: oni.waiting });
   oni.waiting = [];
+}
+
+let watching = false;
+/** Asks GitHub for a newer desktop release now and every 6 hours while the console runs. Each new one gets a toast
+ *  once and stays in the footer until it's installed; nothing asks by itself. */
+export function watchUpdates() {
+  if (watching) return;
+  watching = true;
+  const check = () => invoke<Dict | null>("update_check").then((u) => {
+    if (!u || u.version === oni.appUpdate?.version) return;
+    oni.appUpdate = { version: u.version, notes: u.notes };
+    oni.notify(`ONI RCON ${u.version} is out  ·  Shift+U to update`, "UPDATE", "information", 20);
+    bump("ui");
+  });
+  check();
+  window.setInterval(check, 6 * 3600_000);
+}
+
+/** The newer release's notes, and on yes it downloads, installs and restarts the console. */
+export async function installUpdate() {
+  const u = oni.appUpdate;
+  if (!u || !(await oni.confirm(`UPDATE TO ONI RCON ${u.version}?`, `${notesText(u.notes) || "No release notes."}\n\nThe console restarts and reconnects.`, "INSTALL", false))) return;
+  oni.notify("Downloading the update...", "UPDATE", "information", 60);
+  invoke("update_install").catch((e) => oni.notify(String(e), "UPDATE FAILED", "error", 20));
+}
+
+/** This version's release notes, once, on its first start after an update. */
+export async function whatsNew() {
+  const n = await invoke<Dict | null>("whats_new", { fresh: oni.intro === "full" && !oni.fullIntro });
+  if (n) await oni.ask("confirm", { title: `WHAT'S NEW IN ONI RCON ${n.version}`, body: notesText(n.notes), verb: "OK", danger: false, notice: true });
 }
 
 export function sayText(text: string) {

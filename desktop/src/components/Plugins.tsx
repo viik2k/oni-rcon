@@ -22,7 +22,7 @@ function entry(p: Plugin): Row {
 }
 
 const STEPS: [string, string][] = [
-  ["GET IT", "download it from git, or put its folder in plugins/"],
+  ["GET IT", "install it from the index below, download it from git, or put its folder in plugins/"],
   ["TURN IT ON", "Oni adds it to plugins = [...] in your config"],
   ["APPROVE IT", "you read what it runs and may do, then allow it; it never runs before this"],
   ["WATCH IT", "its panel appears on this tab, and a badge it sets feeds CONDITION"],
@@ -31,6 +31,9 @@ const STEPS: [string, string][] = [
 /** The empty tab, and ADD A PLUG-IN: the four steps, with the first two done from here. `onDone` runs once one is on. */
 function Onboarding({ first, onDone }: { first: boolean; onDone: () => void }) {
   const found = oni.pluginsFound, go = (r: Promise<boolean>) => void r.then((ok) => ok && onDone());
+  const [index, setIndex] = useState<Dict[]>([]); // the oni-rcon plug-in index; its offline copy, or nothing, without a network
+  useEffect(() => void invoke<Dict[]>("plugin_index").then(setIndex, () => {}), []);
+  const has = (id: string) => oni.plugins.some((p) => p.m.id === id) || found.some((m) => m.id === id);
   return (
     <div style={{ whiteSpace: "pre-wrap", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ color: AMBER }}>{first ? "NO PLUG-INS YET" : "ADD A PLUG-IN"}</div>
@@ -42,6 +45,15 @@ function Onboarding({ first, onDone }: { first: boolean; onDone: () => void }) {
           <span style={{ color: m.error ? RED : WHITE }}>{m.name || m.id}</span>
           <span style={{ color: DIM, flex: 1 }}>{redactText(m.error || m.description || "", oni.redact)}</span>
           {m.error ? null : <Btn label="TURN ON…" variant="primary" onClick={() => go(oni.pluginTurnOn(m.id))} id={`plugin-on-${m.id}`} />}
+        </div>
+      ))}
+      {index.length ? <div style={{ color: AMBER }}>FROM THE ONI-RCON INDEX</div> : null}
+      {index.map((e) => (
+        <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ color: WHITE }}>{e.name}</span>
+          <span style={{ color: DIM, flex: 1 }}>{e.description}{e.author ? ` · ${e.author}` : ""}</span>
+          {has(e.id) ? <span style={{ color: GREEN }}>INSTALLED</span>
+            : <Btn label="INSTALL…" variant="primary" onClick={() => go(oni.pluginIndexInstall(e))} id={`plugin-get-${e.id}`} />}
         </div>
       ))}
       <div><Btn label="DOWNLOAD FROM GIT…" variant="primary" onClick={() => go(oni.pluginInstall())} id="plugin-install" /></div>
@@ -206,9 +218,10 @@ const fills = (p: Plugin) => !p.m.state && (p.view?.blocks ?? []).some((b: Dict)
  *  reload its frame. */
 export function Plugins({ shown }: { shown: boolean }) {
   useV((s) => s.plugins);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<boolean | null>(null); // null: not chosen yet, so onboard while only the Studio is here
   const p = oni.plugins[Math.min(oni.psel, oni.plugins.length - 1)];
-  const onboard = !p || adding;
+  const real = oni.plugins.some((x) => !x.m.builtin);
+  const onboard = !p || (adding ?? !real);
   const select = (id: string) => {
     setAdding(false);
     oni.psel = Math.max(0, oni.plugins.findIndex((x) => x.m.id === id));
@@ -222,10 +235,11 @@ export function Plugins({ shown }: { shown: boolean }) {
   return (
     <div className="hsplit grow">
       <Panel title="PLUG-INS" style={{ flex: 1, minWidth: 220 }}>
-        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select} />
+        <Table id="plugin-list" cols={["", "NAME", ""]} rows={oni.plugins.map(entry)} selected={onboard ? null : p?.m.id ?? null} onSelect={select}
+          cursor={!onboard} /* with a cursor, Table picks the first row when none is selected, which would end onboarding at once */ />
         <div style={{ marginTop: 8 }}><Btn label="+ ADD A PLUG-IN" variant={onboard ? "" : "primary"} onClick={() => setAdding(true)} disabled={onboard || oni.demo} title={oni.demo ? "Not in the demo" : undefined} id="plugin-add" /></div>
       </Panel>
-      <Panel title={onboard ? (p ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
+      <Panel title={onboard ? (real ? "ADD A PLUG-IN" : "PLUG-INS") : String(p.m.name || p.m.id).toUpperCase()} style={{ flex: 3 }} col={!onboard && fills(p)}>
         {!onboard && !p.m.builtin ? (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             {p.update ? <>
@@ -235,7 +249,7 @@ export function Plugins({ shown }: { shown: boolean }) {
             {oni.demo ? null : <span style={{ marginLeft: "auto" }}><Btn label="TURN OFF…" onClick={() => oni.pluginTurnOff(p)} id="plugin-off" /></span>}
           </div>
         ) : null}
-        {onboard ? <Onboarding first={!p} onDone={() => setAdding(false)} /> : p.m.state ? <Gate p={p} /> : null}
+        {onboard ? <Onboarding first={!real} onDone={() => setAdding(false)} /> : p.m.state ? <Gate p={p} /> : null}
         {live.map((x) => <div key={x.m.id} style={{ display: x === p && !onboard ? "contents" : "none" }}><View p={x} /></div>)}
       </Panel>
     </div>
