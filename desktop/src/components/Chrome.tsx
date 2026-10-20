@@ -29,6 +29,7 @@ export function Masthead({ width }: { width: number }) {
 
 export function Banner() {
   useV((s) => s.ui);
+  useV((s) => s.clock); // it blinks, and expires
   const b = oni.banner;
   if (!b) return null;
   return (
