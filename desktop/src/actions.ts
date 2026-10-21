@@ -6,7 +6,7 @@ import { bump, oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, CAMERAS, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
@@ -463,7 +463,9 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null,
     if (f) oni.send(st, "pardon", [f.target.trim()]);
   } else if (name === "vpncheck") {
     const f = await oni.form("CHECK AN ADDRESS", [["ip", "IP address", ""]], { verb: "CHECK", required: ["ip"] });
-    if (f) oni.send(st, "vpn", [f.ip]);
+    if (!f) return;
+    const r = await oni.cmd(st, "vpn", [f.ip.trim()], { toast: false });
+    if (r.ok) oni.notify(vpnCheck(oni.replyText(r), redactData(r.data, oni.redact)), `${st.label} · CHECK IP`);
   }
 }
 
