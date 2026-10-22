@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -478,5 +478,30 @@ describe("plug-ins", () => {
     expect(typedParams(ps, { p0: " 2.5 ", p1: "true", p2: "10m", p3: "warm" })).toEqual({ n: 2.5, b: true, t: "10m", c: "warm" });
     expect(typedParams(ps, { p0: "x" })).toBe("N must be a number: nothing was sent.");
     expect(typedParams(ps, { p0: "" })).toBe("N must be a number: nothing was sent.");
+  });
+});
+
+describe("vpn lists (0.9.22)", () => {
+  const now = 1_800_000_000;
+  const v = { lists: { refreshed_at: now - 60, sources: [
+    { list: "fresh", ranges: 100, asns: 0, fetched_at: now - 600, problem: null },
+    { list: "old", ranges: 5, asns: 2, fetched_at: now - 8 * 86400, problem: null },
+    { list: "broken", ranges: 0, fetched_at: null, problem: "HTTP 404" }],
+    table: { table: "ip2asn", rows: 10, fetched_at: new Date((now - 3600) * 1000).toISOString(), blocks: 4 } } };
+  it("flags a list older than a week, never fetched, or with a problem", () => {
+    const l = vpnLists(v, now);
+    expect(l.map((x) => [x.name, x.stale, x.problem])).toEqual([["fresh", false, ""], ["old", true, ""], ["broken", true, "HTTP 404"], ["ASN table (ip2asn)", false, ""]]);
+    expect(l[0]).toMatchObject({ size: "100 ranges · 0 ASNs", age: "10m 00s" });
+    expect(l[1].age).toBe("8d 0h");
+    expect(l[2].age).toBe("never");
+  });
+  it("is empty before 0.9.22 or before the first refresh", () => {
+    expect(vpnLists({ block_vpn: true, ranges: 3 })).toEqual([]);
+    expect(vpnLists({ lists: null })).toEqual([]);
+  });
+  it("CHECK IP names the matching list and a fail-closed refusal", () => {
+    expect(vpnCheck("refused", { listed: true, list: "x4bnet", refused: true })).toBe("refused · matched x4bnet");
+    expect(vpnCheck("refused", { listed: false, refused: true, fail_closed: true })).toContain("fail_closed");
+    expect(vpnCheck("fine", null)).toBe("fine");
   });
 });

@@ -170,8 +170,19 @@ impl Fake {
                 ok("modes: see data".into(), Some(json!({"entries": e})))
             }
             "bans" => ok("bans: see data".into(), Some(self.bans.clone())),
-            "vpn" if args.is_empty() => ok("vpn: see data".into(), Some(json!({"allowed": self.allowed, "block_vpn": true, "ranges": 41812}))),
-            "vpn" => ok(format!("{a0} doesn't look like a VPN."), None),
+            "vpn" if args.is_empty() => {
+                // the 0.9.22 shape: one list fresh, one a week and a half old that failed its last fetch
+                let t = crate::util::now() as i64;
+                let lists = json!({"refreshed_at": t - 600, "sources": [
+                    {"list": "x4bnet", "ranges": 37958, "asns": 0, "fetched_at": t - 600, "problem": null},
+                    {"list": "hosting-asns", "ranges": 3854, "asns": 212, "fetched_at": t - 10 * 86400, "problem": "HTTP 404 from the list's address; kept the last copy"}],
+                    "table": {"table": "ip2asn", "rows": 512340, "fetched_at": t - 2 * 86400, "asns": 212, "announced": 3854, "blocks": 3854}});
+                ok("vpn: see data".into(), Some(json!({"allowed": self.allowed, "block_vpn": true, "ranges": 41812, "fail_closed": false, "lists": lists})))
+            }
+            "vpn" if a0.starts_with("45.") => ok(format!("{a0} is refused: it is on a VPN list."),
+                Some(json!({"address": a0, "local": false, "listed": true, "list": "x4bnet", "allowed": false, "refused": true, "fail_closed": false}))),
+            "vpn" => ok(format!("{a0} doesn't look like a VPN."),
+                Some(json!({"address": a0, "local": false, "listed": false, "list": null, "allowed": false, "refused": false, "fail_closed": false}))),
             "vote" => ok("vote: see data".into(), Some(json!({"vote": self.vote, "playlist": null, "subjects": ["kick", "endround", "endgame", "shuffle", "playlist"]}))),
             "nextmap" if args.is_empty() => {
                 let rot: Vec<Value> = MAPS[..6].iter().map(|m| json!({"map": m, "mode": MODES.choose(&mut rng).unwrap()})).collect();
