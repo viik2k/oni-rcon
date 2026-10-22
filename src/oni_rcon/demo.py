@@ -103,10 +103,26 @@ class Fake:
         finally:
             self.clients.discard(ws)
 
+    @staticmethod
+    def vpn_lists() -> dict:
+        """The 0.9.22 `vpn` lists: one fresh, one a week and a half old that failed its last fetch."""
+        t = int(time.time())
+        return {"refreshed_at": t - 600, "sources": [
+            {"list": "x4bnet", "ranges": 37958, "asns": 0, "fetched_at": t - 600, "problem": None},
+            {"list": "hosting-asns", "ranges": 3854, "asns": 212, "fetched_at": t - 10 * 86400,
+             "problem": "HTTP 404 from the list's address; kept the last copy"}],
+            "table": {"table": "ip2asn", "rows": 512340, "fetched_at": t - 2 * 86400, "asns": 212, "announced": 3854,
+                      "blocks": 3854}}
+
     async def command(self, cmd: str, args: list[str], by: str) -> dict:
         ok = lambda text, data=None: {"ok": True, "text": text, **({"data": data} if data is not None else {})}
         no = lambda text: {"ok": False, "text": text}
         self._renumber()
+        if cmd == "vpn" and args:  # CHECK IP, the 0.9.22 shape: the list an address matched
+            listed = args[0].startswith("45.")
+            return ok(f"{args[0]} is refused: it is on a VPN list." if listed else f"{args[0]} doesn't look like a VPN.",
+                      {"address": args[0], "local": False, "listed": listed, "list": "x4bnet" if listed else None,
+                       "allowed": False, "refused": listed, "fail_closed": False})
         if cmd in ("players", "status", "maps", "modes", "bans", "vpn", "vote", "nextmap"):
             return ok(f"{cmd}: see data", {
                 "players": lambda: {"count": len(self.players), "max_players": self.status["max_players"],
@@ -117,7 +133,8 @@ class Fake:
                 "modes": lambda: {"entries": [{"kind": "mode", "name": m, "reference": m.lower().replace(" ", "_")}
                                               for m in MODES] + self.installed(".gt")},
                 "bans": lambda: self.bans,
-                "vpn": lambda: {"allowed": self.allowed, "block_vpn": True, "ranges": 41812},
+                "vpn": lambda: {"allowed": self.allowed, "block_vpn": True, "ranges": 41812, "fail_closed": False,
+                                "lists": self.vpn_lists()},
                 "vote": lambda: {"vote": self.vote, "playlist": None,
                                  "subjects": ["kick", "endround", "endgame", "shuffle", "playlist"]},
                 "nextmap": lambda: {"next": self.status["next"],

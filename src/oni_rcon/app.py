@@ -380,6 +380,49 @@ def age(seconds: float) -> str:
     return f"{d}d {h}h" if d else f"{h}h {m:02d}m" if h else f"{m}m {s % 60:02d}s" if m else f"{s}s"
 
 
+def epoch(ts) -> float | None:
+    """Epoch seconds from a server time: seconds, milliseconds or an ISO string; None when it doesn't read."""
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return ts / 1000 if ts > 1e11 else float(ts)
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() if ts else None
+    except ValueError:
+        return None
+
+
+VPN_STALE_DAYS = 7  # the server calls a list stale after a week (0.9.22)
+
+
+def vpn_lists(v: dict, now: float | None = None) -> list[dict]:
+    """The `vpn` reply's lists (0.9.22+): each source and the ASN table, with its size, age and whether it needs a
+    look (older than a week, never fetched, or a fetch problem). Empty before 0.9.22 or the first refresh."""
+    l, now = v.get("lists"), time.time() if now is None else now
+    if not isinstance(l, dict):
+        return []
+
+    def row(name, size, at, problem) -> dict:
+        t = epoch(at)
+        return {"name": name, "size": size, "age": "never" if t is None else age(now - t),
+                "stale": t is None or now - t > VPN_STALE_DAYS * 86400, "problem": str(problem or "")}
+    n = lambda *pairs: " · ".join(f"{x} {unit}" for x, unit in pairs if isinstance(x, int))
+    out = [row(str(s.get("list", "?")), n((s.get("ranges"), "ranges"), (s.get("asns"), "ASNs")), s.get("fetched_at"),
+               s.get("problem")) for s in l.get("sources") or [] if isinstance(s, dict)]
+    if isinstance(t := l.get("table"), dict):
+        out.append(row(f"ASN table ({t['table']})" if t.get("table") else "ASN table",
+                       n((t.get("rows"), "rows"), (t.get("blocks"), "blocks")), t.get("fetched_at"), t.get("problem")))
+    return out
+
+
+def vpn_check(text: str, d) -> str:
+    """CHECK IP's answer, plus the list it matched and a fail-closed refusal when the reply has them (0.9.22+)."""
+    if not isinstance(d, dict):
+        return text
+    extra = [f"matched {d['list']}"] if d.get("list") else []
+    if d.get("fail_closed") and d.get("refused") and not (d.get("listed") or d.get("local") or d.get("allowed")):
+        extra.append("refused because no list is loaded yet (fail_closed)")
+    return " · ".join([text, *extra])
+
+
 def redact_addr(v, on: bool) -> str:
     return "███.███.███.███" if on and v else str(v or "—")
 
@@ -876,6 +919,10 @@ GUIDE = [
     ("F4  BLACKLIST  ·  bans", [
         ("Lists", "Every ban by player, address and device, and who may join through a VPN. Pick a row, then UNBAN "
                   "or REVOKE."),
+        ("VPN lists", "Server 0.9.22 or later: each list the server blocks VPNs with, its size and age, and the last "
+                      "fetch problem. A list older than a week, never fetched, or failing is flagged: the server keeps "
+                      "blocking with the old copy, so refresh it on the server. CHECK IP names the list an address "
+                      "matched."),
         ("Kicks", "A kick keeps a player out for 10, 30, 60 and then 120 minutes. KICKED lists who this console saw "
                   "kicked, or turned away for a recent kick, with how long they're still out. PARDON (o) lets the "
                   "selected one rejoin now and starts their next kick at 10 minutes again; with nothing selected it "
@@ -1419,6 +1466,7 @@ class OniApp(App):
                     with Blacklist():
                         yield Roster(id="bans", cursor_type="row", zebra_stripes=True)
                         yield Roster(id="vpn", cursor_type="row", zebra_stripes=True)
+                        yield Roster(id="vpnlists", cursor_type="none", zebra_stripes=True)
                         yield Roster(id="kicks", cursor_type="row", zebra_stripes=True)
                         with Horizontal(classes="bar"):
                             for op, label, variant in BAN_OPS:
@@ -1470,7 +1518,8 @@ class OniApp(App):
         self.theme = "oni"
         cols = {"#players": ["#", "CALLSIGN", "TEAM", "SCORE", "K", "D", "K/D", "PING", "HEALTH", "SHIELD", "FLAGS"],
                 "#rotation": ["#", "MAP", "MODE"], "#bans": ["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"],
-                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"], "#kicks": ["KICKED", "PLAYER ID", "REASON", "BY", "OUT"],
+                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"], "#vpnlists": ["VPN LIST", "SIZE", "AGE", "PROBLEM"],
+                "#kicks": ["KICKED", "PLAYER ID", "REASON", "BY", "OUT"],
                 "#listings": ["", "TYPE", "TITLE", "AUTHOR", "RATING", "RECENT", "FIT"],
                 "#versions": ["", "VERSION", "PUBLISHED", "NOTES"],
                 "#crashes": ["WHEN", "SERVER", "CLASS", "PLAYERS", "DETAIL", "RCON"],
@@ -2849,7 +2898,19 @@ class OniApp(App):
         t = self.query_one("#vpn", Roster)
         t.fill(rows)
         t.border_title = Text(f"VPN ALLOWANCES · blocking {'ON' if v.get('block_vpn') else 'OFF'}"
-                              + (f" · {v['ranges']} ranges" if isinstance(v.get("ranges"), int) else ""))
+                              + (f" · {v['ranges']} ranges" if isinstance(v.get("ranges"), int) else "")
+                              + (" · fail-closed" if v.get("fail_closed") else ""))
+        lists = vpn_lists(v)
+        t = self.query_one("#vpnlists", Roster)
+        t.fill([(str(i), [Text(x["name"], AMBER if x["stale"] or x["problem"] else WHITE), Text(x["size"], DIM),
+                          Text(x["age"], RED if x["stale"] else GREEN),
+                          Text(redact_text(x["problem"], self.redact) or "—", RED if x["problem"] else DIM)])
+                for i, x in enumerate(lists)])
+        bad = sum(bool(x["stale"] or x["problem"]) for x in lists)
+        t.border_title = Text("VPN LISTS" if not v else "VPN LISTS · needs server 0.9.22 or later" if "lists" not in v
+                              else "VPN LISTS · none fetched yet" if not v["lists"]
+                              else f"VPN LISTS · {len(lists)}" + (f" · {bad} need a look" if bad else ""),
+                              AMBER if bad else "")
         self.kick_rows = dict(reversed(self.cur.kicks.items()))
         t = self.query_one("#kicks", Roster)
         t.fill([(key, [Text(k["name"] or "—", AMBER if k["name"] else DIM), k["id"] or redact_addr(k["ip"], self.redact) or "—",
@@ -3298,7 +3359,9 @@ class OniApp(App):
             f = await self.push_screen_wait(Form("CHECK AN ADDRESS", [("ip", "IP address", "")], verb="CHECK",
                                                  required=("ip",)))
             if f:
-                self.send(st, "vpn", f["ip"])
+                r = await self.cmd(st, "vpn", f["ip"].strip(), toast=False)
+                if r.get("ok"):
+                    self.notify(vpn_check(self.reply_text(r), r.get("data")), title=f"{st.label} · CHECK IP")
 
     # --- forge: the ReclaimerForge catalog --------------------------------------------------------------------
     def on_unmount(self) -> None:

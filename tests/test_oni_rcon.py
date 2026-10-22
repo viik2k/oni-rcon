@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 
 import pytest
 from rich.text import Text
 
 from oni_rcon import app as appmod
 from oni_rcon.app import (JOIN_PING, Boot, Form, Help, OniApp, Pick, emblem, explain, parse_command, redact_data, render_event,
-                          resolve, same, sides, split_tag, target_of)
+                          resolve, same, sides, split_tag, target_of, vpn_check, vpn_lists)
 from oni_rcon.art import biosig, decrypt, hbar, spark, split_bar
 from oni_rcon.config import Server, add_servers, load_config, parse_target, resolve_passwords
 from oni_rcon.demo import serve_fakes
@@ -144,6 +145,10 @@ def test_app_against_fakes():
             await pilot.pause()
             assert app.stations[1].alerts == 0
             await pilot.press("1")
+            await pilot.press("f4")  # the demo's 0.9.22 VPN lists: the 10-day-old, failing one is flagged
+            lists = app.query_one("#vpnlists")
+            await until(pilot, lambda: lists.row_count == 3)
+            assert "1 need a look" in str(lists.border_title)
             await pilot.press("f5")
             app.query_one("#cmd").focus()
             app.query_one("#cmd").value = "say hello there"
@@ -733,3 +738,22 @@ def test_f4_pardons_a_kick():
             assert not st.kicks and kicks.row_count == 0 and not keep[0].kicked
 
     asyncio.run(go())
+
+
+def test_vpn_lists():
+    now = 1_800_000_000
+    v = {"lists": {"refreshed_at": now - 60, "sources": [
+        {"list": "fresh", "ranges": 100, "asns": 0, "fetched_at": now - 600, "problem": None},
+        {"list": "old", "ranges": 5, "asns": 2, "fetched_at": (now - 8 * 86400) * 1000, "problem": None},
+        {"list": "broken", "ranges": 0, "fetched_at": None, "problem": "HTTP 404"}],
+        "table": {"table": "ip2asn", "rows": 10, "blocks": 4,
+                  "fetched_at": datetime.fromtimestamp(now - 3600, timezone.utc).isoformat().replace("+00:00", "Z")}}}
+    lists = vpn_lists(v, now)  # seconds, milliseconds and ISO times all read
+    assert [(x["name"], x["stale"], x["problem"]) for x in lists] == [
+        ("fresh", False, ""), ("old", True, ""), ("broken", True, "HTTP 404"), ("ASN table (ip2asn)", False, "")]
+    assert lists[0]["size"] == "100 ranges · 0 ASNs" and lists[0]["age"] == "10m 00s"
+    assert lists[1]["age"] == "8d 0h" and lists[2]["age"] == "never" and lists[3]["age"] == "1h 00m"
+    assert vpn_lists({"block_vpn": True, "ranges": 3}) == [] and vpn_lists({"lists": None}) == []  # pre-0.9.22
+    assert vpn_check("refused", {"listed": True, "list": "x4bnet", "refused": True}) == "refused · matched x4bnet"
+    assert "fail_closed" in vpn_check("refused", {"listed": False, "refused": True, "fail_closed": True})
+    assert vpn_check("fine", None) == "fine"
