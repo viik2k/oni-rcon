@@ -123,6 +123,12 @@ class Fake:
             return ok(f"{args[0]} is refused: it is on a VPN list." if listed else f"{args[0]} doesn't look like a VPN.",
                       {"address": args[0], "local": False, "listed": listed, "list": "x4bnet" if listed else None,
                        "allowed": False, "refused": listed, "fail_closed": False})
+        if cmd in ("admin", "admins") and args[:1] in ([], ["list"]):  # a bare list of IDs and objects: the shape is
+            return ok("admins: see data", [  # undocumented, so the demo answers in both forms the clients take
+                {"name": "Overseer", "player_id": "0d57c0ffee0d57c0ffee0d57c0ffee00", "source": "dedicated.toml",
+                 "online": False},
+                *({"name": p["name"], "player_id": p["player_id"], "source": "rcon", "online": True}
+                  for p in self.players if p.get("admin"))])
         if cmd in ("players", "status", "maps", "modes", "bans", "vpn", "vote", "nextmap"):
             return ok(f"{cmd}: see data", {
                 "players": lambda: {"count": len(self.players), "max_players": self.status["max_players"],
