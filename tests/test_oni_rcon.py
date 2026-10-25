@@ -129,8 +129,10 @@ def test_app_against_fakes():
             assert app.query_one("#op-passvote").disabled  # no vote under way
 
             await until(pilot, lambda: app.query_one("#player-actions").display)  # shown once a player is selected
-            await pilot.click("#pl-tell")  # the player file's buttons open the same dialogs as the keys
-            await until(pilot, lambda: isinstance(app.screen, Form))
+            for _ in range(10):  # the player file's buttons open the same dialogs as the keys
+                await pilot.click("#pl-tell")  # retried: on a slow Windows runner the first click can land before layout settles
+                if await until(pilot, lambda: isinstance(app.screen, Form), tries=20):
+                    break
             assert isinstance(app.screen, Form)
             await pilot.press("escape")
             await pilot.press("question_mark")
