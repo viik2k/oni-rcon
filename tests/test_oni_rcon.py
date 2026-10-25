@@ -369,7 +369,7 @@ def test_app_keeps_the_selection_and_redacts():
             chosen = app.ban_rows[bans.selected]
             fake.bans["players"].insert(0, {"id": "f" * 32, "name": "New", "reason": "y"})  # someone else bans
             app.fetch(app.cur, "bans")
-            await pilot.pause(0.3)
+            await until(pilot, lambda: bans.row_count == 7)
             assert bans.row_count == 7 and app.ban_rows[bans.selected] == chosen  # u still lifts the chosen ban
             assert "192.0.2.44" not in str(app.query_one("#vpn").get_row_at(0))
 
