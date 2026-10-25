@@ -54,6 +54,7 @@ The panel below the editor (Ctrl+J) has these tabs:
   **STOP**, and starts again whenever Oni does.
 - **TEST** (Ctrl+Shift+Enter) runs the editor's text, saved or not, as a **dry run**:
   - Read-only commands are sent: `status`, `players`, `bans`, `maps`, `modes`, `nextmap`, `admins` and `help`.
+    `nextmap` and `admins` count only without arguments: `nextmap Guardian` queues a game, so it is logged.
   - Every other command, including `say` and `kick`, is logged instead and resolves to `{ ok: null }`.
   - `notify`, `discord` and `telegram` are logged too.
   - The store starts from the saved one but is never saved.
@@ -160,6 +161,7 @@ Every event also has these helpers, which act on its server and player: `ev.repl
 | Announcer | Rotates through a list of messages on every server every 10 minutes. |
 | Reports | `!report <player> <what they did>` notifies you in Oni and posts to Discord. |
 | Discord log | Posts joins, kicks and bans to a Discord webhook. |
+| Next-game vote | An admin types `!nextvote`, players answer with a number (their last answer counts), standings go out with 30 and 10 s left, and the winner is queued with `nextmap` so the current game finishes. `!nextvote end`, `cancel` and `list`. Votes on `CHOICES` at the top of the script, or on up to 5 games from the server's rotation. Only admins (matched by player ID) can start or stop one. |
 
 ## On disk
 
