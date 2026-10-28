@@ -9,7 +9,7 @@ from rich.text import Text
 
 from oni_rcon import app as appmod
 from oni_rcon.app import (JOIN_PING, Boot, Form, Help, OniApp, Pick, emblem, explain, parse_command, redact_data, render_event,
-                          resolve, same, sides, split_tag, target_of, vpn_check, vpn_lists)
+                          resolve, same, sides, split_tag, target_of, vpn_check, vpn_lists, admin_rows, Confirm)
 from oni_rcon.art import biosig, decrypt, hbar, spark, split_bar
 from oni_rcon.config import Server, add_servers, load_config, parse_target, resolve_passwords
 from oni_rcon.demo import serve_fakes
@@ -757,3 +757,50 @@ def test_vpn_lists():
     assert vpn_check("refused", {"listed": True, "list": "x4bnet", "refused": True}) == "refused · matched x4bnet"
     assert "fail_closed" in vpn_check("refused", {"listed": False, "refused": True, "fail_closed": True})
     assert vpn_check("fine", None) == "fine"
+
+
+def test_admin_rows():
+    a = {"admins": ["76561198000000001", {"name": "Overseer", "player_id": "abc", "source": "dedicated.toml"},
+                    {"name": "Bravo", "id": "def", "from": "rcon", "online": False}, {}]}
+    rows = admin_rows(a, [{"player_id": "abc"}])
+    assert [(r["target"], r["on"], r["fixed"]) for r in rows] == [("76561198000000001", False, False), ("abc", True, True),
+                                                                   ("def", False, False)]  # the reply's online wins
+    assert admin_rows({"entries": [{"name": "Gone"}]}, [])[0] == {"target": "Gone", "name": "Gone", "id": "", "from": "",
+                                                                  "fixed": False, "on": None}
+    assert admin_rows({}, []) == []
+
+
+def test_f4_adds_and_removes_admins():
+    async def go():
+        ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])
+        app = OniApp([Server(port=ports[0], password="demo")], by="pytest", intro=False)
+        async with app.run_test(size=(160, 48)) as pilot:
+            await settle(app, pilot, "players", "admins")
+            admins = app.query_one("#admins")
+            new = next(p for p in keep[0].players if not p["admin"])
+            before = admins.row_count
+            assert before >= 1 and str(admins.border_title).startswith("ADMINS · ")
+            app.action_tab("blacklist")
+            app.bl("adminadd")
+            await until(pilot, lambda: isinstance(app.screen, Pick))
+            await pilot.press(*new["name"], "enter")
+            await until(pilot, lambda: isinstance(app.screen, Confirm))
+            app.screen.query_one("#yes").press()
+            assert await until(pilot, lambda: admins.row_count == before + 1) and new["admin"]
+            assert "Overseer" in [str(admins.get_row_at(i)[0]) for i in range(admins.row_count)]
+
+            admins.move_cursor(row=0)  # Overseer: written in dedicated.toml, so it isn't sent
+            await pilot.pause()
+            assert app.admin_rows[admins.selected]["fixed"]
+            app.bl("adminremove")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm) and admins.row_count == before + 1
+            row = next(i for i in range(admins.row_count) if str(admins.get_row_at(i)[0]) == new["name"])
+            admins.move_cursor(row=row)
+            await pilot.pause()
+            app.bl("adminremove")
+            await until(pilot, lambda: isinstance(app.screen, Confirm))
+            app.screen.query_one("#yes").press()
+            assert await until(pilot, lambda: admins.row_count == before) and not new["admin"]
+
+    asyncio.run(go())
