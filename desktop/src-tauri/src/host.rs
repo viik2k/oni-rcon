@@ -331,6 +331,31 @@ pub fn playlist_file(p: &serde_json::Value) -> Result<(String, String), String> 
     Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&checked).unwrap() + "\n"))
 }
 
+/// The bundled Flood Infection mode, a copy of it, or a mode built on it (H4 Flood): all load the campaign's Flood from
+/// FLOOD_MAP, which `dedicated init` doesn't copy and `dedicated check` doesn't ask for. Without it a vote for the game
+/// passes, the game fails to load and the vote starts over. From rcburke92's project-reclaimer-server-manager.
+pub const FLOOD_MAP: &str = "halo3/maps/050_floodvoi.map";
+
+pub fn plays_flood(game: &str) -> bool {
+    static FLOOD: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)flood[-_ ]?infection|h4[-_ ]?flood").unwrap());
+    FLOOD.is_match(game)
+}
+
+/// FLOOD_MAP from MCC into the server's game folder, when MCC has it and the server doesn't: hard-linked when they share
+/// a drive (as init does with the other maps), else copied. Whether it was put there.
+fn add_flood_map(game: &Path, server_game: &Path) -> std::io::Result<bool> {
+    let (from, to) = (game.join(FLOOD_MAP), server_game.join(FLOOD_MAP));
+    if to.exists() || !from.is_file() || !server_game.join("halo3/maps").is_dir() {
+        return Ok(false);
+    }
+    if std::fs::hard_link(&from, &to).is_err() {
+        let part = to.with_extension("map.part");
+        std::fs::copy(&from, &part)?;
+        std::fs::rename(&part, &to)?;
+    }
+    Ok(true)
+}
+
 /// A playlist file the console made, and so may rewrite: playlists/<name>.playlist.json, nothing deeper.
 pub fn console_playlist(path: &str) -> Result<String, String> {
     let p = crate::install::safe_path(path)?;
@@ -628,6 +653,14 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         let mut c = command(&exe.display().to_string());
         c.args(["dedicated", "init"]).arg(folder).arg("--from").arg(game);
         stream(c, say, "dedicated init").await?;
+    }
+    // every time, so a server folder made before this, or by hand, gets it too
+    if let Some(game) = game {
+        match add_flood_map(game, &folder.join("game")) {
+            Ok(true) => say("Added 050_floodvoi.map to the server's game folder, for Flood Infection."),
+            Ok(false) => {}
+            Err(e) => say(&format!("Couldn't add 050_floodvoi.map to the server's game folder ({e}): copy it from MCC's halo3\\maps into game\\halo3\\maps there, or Flood Infection games won't load.")),
+        }
     }
     let disk = read(&toml)?;
     let base = match settings {
@@ -1040,6 +1073,21 @@ mod tests {
 
     // dedicated init's file, cut down: what the guide shows
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
+
+    #[test]
+    fn flood_infection_gets_its_map_from_mcc_once() {
+        let (mcc, server) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // MCC has no such map: nothing to do
+        std::fs::create_dir_all(mcc.path().join("halo3/maps")).unwrap();
+        std::fs::write(mcc.path().join(FLOOD_MAP), b"flood").unwrap();
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // no maps folder in the server's: not a server folder
+        std::fs::create_dir_all(server.path().join("halo3/maps")).unwrap();
+        assert!(add_flood_map(mcc.path(), server.path()).unwrap());
+        assert_eq!(std::fs::read(server.path().join(FLOOD_MAP)).unwrap(), b"flood");
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // there already
+        assert!(["Flood Infection", "flood_infection", "H4 Flood", "h4-flood"].iter().all(|g| plays_flood(g)));
+        assert!(!["Infection", "Slayer", "Floodgate Slayer"].iter().any(|g| plays_flood(g)));
+    }
 
     #[test]
     fn a_new_game_type_keeps_to_the_ranges() {

@@ -262,6 +262,7 @@ async function editPlaylist(st: Station, p: Playlist, path: string | null, note 
           if (!(await oni.confirm("REPLACE PLAYLIST", `${saved.path} is there already.`, "REPLACE", true))) continue;
           saved = await invoke<Dict>("save_playlist", { ...args, replace: true });
         }
+        if (saved.flood) oni.notify(String(saved.flood), `FLOOD INFECTION · ${st.label}`, "warning", 20);
         return saved.path;
       } catch (e) {
         oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
