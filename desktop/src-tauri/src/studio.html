@@ -1895,7 +1895,7 @@ function workerMain() {
   async function players(server) {
     const r = await rcon(server, "players");
     if (!r.ok) throw new Error(`players(): ${r.text || "no answer"}`);
-    return r.data ?? [];
+    return Array.isArray(r.data) ? r.data : r.data?.players ?? []; // the reply is {count, max_players, players}
   }
   const servers = () => SERVERS.map((x) => ({ ...x }));
   const notify = (text, level = "info") => void post({ t: "notify", text: String(text), level: String(level) });
