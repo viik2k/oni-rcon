@@ -44,7 +44,7 @@ addresses = false                     # true = sees player IPs unredacted (redac
 **What it needs** (desktop app). `run.requires` lists the programs a plug-in needs on the computer that runs it: each a
 name (`"node"`) or a table `{program, name, url}` with the name to show and an `https://` page to get it from. A plug-in
 whose `exec` starts with `python`, `python3`, `py` or `node` needs that runtime without saying so, and Oni knows Python's
-and Node's download pages. When a plug-in is turned on, Oni looks for each one on PATH (and in the plug-in's folder) and
+and Node's download pages. When a plug-in is turned on, Oni looks for each one on PATH (on Windows also in the plug-in's folder, where `cmd` looks first) and
 offers its page before asking for approval; one that's still missing keeps the plug-in from running, and F10 shows
 **NEEDS PYTHON 3** with GET PYTHON 3 and CHECK AGAIN. Python counts when `python3`, `python` or Windows' `py` launcher
 says it's Python 3 (Windows' Store placeholder for `python` doesn't), and a leading `python` in `exec` runs as whichever

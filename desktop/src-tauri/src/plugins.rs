@@ -337,7 +337,9 @@ pub fn missing(m: &Manifest) -> Vec<Need> {
     if !m.host.is_empty() {
         return vec![];
     }
-    let here = |p: &str| m.folder.as_ref().is_some_and(|f| f.join(p).is_file()) || crate::util::which(p).is_some();
+    // cmd runs a program in the folder it starts in before looking on PATH; sh only looks on PATH
+    let beside = |p: &str| cfg!(windows) && m.folder.as_ref().is_some_and(|f| ["", ".exe", ".cmd", ".bat"].iter().any(|e| f.join(format!("{p}{e}")).is_file()));
+    let here = |p: &str| beside(p) || crate::util::which(p).is_some();
     m.requires.iter().filter(|n| if family(&n.program) == "python" { python().is_none() } else { !here(&n.program) }).cloned().collect()
 }
 
