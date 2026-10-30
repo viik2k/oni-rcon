@@ -3122,6 +3122,57 @@ on("join", (ev) => {
 on("leave", (ev) => check(ev.server));
 every("10s", () => Promise.all(servers().filter((s) => s.online).map((s) => check(s.name))));
 `],
+  ["Team balance", "Evens out the teams: moves one player from a team that's two or more ahead, a dead one first.", `// Evens out the teams. When one team has GAP or more players than another, it moves one player from the bigger team to
+// the smaller one and tells them why. A dead player goes first, so nobody is pulled out of a fight; if nobody on the
+// bigger team has died after WAIT, the newest arrival goes anyway. Admins, the player IDs in KEEP and anyone it moved in
+// the last 5 minutes stay put. Free-for-alls are left alone, and so is a team nobody is on (the server doesn't list it).
+const GAP = 2;
+const WAIT = 60000; // ms
+const KEEP = []; // player IDs, as F1 or "players" shows them: ["0123456789abcdef0123456789abcdef"]
+
+const TEAMS = ["red", "blue", "green", "orange", "purple", "gold", "brown", "pink"]; // the engine's order
+const teamOf = (p) => (typeof p.team === "number" ? TEAMS[p.team] ?? "" : String(p.team ?? "").toLowerCase());
+const idOf = (p) => String(p.player_id ?? p.name).toLowerCase();
+const keep = new Set(KEEP.map((id) => String(id).toLowerCase()));
+const seen = new Map(); // player ID -> when it turned up, for newest first
+const moved = new Map(); // player ID -> when this script moved it
+const uneven = new Map(); // server -> since when its teams have been uneven
+const rest = new Map(); // server -> no move before this, so the player list catches up
+const busy = new Set();
+
+async function check(server) {
+  if (busy.has(server) || Date.now() < (rest.get(server) ?? 0)) return;
+  busy.add(server);
+  try {
+    const list = await players(server).catch(() => null);
+    if (!list) return;
+    const now = Date.now(), teams = new Map();
+    list.forEach((p, i) => seen.has(idOf(p)) || seen.set(idOf(p), now + i)); // a later row joined later
+    for (const p of list) if (teamOf(p)) teams.set(teamOf(p), [...(teams.get(teamOf(p)) ?? []), p]);
+    const sides = [...teams].sort((a, b) => b[1].length - a[1].length);
+    const ffa = sides.length > 2 && sides.every(([, ps]) => ps.length === 1);
+    const [big, small] = [sides[0], sides[sides.length - 1]];
+    if (ffa || sides.length < 2 || big[1].length - small[1].length < GAP) return void uneven.delete(server);
+    if (!uneven.has(server)) uneven.set(server, now);
+    const dead = (p) => (p.alive === false ? 0 : 1);
+    const p = big[1]
+      .filter((p) => !p.admin && !keep.has(idOf(p)) && !(now - (moved.get(idOf(p)) ?? 0) < 300000))
+      .sort((a, b) => dead(a) - dead(b) || seen.get(idOf(b)) - seen.get(idOf(a)))[0];
+    if (!p || (dead(p) && now - uneven.get(server) < WAIT)) return;
+    moved.set(idOf(p), now);
+    uneven.delete(server);
+    rest.set(server, now + 15000);
+    await rcon(server, "team", p.player_id ?? p.name, small[0]);
+    await tell(server, p, \`Moved you to \${small[0]} to even the teams (\${big[1].length} v \${small[1].length}).\`);
+    log(\`\${server}: moved \${p.name} from \${big[0]} to \${small[0]}, \${big[1].length} v \${small[1].length}\`);
+  } finally {
+    busy.delete(server);
+  }
+}
+
+on(["join", "leave"], (ev) => check(ev.server));
+every("10s", () => Promise.all(servers().filter((s) => s.online).map((s) => check(s.name))));
+`],
 ];
 async function newScript() {
   const r = await modal({ title: "NEW SCRIPT", pick: TEMPLATES.map(([label, sub]) => ({ label, sub })), input: true, value: freeName("script"),
