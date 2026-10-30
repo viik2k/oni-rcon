@@ -25,7 +25,7 @@ struct Session {
     tx: mpsc::UnboundedSender<String>, // lines for its stdin
     waiting: Waiting,                  // asks not yet answered, by ref
     up: Arc<AtomicBool>,
-    task: tokio::task::JoinHandle<()>,
+    task: tauri::async_runtime::JoinHandle<()>,
 }
 
 /// What every run of one plug-in shares.
@@ -45,7 +45,7 @@ static REF: AtomicU64 = AtomicU64::new(1);
 /// Start its process, and keep it going, unless it already is. `servers` are `{index, name}` for each server.
 pub fn start(m: Manifest, servers: Vec<Value>, emit: Emit) {
     let mut all = SESSIONS.lock();
-    if all.get(&m.id).is_some_and(|s| !s.task.is_finished()) {
+    if all.get(&m.id).is_some_and(|s| !s.task.inner().is_finished()) {
         return;
     }
     let (tx, rx) = mpsc::unbounded_channel();
@@ -55,7 +55,8 @@ pub fn start(m: Manifest, servers: Vec<Value>, emit: Emit) {
     let names = servers.iter().filter_map(|s| s["name"].as_str().map(String::from)).collect();
     let id = m.id.clone();
     let c = Ctx { m, hello, names, tx: tx.clone(), waiting: waiting.clone(), up: up.clone(), emit };
-    all.insert(id, Session { tx, waiting, up, task: tokio::spawn(supervise(c, rx)) });
+    // the app's runtime, not tokio::spawn: a sync command calls this from the main thread, where there's no runtime
+    all.insert(id, Session { tx, waiting, up, task: tauri::async_runtime::spawn(supervise(c, rx)) });
 }
 
 /// Stop one, so the next start runs it afresh (after an update).
@@ -270,5 +271,21 @@ for line in sys.stdin:
         until(&seen, |v| v["kind"] == "plugin-view").await; // back after its second
         stop_all();
         assert!(send("echo-session", &json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn starts_from_a_thread_with_no_runtime() {
+        // a sync command runs on the main thread, outside any runtime: a bare tokio::spawn there panicked, and the
+        // release build's panic = "abort" took the whole console down the moment a session plug-in was approved
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("echo.py"), ECHO).unwrap();
+        let py = if crate::util::which("python").is_some() { "python" } else { "python3" };
+        let m = Manifest { id: "no-runtime".into(), name: "E".into(), mode: "session".into(), exec: format!("{py} echo.py"),
+            folder: Some(d.path().to_path_buf()), ..Default::default() };
+        let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let s2 = seen.clone();
+        std::thread::spawn(move || start(m, vec![json!({"index": 0, "name": "A"})], Arc::new(move |v| s2.lock().push(v)))).join().unwrap();
+        until(&seen, |v| v["kind"] == "plugin-view").await;
+        stop("no-runtime");
     }
 }
