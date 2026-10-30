@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 const MAX_LINE: u64 = 1 << 20; // bytes of one line it writes; the rest of a longer one is read as a line that won't parse
 const BACKOFF_MAX: f64 = 60.0; // seconds between restarts at most; a run this long resets the wait to 1 s
+const QUEUE: usize = 256; // lines waiting for it to read; past that, while it isn't reading, the rest are dropped
 
 /// Where what it says goes: the window's "oni" event in the app, a list in the tests.
 pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
@@ -141,15 +142,35 @@ async fn run(c: &Ctx, rx: &mut mpsc::UnboundedReceiver<String>) -> String {
             }
         }
     });
+    let mut writer = None;
     if stdin.write_all(format!("{}\n", c.hello).as_bytes()).await.is_ok() {
         c.up.store(true, Ordering::Relaxed);
         (c.emit)(json!({"kind": "plugin-session", "id": c.m.id, "state": "running", "detail": "", "retry_in": 0}));
+        // its stdin is written by a task of its own, so one that stops reading never stops this loop hearing it
+        let (wtx, mut wrx) = mpsc::channel::<String>(QUEUE);
+        writer = Some(tokio::spawn(async move {
+            while let Some(line) = wrx.recv().await {
+                if stdin.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        }));
+        let mut dropped = 0u64;
         loop {
-            // ponytail: one that never reads its stdin stalls this loop once the pipe fills; a writer task if that bites
             tokio::select! {
                 out = rx.recv() => match out {
-                    Some(line) if stdin.write_all(line.as_bytes()).await.is_ok() => {}
-                    _ => break,
+                    Some(line) => match wtx.try_send(line) {
+                        Ok(()) => dropped = 0,
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            if dropped % 1000 == 0 {
+                                (c.emit)(json!({"kind": "plugin-log", "id": c.m.id, "warn": true,
+                                    "text": format!("isn't reading what Oni sends it: {QUEUE} messages wait, newer ones are dropped")}));
+                            }
+                            dropped += 1;
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => break, // its stdin closed
+                    },
+                    None => break,
                 },
                 line = lines.recv() => match line {
                     Some(l) => handle(c, &l),
@@ -159,7 +180,9 @@ async fn run(c: &Ctx, rx: &mut mpsc::UnboundedReceiver<String>) -> String {
         }
     }
     c.up.store(false, Ordering::Relaxed);
-    drop(stdin);
+    if let Some(w) = writer {
+        w.abort(); // drops its stdin, the sign to exit, even mid-write to one that isn't reading
+    }
     let code = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
         Ok(Ok(s)) => s.code().unwrap_or(-1),
         _ => {
@@ -271,6 +294,35 @@ for line in sys.stdin:
         until(&seen, |v| v["kind"] == "plugin-view").await; // back after its second
         stop_all();
         assert!(send("echo-session", &json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn one_that_stops_reading_is_still_heard() {
+        // it never reads its stdin: once the pipe filled, writing to it blocked the loop that reads its stdout as well
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("deaf.py"), "import json, time\ni = 0\nwhile True:\n    print(json.dumps({\"type\": \"log\", \"text\": str(i)}), flush=True)\n    i += 1\n    time.sleep(0.01)\n").unwrap();
+        let py = if crate::util::which("python").is_some() { "python" } else { "python3" };
+        let m = Manifest { id: "deaf".into(), name: "D".into(), mode: "session".into(), exec: format!("{py} deaf.py"),
+            folder: Some(d.path().to_path_buf()), ..Default::default() };
+        let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let s2 = seen.clone();
+        start(m, vec![], Arc::new(move |v| s2.lock().push(v)));
+        until(&seen, |v| v["kind"] == "plugin-log").await;
+        let pad = "x".repeat(1000);
+        for _ in 0..3000 {
+            let _ = send("deaf", &json!({"type": "event", "ev": {"pad": pad}})); // 3 MB: far past any pipe's buffer
+        }
+        let heard = || seen.lock().iter().filter(|v| v["kind"] == "plugin-log" && v["warn"].is_null()).count();
+        let before = heard();
+        until(&seen, |v| v["warn"] == true && v["text"].as_str().is_some_and(|t| t.contains("isn't reading"))).await;
+        for _ in 0..200 {
+            if heard() > before + 50 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(heard() > before + 50, "its log stopped at {} after {before}", heard());
+        stop("deaf");
     }
 
     #[tokio::test]
