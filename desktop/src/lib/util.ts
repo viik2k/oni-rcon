@@ -176,6 +176,42 @@ export function age(seconds: number): string {
   return d ? `${d}d ${h}h` : h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(s % 60)}s` : `${s}s`;
 }
 
+/** Epoch seconds from a server time: seconds, milliseconds or an ISO string; null when it doesn't read. */
+export function epoch(ts: unknown): number | null {
+  if (typeof ts === "number" && isFinite(ts)) return ts > 1e11 ? ts / 1000 : ts;
+  const ms = typeof ts === "string" ? Date.parse(ts) : NaN;
+  return isNaN(ms) ? null : ms / 1000;
+}
+
+export const VPN_STALE_DAYS = 7; // the server calls a list stale after a week (0.9.22)
+export interface VpnList { name: string; size: string; age: string; stale: boolean; problem: string }
+
+/** The `vpn` reply's lists (0.9.22+): each source and the ASN table, with its age and whether it needs a look. */
+export function vpnLists(v: Dict, now = Date.now() / 1000): VpnList[] {
+  const l = v.lists;
+  if (!l || typeof l !== "object") return [];
+  const row = (name: string, size: string, at: unknown, problem: unknown): VpnList => {
+    const t = epoch(at);
+    return { name, size, age: t === null ? "never" : age(now - t), stale: t === null || now - t > VPN_STALE_DAYS * 86400, problem: problem ? String(problem) : "" };
+  };
+  const n = (x: unknown, unit: string) => (typeof x === "number" ? `${x} ${unit}` : "");
+  const out = ((l.sources ?? []) as Dict[]).map((s) =>
+    row(String(s.list ?? "?"), [n(s.ranges, "ranges"), n(s.asns, "ASNs")].filter(Boolean).join(" · "), s.fetched_at, s.problem));
+  const t = l.table as Dict | null | undefined;
+  if (t && typeof t === "object") out.push(row(`ASN table${t.table ? ` (${t.table})` : ""}`, [n(t.rows, "rows"), n(t.blocks, "blocks")].filter(Boolean).join(" · "),
+    t.fetched_at, t.problem));
+  return out;
+}
+
+/** CHECK IP's toast: the server's answer, plus the list it matched and fail-closed when the reply has them (0.9.22+). */
+export function vpnCheck(text: string, d: unknown): string {
+  if (!d || typeof d !== "object") return text;
+  const x = d as Dict, extra: string[] = [];
+  if (x.list) extra.push(`matched ${x.list}`);
+  if (x.fail_closed && x.refused && !x.listed && !x.local && !x.allowed) extra.push("refused because no list is loaded yet (fail_closed)");
+  return [text, ...extra].join(" · ");
+}
+
 const KEY_LIKE = /rfk_[A-Za-z0-9_\-]{6,}/g;
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 export const BLANK = "███.███.███.███";

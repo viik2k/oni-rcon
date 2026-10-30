@@ -6,7 +6,7 @@ import { BAN_OPS, OPS, OP_GROUPS, RECLAIMER_OPS, TIPS, bl, op } from "../actions
 import { projectOf, reclaimerOnly } from "../lib/projects";
 import { norm, refsOf } from "../lib/forge";
 import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
-import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
+import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, vpnLists, type Dict, type Kick, type Line } from "../lib/util";
 import { Btn, L, Panel, Table, useSize, type Row } from "./ui";
 
 const QUIET = new Set(["", "unknown", "none"]);
@@ -177,6 +177,11 @@ export function Blacklist() {
     const on = pick(e, "online", "connected") ?? (id ? online.has(id) : undefined);
     arows.push({ id: key, cells: [[[name || "—", name ? AMBER : DIM]], id || "—", [[on ? "ON" : on === false ? "—" : "?", on ? GREEN : DIM]], [[from || "—", DIM]]] });
   }
+  const lists = vpnLists(v), bad = lists.filter((l) => l.stale || l.problem).length;
+  const lrows: Row[] = lists.map((l, i) => ({ id: String(i), cells: [[[l.name, l.stale || l.problem ? AMBER : WHITE]], [[l.size, DIM]],
+    [[l.age, l.stale ? RED : GREEN]], [[l.problem || "—", l.problem ? RED : DIM]]] }));
+  const ltitle = !("lists" in v) ? "VPN LISTS · needs server 0.9.22 or later" : !v.lists ? "VPN LISTS · none fetched yet"
+    : `VPN LISTS · ${lists.length}${bad ? ` · ${bad} need a look` : ""}`;
   blUi.kicks = st.kicks;
   const krows: Row[] = [...st.kicks].reverse().map(([key, k]) => {
     const left = kickLeft(k);
@@ -192,9 +197,14 @@ export function Blacklist() {
         <Table id="bans" cols={["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"]} rows={rows} selected={blUi.ban} onSelect={sel("ban")} />
       </Panel>
       <div className="hsplit grow">
-        <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}`} className="grow">
-          <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
-        </Panel>
+        <div className="vsplit grow">
+          <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}${v.fail_closed ? " · fail-closed" : ""}`} className="grow">
+            <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
+          </Panel>
+          <Panel title={ltitle} className="grow">
+            <Table id="vpnlists" cols={["LIST", "SIZE", "AGE", "PROBLEM"]} rows={lrows} cursor={false} />
+          </Panel>
+        </div>
         <Panel title={a ? `ADMINS · ${arows.length}` : "ADMINS · needs server 0.9.16 or later"} className="grow">
           <Table id="admins" cols={["ADMIN", "PLAYER ID", "ON", "FROM"]} rows={arows} selected={blUi.admin} onSelect={sel("admin")} />
         </Panel>

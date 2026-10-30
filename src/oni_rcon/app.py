@@ -69,7 +69,7 @@ BAN_TIMES = [("Permanent", ""), ("30 minutes", "30m"), ("2 hours", "2h"), ("12 h
 MUTE_TIMES = [("Until restart", ""), ("10 minutes", "10m"), ("1 hour", "1h"), ("12 hours", "12h"), ("1 day", "1d")]
 COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke",
             "mute", "unmute", "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername",
-            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "pardon", "help"]
+            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "pardon", "admin", "help"]
 
 CATS = {"chat": WHITE, "combat": RED, "traffic": CYAN, "moderation": AMBER, "ops": GREY}
 KIND = {"chat": "chat", "kill": "combat", "join": "traffic", "leave": "traffic", "refused": "traffic",
@@ -118,12 +118,14 @@ OPS = [("load", "LOAD MAP+MODE", "primary"), ("map", "CHANGE MAP", "default"), (
        ("maxping", "PING LIMIT", "default"), ("reconnect", "RECONNECT", "default")]
 BAN_OPS = [("newban", "NEW BAN", "error"), ("unban", "UNBAN  u", "warning"), ("vpnallow", "VPN ALLOW  a", "default"),
            ("vpnrevoke", "VPN REVOKE  r", "default"), ("vpncheck", "CHECK IP", "default"),
-           ("pardon", "PARDON  o", "default")]
+           ("pardon", "PARDON  o", "default"), ("adminadd", "ADD ADMIN  p", "primary"),
+           ("adminremove", "REMOVE ADMIN  d", "warning")]
 OP_GROUPS = [("MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]),
              ("TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]),
              ("SERVER", ["broadcast", "servername", "password", "maxping", "reconnect"])]
 PLAYER_OPS = [("tell", "TELL", "t"), ("kick", "KICK", "k"), ("ban", "BAN", "b"), ("mute", "MUTE", "m"),
-              ("team", "TEAM", "j"), ("vpnallow", "VPN OK", "v"), ("copy", "COPY ID", "y")]
+              ("team", "TEAM", "j"), ("vpnallow", "VPN OK", "v"), ("admin", "MAKE ADMIN", "p"),
+              ("copy", "COPY ID", "y")]
 
 # What each control does, in plain words: shown when the mouse rests on it.
 TIPS = {
@@ -149,12 +151,15 @@ TIPS = {
     "bl-vpnrevoke": "Take back the selected VPN allowance.  Key: r",
     "bl-vpncheck": "Check whether an address looks like a VPN.",
     "bl-pardon": "Let the selected kicked player rejoin now, or name one. Their next kick starts at 10 minutes again.  Key: o",
+    "bl-adminadd": "Make a player an admin on every server sharing the ban list, at once.  Key: p",
+    "bl-adminremove": "Take back the selected admin, on every server sharing the ban list.  Key: d",
     "pl-tell": "Send a private message only they can see.  Key: t",
     "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
     "pl-ban": "Keep them out, for a while or for good.  Key: b",
     "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
     "pl-team": "Move them to another team.  Key: j",
     "pl-vpnallow": "Let them join through a VPN.  Key: v",
+    "pl-admin": "Make them an admin (or take it back), on every server sharing the ban list.  Key: p",
     "pl-copy": "Copy their player ID, for a ban list or a report.  Key: y",
     "add-server": "Add another server with the setup screen.",
     "f-local": "Show only what happens on the selected server.",
@@ -379,6 +384,76 @@ def age(seconds: float) -> str:
     s = max(0, int(seconds))
     d, h, m = s // 86400, s % 86400 // 3600, s % 3600 // 60
     return f"{d}d {h}h" if d else f"{h}h {m:02d}m" if h else f"{m}m {s % 60:02d}s" if m else f"{s}s"
+
+
+def epoch(ts) -> float | None:
+    """Epoch seconds from a server time: seconds, milliseconds or an ISO string; None when it doesn't read."""
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return ts / 1000 if ts > 1e11 else float(ts)
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() if ts else None
+    except ValueError:
+        return None
+
+
+VPN_STALE_DAYS = 7  # the server calls a list stale after a week (0.9.22)
+
+
+ADMIN_NOTE = {
+    "add": "They can kick, ban and move players in game, and can't be vote-kicked. It applies at once on every server "
+           "sharing this ban list.",
+    "remove": "Applies at once on every server sharing this ban list. An admin written in dedicated.toml can't be "
+              "removed from here.",
+}
+
+
+def admin_rows(a: dict, players: list) -> list[dict]:
+    """The `admins` reply as rows: target (what `admin remove` takes), name, id, on (None: unknown), from, and fixed
+    (written in dedicated.toml, so RCON can't remove it).
+    ponytail: the reply isn't documented, so this takes an ID string or an object with the usual field names, as the
+    desktop does."""
+    online = {str(pick(p, "player_id", "id", default="")) for p in players}
+    rows = []
+    for e in a.get("admins") or a.get("entries") or a.get("list") or []:
+        e = e if isinstance(e, dict) else {"id": e}
+        pid, name = str(pick(e, "player_id", "id", default="")), str(pick(e, "name", default=""))
+        if not (pid or name):
+            continue
+        src, on = str(pick(e, "source", "from", "origin", default="")), pick(e, "online", "connected")
+        rows.append({"target": pid or name, "name": name, "id": pid, "from": src,
+                     "fixed": bool(re.search("toml|config", src, re.I)),
+                     "on": bool(on) if on is not None else (pid in online if pid else None)})
+    return rows
+
+
+def vpn_lists(v: dict, now: float | None = None) -> list[dict]:
+    """The `vpn` reply's lists (0.9.22+): each source and the ASN table, with its size, age and whether it needs a
+    look (older than a week, never fetched, or a fetch problem). Empty before 0.9.22 or the first refresh."""
+    l, now = v.get("lists"), time.time() if now is None else now
+    if not isinstance(l, dict):
+        return []
+
+    def row(name, size, at, problem) -> dict:
+        t = epoch(at)
+        return {"name": name, "size": size, "age": "never" if t is None else age(now - t),
+                "stale": t is None or now - t > VPN_STALE_DAYS * 86400, "problem": str(problem or "")}
+    n = lambda *pairs: " · ".join(f"{x} {unit}" for x, unit in pairs if isinstance(x, int))
+    out = [row(str(s.get("list", "?")), n((s.get("ranges"), "ranges"), (s.get("asns"), "ASNs")), s.get("fetched_at"),
+               s.get("problem")) for s in l.get("sources") or [] if isinstance(s, dict)]
+    if isinstance(t := l.get("table"), dict):
+        out.append(row(f"ASN table ({t['table']})" if t.get("table") else "ASN table",
+                       n((t.get("rows"), "rows"), (t.get("blocks"), "blocks")), t.get("fetched_at"), t.get("problem")))
+    return out
+
+
+def vpn_check(text: str, d) -> str:
+    """CHECK IP's answer, plus the list it matched and a fail-closed refusal when the reply has them (0.9.22+)."""
+    if not isinstance(d, dict):
+        return text
+    extra = [f"matched {d['list']}"] if d.get("list") else []
+    if d.get("fail_closed") and d.get("refused") and not (d.get("listed") or d.get("local") or d.get("allowed")):
+        extra.append("refused because no list is loaded yet (fail_closed)")
+    return " · ".join([text, *extra])
 
 
 def redact_addr(v, on: bool) -> str:
@@ -850,7 +925,7 @@ GUIDE = [
                           "ban, mute, move or allow them through a VPN."),
         ("Ping", "PING is what a player joined with, read from the server's log (needs ping_log in the config; "
                   "RCON has no live ping). Over 200 is red."),
-        ("Keys", "t tell  ·  k kick  ·  b ban  ·  m mute  ·  j team  ·  v VPN allow  ·  y copy their ID"),
+        ("Keys", "t tell  ·  k kick  ·  b ban  ·  m mute  ·  j team  ·  v VPN allow  ·  p make admin  ·  y copy their ID"),
         ("Flags", "ADM an admin  ·  MUT muted  ·  KIA dead right now  ·  NEW just joined  ·  ★5 on a killing spree"),
         ("Their file", "The glyph is drawn from their player ID: the same player always gets the same one. Medals and "
                        "their streak count what this console has seen since it connected."),
@@ -877,10 +952,17 @@ GUIDE = [
     ("F4  BLACKLIST  ·  bans", [
         ("Lists", "Every ban by player, address and device, and who may join through a VPN. Pick a row, then UNBAN "
                   "or REVOKE."),
+        ("VPN lists", "Server 0.9.22 or later: each list the server blocks VPNs with, its size and age, and the last "
+                      "fetch problem. A list older than a week, never fetched, or failing is flagged: the server keeps "
+                      "blocking with the old copy, so refresh it on the server. CHECK IP names the list an address "
+                      "matched."),
         ("Kicks", "A kick keeps a player out for 10, 30, 60 and then 120 minutes. KICKED lists who this console saw "
                   "kicked, or turned away for a recent kick, with how long they're still out. PARDON (o) lets the "
                   "selected one rejoin now and starts their next kick at 10 minutes again; with nothing selected it "
                   "asks for the name they were kicked under, a player ID or an IP. Needs server 0.9.16 or later."),
+        ("Admins", "ADMINS lists every admin, who's on, and where each was made. ADD ADMIN (p) and REMOVE ADMIN (d) "
+                   "apply at once on every server sharing the ban list (server 0.9.16 or later). An admin written in "
+                   "dedicated.toml changes there: oni-rcon doesn't edit it."),
     ]),
     ("F5  CONSOLE  ·  typing commands", [
         ("Commands", "For anything without a button. Type help for the server's list; ↑ ↓ bring back earlier ones."),
@@ -1104,13 +1186,14 @@ class Assets(Horizontal):
     BINDINGS = [Binding("t", "app.player('tell')", "Tell"), Binding("k", "app.player('kick')", "Kick"),
                 Binding("b", "app.player('ban')", "Ban"), Binding("m", "app.player('mute')", "Mute"),
                 Binding("j", "app.player('team')", "Team"), Binding("v", "app.player('vpnallow')", "VPN allow"),
-                Binding("y", "app.player('copy')", "Copy ID")]
+                Binding("p", "app.player('admin')", "Admin"), Binding("y", "app.player('copy')", "Copy ID")]
 
 
 class Blacklist(Vertical):
     BINDINGS = [Binding("n", "app.bl('newban')", "New ban"), Binding("u", "app.bl('unban')", "Unban"),
                 Binding("a", "app.bl('vpnallow')", "VPN allow"), Binding("r", "app.bl('vpnrevoke')", "VPN revoke"),
-                Binding("o", "app.bl('pardon')", "Pardon")]
+                Binding("o", "app.bl('pardon')", "Pardon"), Binding("p", "app.bl('adminadd')", "Add admin"),
+                Binding("d", "app.bl('adminremove')", "Remove admin")]
 
 
 class ForgePane(Vertical):
@@ -1351,6 +1434,7 @@ class OniApp(App):
         self.ban_rows: dict[str, str] = {}
         self.vpn_rows: dict[str, str] = {}
         self.kick_rows: dict[str, dict] = {}
+        self.admin_rows: dict[str, dict] = {}
         self.alert_at = float("-inf")  # when the last alert came in; each station counts its own unseen ones
         self.hsetup = health or HealthSetup()
         self.mon = Monitor(self.hsetup.min_free_mb)
@@ -1420,7 +1504,9 @@ class OniApp(App):
                     with Blacklist():
                         yield Roster(id="bans", cursor_type="row", zebra_stripes=True)
                         yield Roster(id="vpn", cursor_type="row", zebra_stripes=True)
+                        yield Roster(id="vpnlists", cursor_type="none", zebra_stripes=True)
                         yield Roster(id="kicks", cursor_type="row", zebra_stripes=True)
+                        yield Roster(id="admins", cursor_type="row", zebra_stripes=True)
                         with Horizontal(classes="bar"):
                             for op, label, variant in BAN_OPS:
                                 yield Button(label, id=f"bl-{op}", variant=variant)
@@ -1471,7 +1557,8 @@ class OniApp(App):
         self.theme = "oni"
         cols = {"#players": ["#", "CALLSIGN", "TEAM", "SCORE", "K", "D", "K/D", "PING", "HEALTH", "SHIELD", "FLAGS"],
                 "#rotation": ["#", "MAP", "MODE"], "#bans": ["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"],
-                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"], "#kicks": ["KICKED", "PLAYER ID", "REASON", "BY", "OUT"],
+                "#vpn": ["ALLOWED THROUGH VPN", "NOTE"], "#vpnlists": ["VPN LIST", "SIZE", "AGE", "PROBLEM"],
+                "#kicks": ["KICKED", "PLAYER ID", "REASON", "BY", "OUT"], "#admins": ["ADMIN", "PLAYER ID", "ON", "FROM"],
                 "#listings": ["", "TYPE", "TITLE", "AUTHOR", "RATING", "RECENT", "FIT"],
                 "#versions": ["", "VERSION", "PUBLISHED", "NOTES"],
                 "#crashes": ["WHEN", "SERVER", "CLASS", "PLAYERS", "DETAIL", "RCON"],
@@ -2182,7 +2269,7 @@ class OniApp(App):
             self.relabel()
             if st is self.cur:  # its version decides what fits it in the catalog
                 self.paint_forge()
-            self.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn")
+            self.fetch(st, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins")
             st.polled = time.monotonic()
             self.log_event(st, {"event": "uplink", "text": f"SECURE  {detail}"})
             self.note_mixed()
@@ -2269,6 +2356,8 @@ class OniApp(App):
     async def _fetch(self, st: Station, what: tuple) -> None:
         replies = await asyncio.gather(*(st.rcon.call(w) for w in what), return_exceptions=True)
         for w, r in zip(what, replies):
+            if w == "admins" and isinstance(r, dict) and isinstance(r.get("data"), list):
+                r["data"] = {"admins": r["data"]}  # a bare list, as the desktop also takes it
             if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), dict):
                 if w == "status" and r["data"].get("phase") != st.data.get("status", {}).get("phase"):
                     st.medals.new_game()
@@ -2420,6 +2509,8 @@ class OniApp(App):
             self.fetch(st, "players", "status")
         if kind in ("ban", "unban"):
             self.fetch(st, "bans")
+        if kind in ("admin_added", "admin_removed"):
+            self.fetch(st, "admins")
         if kind == "vote":
             self.fetch(st, "vote")
         if kind == "control":
@@ -2485,6 +2576,8 @@ class OniApp(App):
             self.paint_ops()
         if {"bans", "vpn"} & set(what):
             self.paint_bans()
+        if {"admins", "players"} & set(what):
+            self.paint_admins()
 
     def paint_all(self, feed: bool = True) -> None:
         for st in self.stations:
@@ -2492,6 +2585,7 @@ class OniApp(App):
         self.paint_players()
         self.paint_ops()
         self.paint_bans()
+        self.paint_admins()
         self.paint_forge()
         self.paint_uplink()
         self.paint_plugins()
@@ -2697,6 +2791,7 @@ class OniApp(App):
             return
         box.styles.text_align = "left"
         self.query_one("#pl-mute", Button).label = "UNMUTE" if p.get("muted") else "MUTE"
+        self.query_one("#pl-admin", Button).label = "REMOVE ADMIN" if p.get("admin") else "MAKE ADMIN"
         team, name = team_of(p), str(pick(p, "name", default="?"))
         color = TEAM_COLOR.get(team, WHITE)
         k, d = pick(p, "kills"), pick(p, "deaths")
@@ -2854,7 +2949,19 @@ class OniApp(App):
         t = self.query_one("#vpn", Roster)
         t.fill(rows)
         t.border_title = Text(f"VPN ALLOWANCES · blocking {'ON' if v.get('block_vpn') else 'OFF'}"
-                              + (f" · {v['ranges']} ranges" if isinstance(v.get("ranges"), int) else ""))
+                              + (f" · {v['ranges']} ranges" if isinstance(v.get("ranges"), int) else "")
+                              + (" · fail-closed" if v.get("fail_closed") else ""))
+        lists = vpn_lists(v)
+        t = self.query_one("#vpnlists", Roster)
+        t.fill([(str(i), [Text(x["name"], AMBER if x["stale"] or x["problem"] else WHITE), Text(x["size"], DIM),
+                          Text(x["age"], RED if x["stale"] else GREEN),
+                          Text(redact_text(x["problem"], self.redact) or "—", RED if x["problem"] else DIM)])
+                for i, x in enumerate(lists)])
+        bad = sum(bool(x["stale"] or x["problem"]) for x in lists)
+        t.border_title = Text("VPN LISTS" if not v else "VPN LISTS · needs server 0.9.22 or later" if "lists" not in v
+                              else "VPN LISTS · none fetched yet" if not v["lists"]
+                              else f"VPN LISTS · {len(lists)}" + (f" · {bad} need a look" if bad else ""),
+                              AMBER if bad else "")
         self.kick_rows = dict(reversed(self.cur.kicks.items()))
         t = self.query_one("#kicks", Roster)
         t.fill([(key, [Text(k["name"] or "—", AMBER if k["name"] else DIM), k["id"] or redact_addr(k["ip"], self.redact) or "—",
@@ -2863,7 +2970,22 @@ class OniApp(App):
         t.border_title = Text(f"KICKED · {len(self.kick_rows)}")
         for op, *_ in BAN_OPS:
             self.query_one(f"#bl-{op}", Button).disabled = not self.cur.online or (
-                op == "unban" and not self.ban_rows or op == "vpnrevoke" and not self.vpn_rows)
+                op == "unban" and not self.ban_rows or op == "vpnrevoke" and not self.vpn_rows
+                or op == "adminremove" and not self.admin_rows)
+
+    def paint_admins(self) -> None:
+        a = self.cur.data.get("admins")
+        rows = admin_rows(a or {}, (self.cur.data.get("players") or {}).get("players") or [])
+        self.admin_rows = {}
+        for e in rows:
+            key = e["target"] if e["target"] not in self.admin_rows else f"{e['target']}~{len(self.admin_rows)}"
+            self.admin_rows[key] = e
+        t = self.query_one("#admins", Roster)
+        t.fill([(key, [Text(e["name"] or "—", AMBER if e["name"] else DIM), e["id"] or "—",
+                       Text("ON" if e["on"] else "—" if e["on"] is False else "?", GREEN if e["on"] else DIM),
+                       Text(e["from"] or "—", DIM)]) for key, e in self.admin_rows.items()])
+        t.border_title = f"ADMINS · {len(rows)}" if a is not None else "ADMINS · needs server 0.9.16 or later"
+        self.query_one("#bl-adminremove", Button).disabled = not self.cur.online or not self.admin_rows
 
     def repaint_feed(self) -> None:
         log = self.query_one("#feed", RichLog)
@@ -2889,7 +3011,7 @@ class OniApp(App):
                 if t.row_count:
                     t.move_cursor(row=0)  # another station's lists: start at the top
             self.paint_all(feed=self.local_only)
-            self.fetch(self.cur, "status", "players", "nextmap", "vote", "bans", "vpn")
+            self.fetch(self.cur, "status", "players", "nextmap", "vote", "bans", "vpn", "admins")
 
     @on(DataTable.RowHighlighted, "#players")
     def _row(self, _) -> None:
@@ -3061,7 +3183,7 @@ class OniApp(App):
             self.details.clear()
             self.detail_want = None
             self.forge_load(fresh=True)
-        self.fetch(self.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn")
+        self.fetch(self.cur, "status", "players", "maps", "modes", "nextmap", "vote", "bans", "vpn", "admins")
         for st in self.stations:
             self.fetch(st, "status")
 
@@ -3174,6 +3296,12 @@ class OniApp(App):
                                                  note="Lets them join through a VPN on every server sharing the ban list."))
             if f is not None:
                 self.send(st, "vpnallow", t, *opt(f["note"]), then=("vpn",))
+        elif what == "admin":
+            sub = "remove" if p.get("admin") else "add"
+            if await self.push_screen_wait(Confirm(f"{'REMOVE ADMIN' if p.get('admin') else 'MAKE ADMIN'} · {name}",
+                                                   ADMIN_NOTE[sub], verb="REMOVE" if p.get("admin") else "MAKE ADMIN",
+                                                   danger=bool(p.get("admin")))):
+                self.send(st, "admin", sub, t, then=("players", "admins"))
 
     def entries(self, st: Station, what: str) -> list:
         return [(Text.assemble((str(pick(e, "name", default="?")), WHITE), (f"  {e.get('kind', '')}", DIM),
@@ -3303,7 +3431,32 @@ class OniApp(App):
             f = await self.push_screen_wait(Form("CHECK AN ADDRESS", [("ip", "IP address", "")], verb="CHECK",
                                                  required=("ip",)))
             if f:
-                self.send(st, "vpn", f["ip"])
+                r = await self.cmd(st, "vpn", f["ip"].strip(), toast=False)
+                if r.get("ok"):
+                    self.notify(vpn_check(self.reply_text(r), r.get("data")), title=f"{st.label} · CHECK IP")
+        elif name == "adminadd":
+            players = (st.data.get("players") or {}).get("players") or []
+            choices = [(str(pick(p, "name", default="?")), target_of(p)) for p in players if not p.get("admin")]
+            who = await self.push_screen_wait(Pick("MAKE ADMIN", [*choices, (Text("Someone not on: type their player ID…",
+                                                                                  DIM), "?")]))
+            if who == "?":
+                f = await self.push_screen_wait(Form("MAKE ADMIN", [("id", "Player ID", "")], verb="MAKE ADMIN",
+                                                     required=("id",), note=ADMIN_NOTE["add"]))
+                if f:
+                    self.send(st, "admin", "add", f["id"].strip(), then=("admins", "players"))
+            elif who and await self.push_screen_wait(Confirm(f"MAKE ADMIN · {dict(map(reversed, choices))[who]}",
+                                                             ADMIN_NOTE["add"], verb="MAKE ADMIN", danger=False)):
+                self.send(st, "admin", "add", who, then=("admins", "players"))
+        elif name == "adminremove":
+            e = self.admin_rows.get(self.query_one("#admins", Roster).selected)
+            if not e:
+                self.notify("Select an admin first.", severity="warning")
+            elif e["fixed"]:
+                self.notify(f"{e['name'] or e['id']} is written in dedicated.toml: take them out there, then reload.",
+                            title="REMOVE ADMIN", severity="warning")
+            elif await self.push_screen_wait(Confirm(f"REMOVE ADMIN  {e['name'] or e['id']}", ADMIN_NOTE["remove"],
+                                                     verb="REMOVE")):
+                self.send(st, "admin", "remove", e["target"], then=("admins", "players"))
 
     # --- forge: the ReclaimerForge catalog --------------------------------------------------------------------
     def on_unmount(self) -> None:

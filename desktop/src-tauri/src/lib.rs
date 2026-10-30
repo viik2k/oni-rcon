@@ -552,7 +552,25 @@ async fn save_playlist(index: usize, playlist: Value, path: Option<String>, repl
         return Ok(json!({"path": path, "exists": true}));
     }
     t.write_text(&rel, &json).await?;
-    Ok(json!({"path": path, "exists": false}))
+    Ok(json!({"path": path, "exists": false, "flood": flood_missing(&t, &playlist).await}))
+}
+
+/// Why a playlist's Flood Infection games won't load, or "": the server's game folder (beside its content folder, as
+/// init lays it out) has Halo 3 but not the Flood's map. A game folder that isn't there (Docker's GAME_DIR) isn't judged.
+async fn flood_missing(t: &install::Target, playlist: &Value) -> String {
+    let games = playlist["games"].as_array().map_or(&[][..], Vec::as_slice);
+    let flood: Vec<&str> = games.iter().filter_map(|g| g["game"].as_str()).filter(|g| host::plays_flood(g)).collect();
+    if flood.is_empty() {
+        return String::new();
+    }
+    let (dll, map) = ("../game/halo3/halo3.dll".to_string(), format!("../game/{}", host::FLOOD_MAP));
+    match t.existing(&[dll.clone(), map.clone()]).await {
+        Ok(have) if have.contains(&dll) && !have.contains(&map) => format!(
+            "{} needs 050_floodvoi.map, and the server's game folder doesn't have it: copy it from MCC's halo3\\maps into game/halo3/maps beside the content folder, or a vote for it passes and the game fails to load.",
+            flood[0]
+        ),
+        _ => String::new(),
+    }
 }
 
 /// NEW GAME TYPE: written into the server's content folder, Game Modes/; an existing one is only replaced when asked.

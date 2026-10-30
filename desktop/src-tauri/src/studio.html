@@ -1553,7 +1553,7 @@ function showTip(p) {
       const v = t.text.slice(1, -1), sg = sigAt(m, m.starts[t.l] + t.a);
       if (sg && !sg.obj && sg.name === "on" && FIELDS[v]) doc = [`"${v}"`, `${KIND_DOC[v][0].toUpperCase() + KIND_DOC[v].slice(1)}. ev has ${FIELDS[v].split(" ").join(", ")}.`];
       else if (sg && !sg.obj && sg.name === "rcon" && sg.arg === 1 && RCON.includes(v))
-        doc = [`rcon(server, "${v}")`, READONLY.has(v) ? "Reads only: a TEST run sends it too." : "Changes the server: a TEST run only logs it."];
+        doc = [`rcon(server, "${v}")`, READONLY.has(v) ? (v === "nextmap" || v === "admins" ? "Reads only without arguments: a TEST run sends it then, and only logs it with them." : "Reads only: a TEST run sends it too.") : "Changes the server: a TEST run only logs it."];
     }
   }
   if (doc) parts.push(`<code>${esc(doc[0])}</code>\n${esc(doc[1])}`);
@@ -2163,7 +2163,7 @@ class Run {
     if (this.rconT.length >= 120) { this.log("warn", `not sent, over 120 commands a minute: ${server} › ${line}`); return no("not sent: over 120 commands a minute"); }
     this.rconT.push(now);
     this.rcon++;
-    if (this.dry && !READONLY.has(command)) { this.log("rcon", `TEST, not sent: ${server} › ${line}`); return reply({ ok: null, text: "TEST run: not sent", data: null }); }
+    if (this.dry && !(READONLY.has(command) && !(args.length && (command === "nextmap" || command === "admins")))) { this.log("rcon", `TEST, not sent: ${server} › ${line}`); return reply({ ok: null, text: "TEST run: not sent", data: null }); }
     if (command === "say" || command === "tell") {
       const t = (sayT.get(server) || []).filter((x) => now - x < 60000);
       if (t.length >= 20) { this.log("warn", `not sent, over 20 say and tell a minute on ${server}: ${line}`); return no("not sent: over 20 say and tell a minute on this server"); }
@@ -2639,7 +2639,7 @@ function docsHTML() {
     sec("HOW SCRIPTS RUN", [
       "Each script runs on its own, apart from the rest: no network, no files, no page. It reaches your servers only through the API below, and Oni's plug-in permissions decide what it may send.",
       "RUN (Ctrl+Enter) saves the script, turns it on and starts it again: it runs for real, and starts each time Oni does, until you STOP it. Its light in SCRIPTS is green while it runs.",
-      "TEST (Ctrl+Shift+Enter) runs the editor's text, saved or not, as a dry run. Commands that only read (status, players, bans, maps, modes, nextmap, admins, help) are sent; the rest, say() and kick() included, are logged instead, and resolve to { ok: null }. notify(), discord() and telegram() are logged too, and its store starts from the saved one but is never saved. Real events reach it, and SIMULATE sends it made-up ones.",
+      "TEST (Ctrl+Shift+Enter) runs the editor's text, saved or not, as a dry run. Commands that only read (status, players, bans, maps, modes, help, and nextmap and admins without arguments) are sent; the rest, say() and kick() included, are logged instead, and resolve to { ok: null }. notify(), discord() and telegram() are logged too, and its store starts from the saved one but is never saved. Real events reach it, and SIMULATE sends it made-up ones.",
       "The top level runs once. on(), command(), every() and after() keep a script running; once nothing is left to wait for it is finished. An error in a handler is logged and the script carries on; one at the top level stops it.",
     ].map(text).join("")),
     sec("THE API", [...API, ...Object.keys(DOC).filter((k) => k.startsWith("store."))].map((k) => it(DOC[k])).join("")),
@@ -2986,6 +2986,88 @@ const HOOK = "admin";
 on("join", (ev) => discord(HOOK, \`→ \${ev.player} joined \${ev.server}\`));
 on("kick", (ev) => discord(HOOK, \`\${ev.player} was kicked from \${ev.server} by \${ev.by}: \${ev.reason || "no reason given"}\`));
 on("ban", (ev) => discord(HOOK, \`⛔ \${ev.player} was banned on \${ev.server} by \${ev.by}: \${ev.reason || "no reason given"}\`));
+`],
+  ["Next-game vote", "!nextvote: players vote on what plays next, and the winner is queued after this game.", `// !nextvote: an admin opens a vote on what plays next. Players answer with a number (2 or !2), and their last
+// answer counts. Standings go out with 30 and 10 seconds left, and the winner is queued with nextmap, so this game
+// finishes first. !nextvote end closes it early, !nextvote cancel drops it, and anyone can type !nextvote list.
+// Leave CHOICES empty to vote on up to 5 games from the server's own rotation.
+const CHOICES = []; // e.g. [["Guardian", "Slayer"], ["Narrows", "CTF"], ["The Pit", ""]]: a map, then a mode ("" keeps the rules)
+const SECONDS = 60;
+const timers = new Map(); // server -> its vote's after() ids, so end and cancel stop them
+
+const label = (c) => (c.mode ? \`\${c.map} (\${c.mode})\` : c.map);
+const list = (v) => v.choices.map((c, i) => \`\${i + 1}. \${label(c)}\`).join("  ");
+const tally = (v) => v.choices.map((_, i) => Object.values(v.answers).filter((a) => a === i + 1).length);
+const standings = (v) => tally(v).map((n, i) => \`\${i + 1}: \${n}\`).join("  ");
+
+async function isAdmin(ev) {
+  if (!ev.player_id) return false; // a name alone could be anyone's
+  const r = await rcon(ev.server, "admins");
+  return (r.data?.admins ?? []).some((a) => a.player_id === ev.player_id);
+}
+
+function stop(server) {
+  for (const id of timers.get(server) ?? []) cancel(id);
+  timers.delete(server);
+  store.del("vote:" + server);
+}
+
+function schedule(server) {
+  const left = store.get("vote:" + server).ends - Date.now(), ids = [after(Math.max(left, 1000), () => finish(server))];
+  for (const s of [30, 10]) {
+    if (left > (s + 1) * 1000) ids.push(after(left - s * 1000, () => say(server, \`\${s} s left: \${standings(store.get("vote:" + server))}\`)));
+  }
+  timers.set(server, ids);
+}
+
+async function finish(server) {
+  const v = store.get("vote:" + server);
+  stop(server);
+  if (!v) return;
+  const n = tally(v), top = Math.max(...n);
+  if (!top) return say(server, "Nobody voted, so the next game stays as it was.");
+  const tied = n.flatMap((k, i) => (k === top ? [i] : [])), c = v.choices[tied[Math.floor(Math.random() * tied.length)]];
+  const r = await rcon(server, "nextmap", ...(c.mode ? [c.map, c.mode] : [c.map]));
+  if (r.ok === false) {
+    warn(\`couldn't queue \${label(c)} on \${server}:\`, r.text);
+    return say(server, \`\${label(c)} won, but it couldn't be queued.\`);
+  }
+  say(server, \`\${label(c)} plays next, with \${top} vote\${top === 1 ? "" : "s"}\${tied.length > 1 ? " (a tie, drawn at random)" : ""}.\`);
+}
+
+command("!nextvote", async (ev) => {
+  const sub = (ev.args[0] ?? "").toLowerCase(), v = store.get("vote:" + ev.server);
+  if (sub === "list") return ev.tell(v ? list(v) : "No vote is open.");
+  if (!(await isAdmin(ev))) return ev.tell("Only an admin can start or stop a vote.");
+  if (sub === "end" || sub === "cancel") {
+    if (!v) return ev.tell("No vote is open.");
+    if (sub === "end") return finish(ev.server);
+    stop(ev.server);
+    return say(ev.server, "The vote on the next game was cancelled.");
+  }
+  if (v) return ev.tell("A vote is already open: !nextvote end or !nextvote cancel.");
+  let choices = CHOICES.map(([map, mode = ""]) => ({ map, mode }));
+  if (!choices.length) {
+    const rot = (await rcon(ev.server, "nextmap")).data?.rotation ?? [];
+    choices = rot.map((e) => ({ map: e.map, mode: e.mode ?? "" })).filter((c, i, all) => all.findIndex((d) => label(d) === label(c)) === i).slice(0, 5);
+  }
+  if (choices.length < 2) return ev.tell("Nothing to vote on: fill in CHOICES at the top of the script.");
+  store.set("vote:" + ev.server, { choices, answers: {}, ends: Date.now() + SECONDS * 1000 });
+  schedule(ev.server);
+  await say(ev.server, \`Vote on the next game, \${SECONDS} s: answer with its number.\`);
+  say(ev.server, list(store.get("vote:" + ev.server)));
+});
+
+on("chat", (ev) => {
+  const v = store.get("vote:" + ev.server), m = /^!?(\\d+)$/.exec(String(ev.text ?? "").trim());
+  if (!v || !m || ev.channel === "server") return;
+  const n = Number(m[1]);
+  if (n < 1 || n > v.choices.length) return ev.tell(\`Answer 1 to \${v.choices.length}.\`);
+  v.answers[ev.player_id || ev.player] = n;
+  store.set("vote:" + ev.server, v);
+});
+
+for (const key of store.keys("vote:")) schedule(key.slice(5)); // a vote open when Oni closed carries on
 `],
 ];
 async function newScript() {
