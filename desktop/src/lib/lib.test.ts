@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
 import { Medals } from "./medals";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
@@ -71,6 +71,16 @@ describe("words", () => {
     expect(pluginReply(x, r, false)).toEqual({ ...x, ok: true, text: "ip ███.███.███.███", data: { address: "███.███.███.███" } });
     expect(pluginReply(x, r, true).data.address).toBe("203.0.113.9");
     expect(pluginReply(x, { ok: null }, false)).toMatchObject({ ok: null, text: "", data: null });
+  });
+
+  it("holds a plug-in's own RCON to a pace", () => {
+    const pace = { sent: [] as number[], said: {} as Record<string, number[]> };
+    for (let i = 0; i < 20; i++) expect(pluginPace(pace, "A", "say", 1000 + i)).toBe("");
+    expect(pluginPace(pace, "A", "tell", 2000)).toMatch(/20 chat messages a minute/);
+    expect(pluginPace(pace, "B", "say", 2000)).toBe(""); // another server's chat is its own
+    for (let i = 0; i < 39; i++) expect(pluginPace(pace, "A", "status", 3000)).toBe("");
+    expect(pluginPace(pace, "A", "status", 3000)).toMatch(/60 commands a minute/);
+    expect(pluginPace(pace, "A", "say", 1000 + 60_000)).toBe(""); // a minute on, the first ones have gone
   });
   it("describes admin and reload events", () => {
     const d = (ev: Record<string, unknown>) => plain(describeEvent(ev));

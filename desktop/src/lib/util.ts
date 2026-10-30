@@ -207,6 +207,25 @@ export function pluginReply(x: Dict, r: { ok: boolean | null; text?: string; dat
   return { server: x.server, command: x.command, args: x.args, ok: r.ok, text: redactText(String(r.text ?? ""), !addresses), data: redactData(r.data ?? null, !addresses) };
 }
 
+/** RCON a plug-in sends by itself (its session or its page), at most this many commands a minute, and of those this many
+ *  chat lines a minute to one server, as automation is held to: a plug-in gone wrong can't flood a server. */
+export const PLUGIN_RCON_PER_MINUTE = 60;
+export const PLUGIN_SAY_PER_MINUTE = 20;
+export interface Pace { sent: number[]; said: Record<string, number[]> }
+
+/** Whether one more command fits a plug-in's pace at `now` (ms): "" and counted when it does, else why not. */
+export function pluginPace(pace: Pace, server: string, command: string, now: number): string {
+  const recent = (a: number[] = []) => a.filter((t) => now - t < 60_000);
+  const chat = command === "say" || command === "tell";
+  pace.sent = recent(pace.sent);
+  pace.said[server] = recent(pace.said[server]);
+  if (pace.sent.length >= PLUGIN_RCON_PER_MINUTE) return `${PLUGIN_RCON_PER_MINUTE} commands a minute is the limit`;
+  if (chat && pace.said[server].length >= PLUGIN_SAY_PER_MINUTE) return `${PLUGIN_SAY_PER_MINUTE} chat messages a minute to one server is the limit`;
+  pace.sent.push(now);
+  if (chat) pace.said[server].push(now);
+  return "";
+}
+
 /** A plug-in action's form answers (keyed p0, p1, ... in its params' order) as the contract types them: number as a
  *  JSON number, bool as true/false, the rest strings. A number that isn't one gives the words to say, and nothing is sent. */
 export function typedParams(params: Dict[], got: Dict): Dict | string {

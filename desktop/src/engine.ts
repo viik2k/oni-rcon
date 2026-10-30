@@ -14,8 +14,8 @@ import { Runner, type Note } from "./lib/runner";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, mixedVersions, num, pick, playerIds, plain, reactionWords,
-  pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
-  type Dict, type Kick, type Line,
+  pluginPace, pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
+  type Dict, type Kick, type Line, type Pace,
 } from "./lib/util";
 
 export const FLEET = 12;
@@ -155,6 +155,7 @@ export interface Plugin {
   m: Dict; view: Dict | null; error: string; busy: boolean; asked: boolean; due: number; note: string;
   replies: Dict[]; session: { state: string; detail: string; retry_in: number } | null; pages: Set<(msg: Dict) => void>;
   update: { behind: number; log: string[]; source: string; to: string; asked: boolean } | null; // its git upstream is ahead
+  pace: Pace; paced: number; // the RCON it sent by itself in the last minute; when it was last told it's over the limit
 }
 export const badgeOf = (p: Plugin): Dict | null => (p.view && !p.error ? p.view.badge : null);
 
@@ -790,7 +791,8 @@ class Oni {
     try {
       const list = await invoke<Dict[]>("plugins_list");
       const had = new Map(this.plugins.map((p) => [p.m.id, p]));
-      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "", replies: [], session: null, pages: new Set<(msg: Dict) => void>(), update: null }, { m }));
+      this.plugins = list.map((m) => Object.assign(had.get(m.id) ?? { view: null, error: "", busy: false, asked: false, due, note: "", replies: [], session: null, pages: new Set<(msg: Dict) => void>(), update: null,
+        pace: { sent: [], said: {} }, paced: 0 }, { m }));
     } catch { /* no console running */ }
     const servers = this.stations.map((s) => ({ index: s.index, name: this.serverName(s) }));
     for (const p of this.plugins) {
@@ -850,7 +852,7 @@ class Oni {
     } else if (m.kind === "plugin-log") {
       this.logLine([...head, [redactText(m.text, this.redact), m.warn ? AMBER : DIM]]);
     } else if (m.kind === "plugin-rcon") {
-      this.pluginRcon(p, m).then((r) => invoke("plugin_send", { id: p.m.id, msg: { type: "rcon-reply", id: m.ref, ok: r.ok, text: r.text, data: r.data } }).catch(() => {}));
+      this.pluginOwnRcon(p, m).then((r) => invoke("plugin_send", { id: p.m.id, msg: { type: "rcon-reply", id: m.ref, ok: r.ok, text: r.text, data: r.data } }).catch(() => {}));
     }
     bump("plugins", "mast");
   }
@@ -866,13 +868,24 @@ class Oni {
     return pluginReply(x, res, !!p.m.addresses);
   }
 
+  /** RCON it sent by itself (its session or its page), held to its pace; over it, nothing is sent and it hears why. */
+  async pluginOwnRcon(p: Plugin, x: Dict): Promise<Dict> {
+    const why = pluginPace(p.pace, String(x.server), String(x.command), Date.now());
+    if (!why) return this.pluginRcon(p, x);
+    if (Date.now() - p.paced > 10_000) { // said once in a while, not once for each one dropped
+      p.paced = Date.now();
+      this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [redactText(`plug-in ${p.m.id} ▸ ${cmdLine(x.command, x.args)}: not sent, ${why}`, this.redact), AMBER]]);
+    }
+    return pluginReply(x, { ok: false, text: `not sent: ${why}` }, true);
+  }
+
   /** RCON its page asked for ({oni:"rcon", server?, command, args}): the same filter as an action's, on the selected
    *  server unless it names one. */
   async pluginPageRcon(p: Plugin, m: Dict): Promise<Dict> {
     const want = { server: m.server == null ? this.serverName(this.cur) : String(m.server), command: m.command, args: Array.isArray(m.args) ? m.args : [] };
     const n = await invoke<Dict>("plugin_filter", { id: p.m.id, rcon: want, servers: this.stations.map((s) => this.serverName(s)) })
       .catch((e) => ({ rcon: [], dropped: [String(e)] }));
-    if (n.rcon.length) return this.pluginRcon(p, n.rcon[0]);
+    if (n.rcon.length) return this.pluginOwnRcon(p, n.rcon[0]);
     const why = String(n.dropped[0] ?? "refused");
     this.logLine([[new Date().toTimeString().slice(0, 9), DIM], [redactText(`plug-in ${p.m.id}'s page asked for ${why}: not sent`, this.redact), AMBER]]);
     return pluginReply(want, { ok: false, text: `not sent: ${why}` }, true);

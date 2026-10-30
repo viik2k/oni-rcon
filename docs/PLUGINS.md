@@ -218,6 +218,11 @@ still move a player without holding an RCON slot or a password.
   `rcon {id, server, command, args}` (filtered like an action's; one refused is answered `rcon-reply` with `ok: false`);
   `view {…}` (pushed: replaces the panel at once); `notify {level: info | warning | error, text}` (a toast);
   `log {text}` (the command log). A line over 1 MiB, or that isn't a JSON object, is ignored.
+- RCON a plug-in sends by itself (a session's `rcon`, a page's `{"oni": "rcon"}`) is held to 60 commands a minute per
+  plug-in, and 20 `say`/`tell` a minute to one server, as automation is. One over the limit isn't sent: it's answered
+  `ok: false` with `not sent: … is the limit`, and the command log says so now and then. An action's `rcon` (a click) isn't
+  limited. Oni keeps up to 256 lines waiting for a session that isn't reading its stdin; while it's that far behind, newer
+  ones (events first of all) are dropped and the command log says so.
 
 ## Wire rules (both hosts must follow these exactly)
 
