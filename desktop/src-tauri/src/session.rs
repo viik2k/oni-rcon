@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 const MAX_LINE: u64 = 1 << 20; // bytes of one line it writes; the rest of a longer one is read as a line that won't parse
 const BACKOFF_MAX: f64 = 60.0; // seconds between restarts at most; a run this long resets the wait to 1 s
 const QUEUE: usize = 256; // lines waiting for it to read; past that, while it isn't reading, the rest are dropped
+const VIEW_EVERY: Duration = Duration::from_millis(200); // pushed views are drawn at most this often, the latest always
 
 /// Where what it says goes: the window's "oni" event in the app, a list in the tests.
 pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
@@ -156,7 +157,10 @@ async fn run(c: &Ctx, rx: &mut mpsc::UnboundedReceiver<String>) -> String {
             }
         }));
         let mut dropped = 0u64;
+        let mut held: Option<Value> = None; // the latest view it pushed, not drawn yet
+        let mut drawn = Instant::now().checked_sub(VIEW_EVERY).unwrap_or_else(Instant::now);
         loop {
+            let due = tokio::time::sleep_until((drawn + VIEW_EVERY).into());
             tokio::select! {
                 out = rx.recv() => match out {
                     Some(line) => match wtx.try_send(line) {
@@ -173,10 +177,17 @@ async fn run(c: &Ctx, rx: &mut mpsc::UnboundedReceiver<String>) -> String {
                     None => break,
                 },
                 line = lines.recv() => match line {
-                    Some(l) => handle(c, &l),
+                    Some(l) => held = handle(c, &l).or(held),
                     None => break, // its stdout closed: it's exiting
                 },
+                _ = due, if held.is_some() => {
+                    draw(c, held.take().unwrap_or_default());
+                    drawn = Instant::now();
+                }
             }
+        }
+        if let Some(v) = held {
+            draw(c, v); // its last word before it stopped
         }
     }
     c.up.store(false, Ordering::Relaxed);
@@ -195,23 +206,26 @@ async fn run(c: &Ctx, rx: &mut mpsc::UnboundedReceiver<String>) -> String {
     plugins::last_err(&err, format!("exited {code}"))
 }
 
-/// One line it wrote. A line that isn't a JSON object is ignored, like a stray print.
-fn handle(c: &Ctx, line: &[u8]) {
-    let Ok(v @ Value::Object(_)) = serde_json::from_slice::<Value>(line) else { return };
+/// A view it pushed, shaped and drawn.
+fn draw(c: &Ctx, v: Value) {
+    let mut view = plugins::normalise_view(&v);
+    plugins::stash(&c.m.id, &mut view);
+    (c.emit)(json!({"kind": "plugin-view", "id": c.m.id, "view": view}));
+}
+
+/// One line it wrote; a view it pushed is handed back, to be drawn when one is due. A line that isn't a JSON object
+/// is ignored, like a stray print.
+fn handle(c: &Ctx, line: &[u8]) -> Option<Value> {
+    let Ok(v @ Value::Object(_)) = serde_json::from_slice::<Value>(line) else { return None };
     if let Some(r) = v.get("ref").and_then(Value::as_u64) {
         if let Some(w) = c.waiting.lock().remove(&r) {
             let _ = w.send(v);
         }
-        return;
+        return None;
     }
     let (id, emit) = (&c.m.id, &c.emit);
-    // ponytail: no rate limit on pushes; one that floods views redraws F10 that often
     match v["type"].as_str().unwrap_or_default() {
-        "view" => {
-            let mut view = plugins::normalise_view(&v);
-            plugins::stash(id, &mut view);
-            emit(json!({"kind": "plugin-view", "id": id, "view": view}));
-        }
+        "view" => return Some(v),
         "notify" => {
             let level = match v["level"].as_str() {
                 Some("warn" | "warning") => "warning",
@@ -239,6 +253,7 @@ fn handle(c: &Ctx, line: &[u8]) {
         }
         _ => {}
     }
+    None
 }
 
 #[cfg(test)]
@@ -323,6 +338,22 @@ for line in sys.stdin:
         }
         assert!(heard() > before + 50, "its log stopped at {} after {before}", heard());
         stop("deaf");
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_views_is_drawn_a_few_times_ending_with_the_last() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("burst.py"), "import json, sys\nfor i in range(200):\n    print(json.dumps({\"type\": \"view\", \"title\": str(i)}), flush=True)\nfor line in sys.stdin:\n    pass\n").unwrap();
+        let py = if crate::util::which("python").is_some() { "python" } else { "python3" };
+        let m = Manifest { id: "burst".into(), name: "B".into(), mode: "session".into(), exec: format!("{py} burst.py"),
+            folder: Some(d.path().to_path_buf()), ..Default::default() };
+        let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let s2 = seen.clone();
+        start(m, vec![], Arc::new(move |v| s2.lock().push(v)));
+        until(&seen, |v| v["view"]["title"] == "199").await;
+        let views = seen.lock().iter().filter(|v| v["kind"] == "plugin-view").count();
+        assert!(views <= 10, "{views} redraws for 200 views");
+        stop("burst");
     }
 
     #[tokio::test]

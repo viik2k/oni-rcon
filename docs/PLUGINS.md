@@ -216,7 +216,7 @@ still move a player without holding an RCON slot or a password.
 - plug-in → Oni: the answer to a request, as for a service plug-in but carrying the request's `ref` (no answer in 10 s for
   a view or 30 s for an action is an error; requests made while it's down fail with "it isn't running");
   `rcon {id, server, command, args}` (filtered like an action's; one refused is answered `rcon-reply` with `ok: false`);
-  `view {…}` (pushed: replaces the panel at once); `notify {level: info | warning | error, text}` (a toast);
+  `view {…}` (pushed: replaces the panel, at most 5 times a second; a burst is drawn as its latest); `notify {level: info | warning | error, text}` (a toast);
   `log {text}` (the command log). A line over 1 MiB, or that isn't a JSON object, is ignored.
 - RCON a plug-in sends by itself (a session's `rcon`, a page's `{"oni": "rcon"}`) is held to 60 commands a minute per
   plug-in, and 20 `say`/`tell` a minute to one server, as automation is. One over the limit isn't sent: it's answered
