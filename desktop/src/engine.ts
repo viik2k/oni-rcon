@@ -962,8 +962,44 @@ class Oni {
     if (!p) return true;
     this.psel = this.plugins.indexOf(p);
     bump("plugins");
+    await this.pluginNeeds(p);
     if (p.m.state === "needs approval") await this.pluginApprove(p);
     return true;
+  }
+
+  /** What it needs that this computer hasn't, and where to get each. */
+  pluginNeedsText(p: Plugin) {
+    const list = (p.m.missing ?? []) as Dict[];
+    return redactText(`${p.m.name || p.m.id} runs  ${p.m.exec}\n\nOni can't find what it needs on this computer:\n\n`
+      + list.map((n) => `  ${n.name} (${n.program})${n.url ? `   ${n.url}` : ""}`).join("\n")
+      + "\n\nInstall it, then CHECK AGAIN on F10. If it still isn't found, restart Oni: it reads PATH when it starts.", this.redact);
+  }
+
+  /** Before it's approved, offer what it needs that isn't here: each one's download page, opened on yes. */
+  async pluginNeeds(p: Plugin) {
+    const name = String(p.m.name || p.m.id).toUpperCase();
+    for (const n of ((p.m.missing ?? []) as Dict[]).filter((x) => x.url)) {
+      if (await this.confirm(`${name} NEEDS ${String(n.name).toUpperCase()}`, this.pluginNeedsText(p), `GET ${String(n.name).toUpperCase()}`, false)) await this.pluginGetNeed(p, n);
+    }
+  }
+
+  async pluginGetNeed(p: Plugin, n: Dict) {
+    const title = String(p.m.name || p.m.id).toUpperCase();
+    try {
+      await invoke("plugin_get_requirement", { id: p.m.id, program: n.program });
+      this.notify(`Opened ${n.url}. Install ${n.name}, then CHECK AGAIN on F10.`, title);
+    } catch (e) {
+      this.notify(redactText(String(e), this.redact), `${title} · NO BROWSER`, "warning", 15);
+    }
+  }
+
+  /** Look again for what plug-ins need (something was installed): one that has it all now starts. */
+  async pluginRecheck(p: Plugin) {
+    await invoke("plugin_recheck").catch(() => {});
+    await this.loadPlugins();
+    const left = ((this.plugin(p.m.id)?.m.missing ?? []) as Dict[]).map((n) => n.name);
+    this.notify(left.length ? `Still can't find ${left.join(", ")}. If you installed it since Oni started, restart Oni.` : "It has everything it needs.",
+      String(p.m.name || p.m.id).toUpperCase(), left.length ? "warning" : "information");
   }
 
   /** Ask for a git address, clone it into plugins/ and turn it on. Downloading runs nothing: approval comes next. */

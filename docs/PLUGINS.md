@@ -33,12 +33,23 @@ description = "Automated hate-speech moderation."
 mode = "service"                      # service: runs elsewhere, Oni asks it things.  session: Oni starts it with the console.
 exec = "gryphon oni -c /etc/gryphon/gryphon.toml"   # a shell string, run the way health_cmd is (service: once per request; session: once)
 host = ""                             # an ssh destination ("" = this machine), same as ping_log/health_cmd
+requires = [{ program = "gryphon", url = "https://github.com/viik2k/gryphon" }]  # optional: programs it needs (below)
 
 [permissions]
 events = []                           # event kinds pushed to its session process and its pages: "chat", "join", "kill", ...
 rcon   = ["pardon", "unban", "unmute"]  # RCON commands it may ask Oni to send for it (an action's `rcon` reply, or session mode)
 addresses = false                     # true = sees player IPs unredacted (redaction is on by default everywhere)
 ```
+
+**What it needs** (desktop app). `run.requires` lists the programs a plug-in needs on the computer that runs it: each a
+name (`"node"`) or a table `{program, name, url}` with the name to show and an `https://` page to get it from. A plug-in
+whose `exec` starts with `python`, `python3`, `py` or `node` needs that runtime without saying so, and Oni knows Python's
+and Node's download pages. When a plug-in is turned on, Oni looks for each one on PATH (and in the plug-in's folder) and
+offers its page before asking for approval; one that's still missing keeps the plug-in from running, and F10 shows
+**NEEDS PYTHON 3** with GET PYTHON 3 and CHECK AGAIN. Python counts when `python3`, `python` or Windows' `py` launcher
+says it's Python 3 (Windows' Store placeholder for `python` doesn't), and a leading `python` in `exec` runs as whichever
+it found, so `exec = "python greeter.py"` works on a Mac and on Windows without `python` on PATH. Nothing is checked for a
+plug-in with a `host`: what's on that machine is its own business. The terminal console ignores `requires`.
 
 Oni lists a plug-in only when its folder is named in the config's **top-level** `plugins = ["gryphon"]` (top level only: an
 older Oni exits on a key it doesn't know inside `[defaults]` or `[[server]]`, and ignores one out there).
