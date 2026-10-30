@@ -48,7 +48,8 @@ from .forge import (CREDIT, SITE, SORTS, WINDOWED, WINDOWS, WITHDRAWN, ForgeClie
 from .health import BARE, OOM, RESTART, SIGNATURE, HealthSetup, Monitor, Notice, mem_level, swap_level
 from .install import SSH_OPTS, InstallError, place, plan, size_words, target_for
 from . import plugins as pl
-from .update import behind, mixed_versions
+from .projects import mixed_by_project, project_of
+from .update import behind
 from .plugins import ACTION_TIMEOUT, VIEW_TIMEOUT, Manifest, PluginError, PluginSetup, server_name
 from .medals import Medals
 from .prefs import Prefs
@@ -2062,13 +2063,15 @@ class OniApp(App):
             self.paint_ops()
 
     def lag(self, st: Station) -> str:
-        """The newer Reclaimer release an online station is behind, or empty."""
-        return behind(st.rcon.info.get("version"), self.reclaimer_latest) if st.online else ""
+        """The newer Reclaimer release an online station is behind, or empty (always, for another project's server)."""
+        if not st.online or not project_of(st.rcon.info).reclaimer:
+            return ""
+        return behind(st.rcon.info.get("version"), self.reclaimer_latest)
 
     def note_mixed(self) -> None:
         """One feed line when the connected stations run different versions: a player can join only those on theirs.
         Said again only when the mix changes."""
-        mix = mixed_versions([(st.label, st.rcon.info.get("version")) for st in self.stations if st.online])
+        mix = mixed_by_project([(st.label, st.rcon.info) for st in self.stations if st.online])
         if mix and mix != self.mixed_said:
             self.log_event(None, {"event": "uplink", "text": f"MIXED VERSIONS  {mix}"})
         self.mixed_said = mix
@@ -2580,7 +2583,9 @@ class OniApp(App):
         g.add_column(no_wrap=True, overflow="ellipsis", ratio=1)
         g.add_column(justify="right", no_wrap=True)
         count = Text(f"{n}/{mx}" if st.online and n is not None else "", AMBER if n else DIM)
-        g.add_row(Text(f"{glyph} ", color) + Text(f"{st.index + 1}  {st.label.upper()}", WHITE),
+        game = project_of(st.rcon.info if st.rcon else None)  # another project's server says which game it is
+        g.add_row(Text(f"{glyph} ", color) + Text(f"{st.index + 1}  {st.label.upper()}", WHITE)
+                  + (Text(f"  {game.tag}", CYAN) if not game.reclaimer else Text()),
                   Text.assemble((f"⚑ {st.alerts}  ", RED), count) if st.alerts else count)
         if not st.online:
             why, left = detail
