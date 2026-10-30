@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { AMBER, CYAN, DIM, GOLD, GREEN, RED, TEAM_COLOR, WHITE } from "../art/palette";
 import { oni, SPREE, useV } from "../engine";
-import { BAN_OPS, OPS, OP_GROUPS, TIPS, bl, op } from "../actions";
+import { BAN_OPS, OPS, OP_GROUPS, RECLAIMER_OPS, TIPS, bl, op } from "../actions";
+import { projectOf, reclaimerOnly } from "../lib/projects";
 import { norm, refsOf } from "../lib/forge";
 import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
 import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
@@ -63,11 +64,13 @@ export function Operations() {
   useV((s) => s.forge);
   const [tref, { w: tw }] = useSize<HTMLDivElement>();
   const st = oni.cur, s: Dict = st.data.status ?? {}, vote: Dict = st.data.vote ?? {}, info = st.info ?? {};
-  const old = st.online ? behind(info.version, oni.reclaimer) : "";
+  const game = projectOf(info), known = Object.keys(info).length > 0; // known once it has signed in
+  const old = st.online && game.reclaimer ? behind(info.version, oni.reclaimer) : "";
   const credit = playing(st.where, s.map, s.mode);
   const fr: Dict | undefined = oni.health.frames?.[String(st.index)];
   const rows: [string, Line | string][] = [
     ["STATION", [[String(s.name || info.server || st.label), AMBER]]],
+    ...(known ? [["GAME", [[game.game, game.reclaimer ? WHITE : CYAN], [`  ${game.name}`, DIM]]] as [string, Line]] : []),
     ["UPLINK", old ? [[`${st.where}   v${info.version}`, WHITE], [`   ${old} out: only players on v${info.version} can join`, AMBER]] : `${st.where}   v${info.version ?? "?"}`],
     ["PUBLIC ADDRESS", [[redactAddr(s.address, oni.redact), oni.redact ? RED : WHITE]]],
     ["PHASE", QUIET.has(String(s.phase ?? "").toLowerCase()) ? [["—", DIM]] : [[String(s.phase).replace(/_/g, " ").toUpperCase(), CYAN]]],
@@ -82,7 +85,7 @@ export function Operations() {
     ["VPN BLOCK", yesNo(s.block_vpn)], ["TEXT CHAT", yesNo(s.text_chat)], ["VOICE", yesNo(s.voice)], ["HIDDEN", yesNo(s.hidden, "YES", "NO")],
   ];
   const voting = "vote" in st.data ? !!vote.vote : null;
-  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "camera", "charmods", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
+  const off = (o: string) => (RECLAIMER_OPS.includes(o) && !game.reclaimer) || (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "camera", "charmods", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
   const ops = Object.fromEntries(OPS.map(([o, l, v]) => [o, [l, v]]));
   const here = norm(s.map);
   const pulledRefs = new Set<string>();
@@ -112,7 +115,7 @@ export function Operations() {
             <div key={g}>
               <div className="head">{g}</div>
               <div className="grid3">
-                {names.map((o) => <Btn key={o} id={`op-${o}`} label={ops[o][0]} variant={ops[o][1]} disabled={off(o)} title={TIPS[`op-${o}`]} onClick={() => op(o)} />)}
+                {names.map((o) => <Btn key={o} id={`op-${o}`} label={ops[o][0]} variant={ops[o][1]} disabled={off(o)} title={(RECLAIMER_OPS.includes(o) && reclaimerOnly(info, ops[o][0])) || TIPS[`op-${o}`]} onClick={() => op(o)} />)}
               </div>
             </div>
           ))}

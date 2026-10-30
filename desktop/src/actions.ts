@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { bump, oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
+import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
 import { behind, CAMERAS, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
@@ -19,6 +20,8 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""],
   ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
+/** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
+export const RECLAIMER_OPS = ["capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
   ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
@@ -161,7 +164,7 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
 }
 
 /** When a dedicated.toml edit takes effect on this server. */
-const liveReload = (st: Station) => st.online && hotReloads(st.info.version);
+const liveReload = (st: Station) => st.online && projectOf(st.info).reclaimer && hotReloads(st.info.version);
 const takesEffect = (st: Station) => (liveReload(st) ? "at once, no restart" : "after a restart");
 
 /** A dedicated.toml setting saved. Server 0.9.18 or later is told to reload, and its reply says what changed;
@@ -334,6 +337,8 @@ async function playlistsManager(st: Station): Promise<void> {
 
 export async function op(name: string, st = oni.cur) {
   const s = st.data.status ?? {};
+  const theirs = RECLAIMER_OPS.includes(name) ? reclaimerOnly(st.info, OPS.find(([o]) => o === name)?.[1]) : "";
+  if (theirs) return oni.notify(theirs, st.label, "warning");
   if (name === "broadcast") return broadcast();
   if (name === "reconnect") {
     let pw: string | undefined;

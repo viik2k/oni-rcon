@@ -11,9 +11,10 @@ import { Superintendent, classify } from "./art/superintendent";
 import { Medals } from "./lib/medals";
 import { Engine, type Roles } from "./lib/rules";
 import { Runner, type Note } from "./lib/runner";
+import { mixedByProject } from "./lib/projects";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
-  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, mixedVersions, num, pick, playerIds, plain, reactionWords,
+  CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
   pluginPace, pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line, type Pace,
 } from "./lib/util";
@@ -534,7 +535,7 @@ class Oni {
   /** One feed line when the connected stations run different versions: a player can join only those on theirs.
    *  Said again only when the mix changes. */
   private noteMixed() {
-    const mix = mixedVersions(this.stations.filter((s) => s.online).map((s) => ({ label: s.label, version: s.info.version })));
+    const mix = mixedByProject(this.stations.filter((s) => s.online));
     if (mix && mix !== this.mixedSaid) this.logEvent(null, { event: "uplink", text: `MIXED VERSIONS  ${mix}` });
     this.mixedSaid = mix;
   }
