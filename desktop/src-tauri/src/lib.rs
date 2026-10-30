@@ -579,6 +579,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
         ("camera", _) => value.as_str().filter(|c| host::CAMERAS.contains(c)).ok_or_else(|| format!("{value} isn't a camera setting"))?.into(),
         ("playlist", _) => install::safe_path(value.as_str().unwrap_or_default()).map_err(|_| format!("Not a playlist in the server folder: {value}"))?.into(),
         ("admin_add" | "admin_remove", _) => value.as_str().ok_or("That's not a player ID.")?.into(),
+        ("character_mods", _) => "".into(), // host::Mods, written whole by set_server_mods below
         _ => return Err(format!("{key} can't be set from here")),
     };
     if let Some(d) = h.hsetup.demo.clone() {
@@ -591,9 +592,32 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
     let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
     let text = match key.as_str() {
         "admin_add" | "admin_remove" => host::set_server_admin(&text, s.port, v.as_str().unwrap_or_default(), key == "admin_add")?,
+        "character_mods" => host::set_server_mods(&text, s.port, &serde_json::from_value(value).map_err(|_| "Those aren't character mod settings.")?)?,
         _ => host::set_server_key(&text, s.port, &key, v)?,
     };
     t.write_text("../dedicated.toml", &text).await
+}
+
+/// Its character mods as its dedicated.toml has them (host::Mods), and `found`: the folders in its content folder's Mods
+/// with a customization.json, the character mods it has.
+#[tauri::command]
+async fn server_mods(index: usize, app: State<'_, App>) -> Result<Value, String> {
+    let h = hub_of(&app)?;
+    if h.hsetup.demo.is_some() {
+        return Ok(json!({"found": ["Alpha-Nine", "Covenant Honor Guard"], "customization": ["Alpha-Nine"], "require_customization": false,
+            "no_vanilla_characters": false, "share_mods": true}));
+    }
+    let s = &h.stations.get(index).ok_or("no such server")?.server;
+    let t = install::target_for(s)?;
+    let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
+    let mut v = json!(host::server_mods(&text, s.port)?);
+    let file = |d: &str| format!("Mods/{d}/customization.json");
+    let dirs: Vec<String> = t.list("Mods").await?.into_iter().filter(|d| !d.starts_with('.') && !d.contains(['/', '\\'])).collect();
+    let have = if dirs.is_empty() { vec![] } else { t.existing(&dirs.iter().map(|d| file(d)).collect::<Vec<_>>()).await? };
+    let mut found: Vec<&String> = dirs.iter().filter(|d| have.contains(&file(d))).collect();
+    found.sort_by_key(|d| d.to_lowercase());
+    v["found"] = json!(found);
+    Ok(v)
 }
 
 #[tauri::command]
@@ -1270,7 +1294,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, server_mods, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_get_requirement, plugin_recheck, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, plugin_index, plugin_index_install, update_check, update_install, whats_new, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
