@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
+import { mixedByProject, projectOf, reclaimerOnly } from "./projects";
+import { aboutLine, aboutText } from "./about";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
 import { BASE, face, faceClass } from "../art/archive";
@@ -71,6 +73,16 @@ describe("words", () => {
     expect(pluginReply(x, r, false)).toEqual({ ...x, ok: true, text: "ip ███.███.███.███", data: { address: "███.███.███.███" } });
     expect(pluginReply(x, r, true).data.address).toBe("203.0.113.9");
     expect(pluginReply(x, { ok: null }, false)).toMatchObject({ ok: null, text: "", data: null });
+  });
+
+  it("holds a plug-in's own RCON to a pace", () => {
+    const pace = { sent: [] as number[], said: {} as Record<string, number[]> };
+    for (let i = 0; i < 20; i++) expect(pluginPace(pace, "A", "say", 1000 + i)).toBe("");
+    expect(pluginPace(pace, "A", "tell", 2000)).toMatch(/20 chat messages a minute/);
+    expect(pluginPace(pace, "B", "say", 2000)).toBe(""); // another server's chat is its own
+    for (let i = 0; i < 39; i++) expect(pluginPace(pace, "A", "status", 3000)).toBe("");
+    expect(pluginPace(pace, "A", "status", 3000)).toMatch(/60 commands a minute/);
+    expect(pluginPace(pace, "A", "say", 1000 + 60_000)).toBe(""); // a minute on, the first ones have gone
   });
   it("describes admin and reload events", () => {
     const d = (ev: Record<string, unknown>) => plain(describeEvent(ev));
@@ -478,5 +490,60 @@ describe("plug-ins", () => {
     expect(typedParams(ps, { p0: " 2.5 ", p1: "true", p2: "10m", p3: "warm" })).toEqual({ n: 2.5, b: true, t: "10m", c: "warm" });
     expect(typedParams(ps, { p0: "x" })).toBe("N must be a number: nothing was sent.");
     expect(typedParams(ps, { p0: "" })).toBe("N must be a number: nothing was sent.");
+  });
+});
+
+describe("projects", () => {
+  it("takes a server for Project Reclaimer unless its sign-in names another", () => {
+    expect(projectOf({ server: "Slayer", version: "0.9.18" }).id).toBe("reclaimer");
+    expect(projectOf(undefined).reclaimer).toBe(true);
+    expect(projectOf({ project: "Project Gravemind" })).toMatchObject({ id: "gravemind", game: "Halo 2", reclaimer: false });
+    expect(projectOf({ project: "renaissance" }).tag).toBe("REACH");
+    expect(projectOf({ project: "reclaimer" }).reclaimer).toBe(true);
+    expect(projectOf({ project: "OpenCE\n", game: "Halo: Combat Evolved" })).toMatchObject({ name: "OpenCE", game: "Halo: Combat Evolved", tag: "HCE", reclaimer: false });
+    expect(projectOf({ project: "Halo2Server", game: "Halo 2 Vista" }).tag).toBe("H2V");
+    expect(reclaimerOnly({ project: "gravemind" }, "CAMERA")).toBe("CAMERA is Project Reclaimer's (Halo 3), and this server runs Project Gravemind (Halo 2).");
+    expect(reclaimerOnly({})).toBe("");
+  });
+
+  it("compares versions only within one project", () => {
+    const st = (label: string, version: string, project?: string) => ({ label, info: { version, project } });
+    expect(mixedByProject([st("A", "0.9.18"), st("B", "1.2.0", "gravemind")])).toBe("");
+    expect(mixedByProject([st("A", "0.9.18"), st("B", "0.9.17")])).toBe("0.9.17 on B · 0.9.18 on A");
+    expect(mixedByProject([st("A", "0.9.18"), st("B", "0.9.17"), st("C", "1.0.0", "gravemind")])).toBe("Project Reclaimer: 0.9.17 on B · 0.9.18 on A");
+  });
+});
+
+describe("vpn lists (0.9.22)", () => {
+  const now = 1_800_000_000;
+  const v = { lists: { refreshed_at: now - 60, sources: [
+    { list: "fresh", ranges: 100, asns: 0, fetched_at: now - 600, problem: null },
+    { list: "old", ranges: 5, asns: 2, fetched_at: now - 8 * 86400, problem: null },
+    { list: "broken", ranges: 0, fetched_at: null, problem: "HTTP 404" }],
+    table: { table: "ip2asn", rows: 10, fetched_at: new Date((now - 3600) * 1000).toISOString(), blocks: 4 } } };
+  it("flags a list older than a week, never fetched, or with a problem", () => {
+    const l = vpnLists(v, now);
+    expect(l.map((x) => [x.name, x.stale, x.problem])).toEqual([["fresh", false, ""], ["old", true, ""], ["broken", true, "HTTP 404"], ["ASN table (ip2asn)", false, ""]]);
+    expect(l[0]).toMatchObject({ size: "100 ranges · 0 ASNs", age: "10m 00s" });
+    expect(l[1].age).toBe("8d 0h");
+    expect(l[2].age).toBe("never");
+  });
+  it("is empty before 0.9.22 or before the first refresh", () => {
+    expect(vpnLists({ block_vpn: true, ranges: 3 })).toEqual([]);
+    expect(vpnLists({ lists: null })).toEqual([]);
+  });
+  it("CHECK IP names the matching list and a fail-closed refusal", () => {
+    expect(vpnCheck("refused", { listed: true, list: "x4bnet", refused: true })).toBe("refused · matched x4bnet");
+    expect(vpnCheck("refused", { listed: false, refused: true, fail_closed: true })).toContain("fail_closed");
+    expect(vpnCheck("fine", null)).toBe("fine");
+  });
+});
+
+describe("about", () => {
+  it("shows the legal notices NOTICE asks a modified version to keep", () => {
+    const t = aboutText("1.11.0");
+    for (const must of ["ONI RCON by Arche Labs (viik), version 1.11.0", "ibigs, LLC", "GNU Affero General Public License", "NO WARRANTY",
+      "LICENSE", "https://github.com/viik2k/oni-rcon"]) expect(t).toContain(must);
+    expect(aboutLine()).toBe("ONI RCON by Arche Labs (viik) · AGPL-3.0-or-later · no warranty · https://github.com/viik2k/oni-rcon");
   });
 });

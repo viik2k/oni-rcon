@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, TEAM_COLOR, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
 import { oni, useV, type Dialog } from "../engine";
+import { aboutLine } from "../lib/about";
 import { CREDIT } from "../lib/forge";
 import { everyone, rankedPlayers, type Found } from "../lib/search";
 import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
@@ -188,6 +189,8 @@ const GUIDE: [string, [string, string][]][] = [
     ["Credit", "When the map or gametype playing came from ReclaimerForge, the sitrep's FORGE line names it and whoever made it."],
     ["Capacity", "PLAYER CAPACITY saves how many players the server takes in its dedicated.toml (the one beside content_dir), then has a 0.9.18 or later server reload it (no restart) or offers to restart an older one."],
     ["Camera", "CAMERA sets how players see their own character on foot (first person, players choose, or third person) in the server's dedicated.toml. Server 0.9.20 or later applies it from the next game."],
+    ["Other games", "A server of another community project that speaks Project Reclaimer's RCON (docs/OTHER-GAMES.md) names itself when it signs in: its card shows the game (H2 for Project Gravemind, REACH for Reach Renaissance) and the sitrep's GAME line says which. What is Reclaimer's alone (its dedicated.toml settings, playlists and game types, ReclaimerForge, its release and version warnings) is turned off for it; players, chat, bans, maps, modes, votes and plug-ins work as they do for Halo 3."],
+    ["Character mods", "CHARACTER MODS sets which character mods (cosmetic mods: a folder with a customization.json in the content folder's Mods) the server's games include, whether players must accept them to join, whether everyone plays as one of their characters instead of Halo 3's, and whether players can download mods they're missing from it. It lists the ones it finds, saves to its dedicated.toml only what differs from [defaults], and has the server reload. Server 0.9.18 or later, with all 27 Halo 3 multiplayer maps in its game folder."],
     ["Playlist", "SWITCH PLAYLIST sets which playlist the server plays (one in the server folder's playlists/, or one installed from F6) in its dedicated.toml, in place of a fixed map and game, then has a 0.9.18 or later server reload it or offers to restart an older one."],
     ["Content browser", "CHANGE MAP, CHANGE MODE, LOAD and QUEUE NEXT list what the server can load in groups. Type to filter, order by name, install date, downloads or rating (click again to turn it round); a ● marks what is playing. With a ReclaimerForge key, the last group offers ones the server doesn't have yet: choosing one installs it."],
     ["Automation", "F9 (or Ctrl+P, Automation rules) lists rules of WHEN something happens, ONLY IF it holds, THEN DO these: say in chat, message a player or the admins, cancel a vote, shuffle the teams, post to Discord or Telegram, wait. NEW builds one step by step, TEMPLATE starts from a ready-made one, TEST shows what a rule would do (and can really do it), ROLES says who counts as an ADMIN, VIP or MOD, DISCORD adds the webhooks and TELEGRAM adds bot chats (their URLs and tokens are kept by the app and shown hidden). Every rule is limited by a cooldown and a per-hour count, chat is held to 20 lines a minute per server, and each run is written to the command log as AUTO. Rules run while this console is open. docs/AUTOMATION.md has the long version."],
@@ -197,6 +200,7 @@ const GUIDE: [string, [string, string][]][] = [
     ["Remove", "REMOVE SERVER takes the selected server out of the config file, offline or not; the server itself is untouched. The console reloads without it, and ADD SERVER brings it back."],
   ]],
   ["F4  BLACKLIST  ·  bans", [["Lists", "Every ban by player, address and device, who may join through a VPN, and the admins. Pick a row, then UNBAN, REVOKE or REMOVE ADMIN."],
+    ["VPN lists", "Server 0.9.22 or later: each list the server blocks VPNs with, its size and age, and the last fetch problem. A list older than a week, never fetched, or failing is flagged: the server keeps blocking with the old copy, so refresh it on the server. CHECK IP names the list an address matched."],
     ["Admins", "ADD ADMIN (p) makes a player an admin and REMOVE ADMIN (d) takes it away, at once, on every server sharing the ban list: no restart. ADD ADMIN can instead make them an admin of this server only, written to its dedicated.toml (at once on server 0.9.18 or later, else from the next restart); REMOVE ADMIN takes one out of there the same way. Admins can kick, ban and move players in game and can't be vote-kicked. Reclaimer has one kind of admin: no roles. Needs server 0.9.16 or later."],
     ["Kicks", "A kick keeps a player out for 10, 30, 60 and then 120 minutes. KICKED lists who this console saw kicked, or turned away for a recent kick, with how long they're still out. PARDON (o) lets the selected one rejoin now and starts their next kick at 10 minutes again; with nothing selected it asks for the name they were kicked under, a player ID or an IP. Needs server 0.9.16 or later."]]],
   ["F5  CONSOLE  ·  typing commands", [["Commands", "For anything without a button. Type help for the server's list; ↑ ↓ bring back earlier ones."]]],
@@ -240,7 +244,7 @@ function Help({ d }: { d: Dialog }) {
       <div ref={body} tabIndex={0} style={{ overflowY: "auto", flex: 1, outline: "none" }}>
         <div style={{ display: "flex", gap: 24, alignItems: "center", marginBottom: 14 }}>
           <Pixel pic={emblem(48)} width={96} />
-          <div><div style={{ color: AMBER }}>OFFICE OF NAVAL INTELLIGENCE</div><div style={{ color: DIM }}>SECTION THREE  ·  REMOTE CONSOLE TERMINAL</div><br /><div>Every key, button and readout, in plain words.</div></div>
+          <div><div style={{ color: AMBER }}>OFFICE OF NAVAL INTELLIGENCE</div><div style={{ color: DIM }}>SECTION THREE  ·  REMOTE CONSOLE TERMINAL</div><br /><div>Every key, button and readout, in plain words.</div><div style={{ color: DIM }}>{aboutLine()}  ·  About ONI RCON in Ctrl+P</div></div>
         </div>
         {GUIDE.map(([section, rows]) => (
           <div key={section} style={{ marginBottom: 14 }}>

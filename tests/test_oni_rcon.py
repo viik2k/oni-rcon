@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 
 import pytest
 from rich.text import Text
 
 from oni_rcon import app as appmod
 from oni_rcon.app import (JOIN_PING, Boot, Form, Help, OniApp, Pick, emblem, explain, parse_command, redact_data, render_event,
-                          resolve, same, sides, split_tag, target_of)
+                          resolve, same, sides, split_tag, target_of, vpn_check, vpn_lists, admin_rows, Confirm)
 from oni_rcon.art import biosig, decrypt, hbar, spark, split_bar
 from oni_rcon.config import Server, add_servers, load_config, parse_target, resolve_passwords
 from oni_rcon.demo import serve_fakes
@@ -128,8 +129,10 @@ def test_app_against_fakes():
             assert app.query_one("#op-passvote").disabled  # no vote under way
 
             await until(pilot, lambda: app.query_one("#player-actions").display)  # shown once a player is selected
-            await pilot.click("#pl-tell")  # the player file's buttons open the same dialogs as the keys
-            await until(pilot, lambda: isinstance(app.screen, Form))
+            for _ in range(10):  # the player file's buttons open the same dialogs as the keys
+                await pilot.click("#pl-tell")  # retried: on a slow Windows runner the first click can land before layout settles
+                if await until(pilot, lambda: isinstance(app.screen, Form), tries=20):
+                    break
             assert isinstance(app.screen, Form)
             await pilot.press("escape")
             await pilot.press("question_mark")
@@ -144,6 +147,10 @@ def test_app_against_fakes():
             await pilot.pause()
             assert app.stations[1].alerts == 0
             await pilot.press("1")
+            await pilot.press("f4")  # the demo's 0.9.22 VPN lists: the 10-day-old, failing one is flagged
+            lists = app.query_one("#vpnlists")
+            await until(pilot, lambda: lists.row_count == 3)
+            assert "1 need a look" in str(lists.border_title)
             await pilot.press("f5")
             app.query_one("#cmd").focus()
             app.query_one("#cmd").value = "say hello there"
@@ -230,6 +237,43 @@ def test_self_update(tmp_path, monkeypatch):
     assert "uv tool upgrade" in update.check(None)  # not a release build: say how
     rel["tag_name"] = "v0.0.1"
     assert update.check(exe) == ""
+
+
+def test_about_keeps_the_legal_notices():
+    from oni_rcon.about import about_line, about_text
+    t = about_text("0.9.0")
+    for must in ("ONI RCON by Arche Labs (viik), version 0.9.0", "ibigs, LLC", "GNU Affero General Public License",
+                 "NO WARRANTY", "LICENSE", "https://github.com/viik2k/oni-rcon"):
+        assert must in t
+    assert about_line() == "ONI RCON by Arche Labs (viik) · AGPL-3.0-or-later · no warranty · https://github.com/viik2k/oni-rcon"
+
+    async def go():
+        ports, _ = await serve_fakes(tick=False)
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False)
+        async with app.run_test(size=(160, 48)) as pilot:
+            app.action_about()
+            await pilot.pause()
+            assert type(app.screen).__name__ == "About"
+            assert "Arche Labs (viik)" in str(app.screen.query(".dialog-body").first().render())
+            await pilot.press("escape")
+            app.action_help()
+            await pilot.pause()
+            assert isinstance(app.screen, Help)
+    asyncio.run(go())
+
+
+def test_projects():
+    from oni_rcon.projects import mixed_by_project, project_of
+    assert project_of({"server": "S", "version": "0.9.18"}).reclaimer and project_of(None).id == "reclaimer"
+    p = project_of({"project": "Project Gravemind"})
+    assert (p.id, p.game, p.tag, p.reclaimer) == ("gravemind", "Halo 2", "H2", False)
+    assert project_of({"project": "renaissance"}).tag == "REACH"
+    o = project_of({"project": "OpenCE\n", "game": "Halo: Combat Evolved"})
+    assert (o.name, o.tag, o.reclaimer) == ("OpenCE", "HCE", False)
+    st = lambda v, p=None: {"version": v, "project": p}
+    assert mixed_by_project([("A", st("0.9.18")), ("B", st("1.2.0", "gravemind"))]) == ""
+    assert mixed_by_project([("A", st("0.9.18")), ("B", st("0.9.17")), ("C", st("1.0.0", "gravemind"))]) == \
+        "Project Reclaimer: 0.9.17 on B · 0.9.18 on A"
 
 
 def test_reclaimer_drift():
@@ -364,7 +408,7 @@ def test_app_keeps_the_selection_and_redacts():
             chosen = app.ban_rows[bans.selected]
             fake.bans["players"].insert(0, {"id": "f" * 32, "name": "New", "reason": "y"})  # someone else bans
             app.fetch(app.cur, "bans")
-            await pilot.pause(0.3)
+            await until(pilot, lambda: bans.row_count == 7)
             assert bans.row_count == 7 and app.ban_rows[bans.selected] == chosen  # u still lifts the chosen ban
             assert "192.0.2.44" not in str(app.query_one("#vpn").get_row_at(0))
 
@@ -731,5 +775,71 @@ def test_f4_pardons_a_kick():
                 if not app.kick_rows:
                     break
             assert not st.kicks and kicks.row_count == 0 and not keep[0].kicked
+
+    asyncio.run(go())
+
+
+def test_vpn_lists():
+    now = 1_800_000_000
+    v = {"lists": {"refreshed_at": now - 60, "sources": [
+        {"list": "fresh", "ranges": 100, "asns": 0, "fetched_at": now - 600, "problem": None},
+        {"list": "old", "ranges": 5, "asns": 2, "fetched_at": (now - 8 * 86400) * 1000, "problem": None},
+        {"list": "broken", "ranges": 0, "fetched_at": None, "problem": "HTTP 404"}],
+        "table": {"table": "ip2asn", "rows": 10, "blocks": 4,
+                  "fetched_at": datetime.fromtimestamp(now - 3600, timezone.utc).isoformat().replace("+00:00", "Z")}}}
+    lists = vpn_lists(v, now)  # seconds, milliseconds and ISO times all read
+    assert [(x["name"], x["stale"], x["problem"]) for x in lists] == [
+        ("fresh", False, ""), ("old", True, ""), ("broken", True, "HTTP 404"), ("ASN table (ip2asn)", False, "")]
+    assert lists[0]["size"] == "100 ranges · 0 ASNs" and lists[0]["age"] == "10m 00s"
+    assert lists[1]["age"] == "8d 0h" and lists[2]["age"] == "never" and lists[3]["age"] == "1h 00m"
+    assert vpn_lists({"block_vpn": True, "ranges": 3}) == [] and vpn_lists({"lists": None}) == []  # pre-0.9.22
+    assert vpn_check("refused", {"listed": True, "list": "x4bnet", "refused": True}) == "refused · matched x4bnet"
+    assert "fail_closed" in vpn_check("refused", {"listed": False, "refused": True, "fail_closed": True})
+    assert vpn_check("fine", None) == "fine"
+
+
+def test_admin_rows():
+    a = {"admins": ["76561198000000001", {"name": "Overseer", "player_id": "abc", "source": "dedicated.toml"},
+                    {"name": "Bravo", "id": "def", "from": "rcon", "online": False}, {}]}
+    rows = admin_rows(a, [{"player_id": "abc"}])
+    assert [(r["target"], r["on"], r["fixed"]) for r in rows] == [("76561198000000001", False, False), ("abc", True, True),
+                                                                   ("def", False, False)]  # the reply's online wins
+    assert admin_rows({"entries": [{"name": "Gone"}]}, [])[0] == {"target": "Gone", "name": "Gone", "id": "", "from": "",
+                                                                  "fixed": False, "on": None}
+    assert admin_rows({}, []) == []
+
+
+def test_f4_adds_and_removes_admins():
+    async def go():
+        ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])
+        app = OniApp([Server(port=ports[0], password="demo")], by="pytest", intro=False)
+        async with app.run_test(size=(160, 48)) as pilot:
+            await settle(app, pilot, "players", "admins")
+            admins = app.query_one("#admins")
+            new = next(p for p in keep[0].players if not p["admin"])
+            before = admins.row_count
+            assert before >= 1 and str(admins.border_title).startswith("ADMINS · ")
+            app.action_tab("blacklist")
+            app.bl("adminadd")
+            await until(pilot, lambda: isinstance(app.screen, Pick))
+            await pilot.press(*new["name"], "enter")
+            await until(pilot, lambda: isinstance(app.screen, Confirm))
+            app.screen.query_one("#yes").press()
+            assert await until(pilot, lambda: admins.row_count == before + 1) and new["admin"]
+            assert "Overseer" in [str(admins.get_row_at(i)[0]) for i in range(admins.row_count)]
+
+            admins.move_cursor(row=0)  # Overseer: written in dedicated.toml, so it isn't sent
+            await pilot.pause()
+            assert app.admin_rows[admins.selected]["fixed"]
+            app.bl("adminremove")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, Confirm) and admins.row_count == before + 1
+            row = next(i for i in range(admins.row_count) if str(admins.get_row_at(i)[0]) == new["name"])
+            admins.move_cursor(row=row)
+            await pilot.pause()
+            app.bl("adminremove")
+            await until(pilot, lambda: isinstance(app.screen, Confirm))
+            app.screen.query_one("#yes").press()
+            assert await until(pilot, lambda: admins.row_count == before) and not new["admin"]
 
     asyncio.run(go())

@@ -2,7 +2,8 @@
 
 ![oni-rcon boot screen: the ONI emblem over the clearance check](docs/boot.png)
 
-**An ONI-themed terminal admin console for Project Reclaimer Halo 3 dedicated servers.**
+**An ONI-themed admin console for community Halo dedicated servers: Project Reclaimer (Halo 3) first, and [other
+projects](docs/OTHER-GAMES.md) that speak its remote console.** By Arche Labs (viik).
 Every server you run on one screen: players, live intercepts, kicks and bans, map and mode control, votes, VPN
 allowances and a raw command console, wrapped in Office of Naval Intelligence, Section Three dossier styling.
 
@@ -27,10 +28,10 @@ resolution, and lighter on a big fleet. Installers are on the [releases page](ht
 
 | Tab | |
 |---|---|
-| **F1 Assets** | Live player table per server: team, score, K/D, health and shield bars, admin, dead and spree flags, and the score race between the teams along the bottom. The dossier shows the selected player's file, a biometric glyph drawn from their player ID, the medals they've earned and the raw JSON. `t` tell · `k` kick · `b` ban · `m` mute · `j` team · `v` VPN allow · `p` make admin (desktop) · `y` copy ID |
+| **F1 Assets** | Live player table per server: team, score, K/D, health and shield bars, admin, dead and spree flags, and the score race between the teams along the bottom. The dossier shows the selected player's file, a biometric glyph drawn from their player ID, the medals they've earned and the raw JSON. `t` tell · `k` kick · `b` ban · `m` mute · `j` team · `v` VPN allow · `p` make admin · `y` copy ID |
 | **F2 Intercepts** | One feed from every server: chat (team and server), kills with weapon, joins, leaves, kicks, bans, votes and game phases. Kills carry their Halo 3 medals: double kill through killionaire, killing spree through invincible, and killjoy. Filter by chat, combat, traffic, moderation or ops; scroll up to read back and it holds still. Chat that mentions admins or cheating raises a toast and the terminal bell |
 | **F3 Operations** | Sitrep for the selected server with the vote under way and its tally, and the title and author of the map or gametype playing when it came from ReclaimerForge; the theatre, with each team's numbers and score as bars, the top guns and who's on a spree; the playlist rotation with the current map marked; and buttons for load map + mode, change map or mode, queue next, end round or game, shuffle, team count, call, pass or cancel a vote, broadcast, rename, join password and ping limit, and (desktop) player capacity, making game types, making and switching playlists and restarting the server |
-| **F4 Blacklist** | Bans by player, IP and device; new ban (timed or permanent), unban, VPN allow and revoke, check an IP. The admins, with who's on and where each was made: add or remove one at once on every server sharing the ban list (server 0.9.16 or later), or, on the desktop, of one server only through its `dedicated.toml` (from the next restart). Who was kicked and how long they're still out: pardon one so they can rejoin now (server 0.9.16 or later). `p` add admin · `d` remove admin · `o` pardon |
+| **F4 Blacklist** | Bans by player, IP and device; new ban (timed or permanent), unban, VPN allow and revoke, check an IP (on the desktop with server 0.9.22 or later, which list it matched). On the desktop with server 0.9.22 or later, each VPN list's size, age and last fetch problem, flagged when older than a week or failing, and whether the server refuses everyone while no list is loaded (fail-closed). The admins, with who's on and where each was made: add or remove one at once on every server sharing the ban list (server 0.9.16 or later), or, on the desktop, of one server only through its `dedicated.toml` (from the next restart). Who was kicked and how long they're still out: pardon one so they can rejoin now (server 0.9.16 or later). `p` add admin · `d` remove admin · `o` pardon |
 | **F5 Console** | Type any RCON command (`help` lists them) with ↑/↓ history. The command log records everything sent from this session and its replies. The message in `say`, `tell`, `kick` and `servername` is the rest of the line as typed, sent as one argument, so it needs no quotes |
 | **F6 Forge** | The [ReclaimerForge](https://www.reclaimerforge.net) catalog of community maps, gametypes and playlists, read with your own API key. Order it by trending, rising, latest, updated, downloads, rated, unrated or overlooked (trending and rising over the last 24 hours, 7 days or 30 days), or see the collections ReclaimerForge is featuring now, and search it. Each listing shows its type, authors, thumbs up and down, recent downloads, and whether it runs on the selected server's version; its file lists every version, and any of them installs on the selected server, every file checked against Forge's manifest. In the desktop app, `p` publishes your own files to Forge, and MINE lists your listings to update, edit, withdraw or delete. `i` install on this server · `l` load it now · `s` sort · `w` window · `/` search · `n` more · `k` key · `y` copy ID · `p` publish · `u` new version · `e` edit · `x` withdraw (desktop) |
 | **F7 Health** | Whether the servers are crashing and the box is coping. CRASHES lists each server's latest crashes read from its log (time, server, class, how many players were on, whether the RCON connection dropped with it); HOST shows free memory, swap, the kernel's `oom_kill` counter and each container's start time and OOMKilled flag; WORKAROUND shows whether an optional systemd service is running. A new crash, an OOM kill or memory falling under your limit flashes a banner over every tab, goes in the feed and beeps. Needs `health_cmd` in the config: [see below](#health-watch) |
@@ -477,6 +478,14 @@ The first time, F10 shows what it runs, where, and what it may send, and asks yo
 `oni-plugin.toml` asks again. [`examples/plugins/hello`](examples/plugins/hello) is a working one in a single Python
 file. [docs/PLUGINS.md](docs/PLUGINS.md) is the protocol.
 
+## Other games
+
+The desktop app can also manage servers of other community projects, such as Project Gravemind (Halo 2) and Reach
+Renaissance (Halo: Reach), once their dedicated server speaks Reclaimer's remote console and names its game when it
+signs in. Such a server's card shows its game, and what is Reclaimer's alone (its `dedicated.toml` settings,
+ReclaimerForge, its release warnings) is turned off for it. [docs/OTHER-GAMES.md](docs/OTHER-GAMES.md) is what a server
+needs, written for those projects' developers. The demo's third server is a pretend Project Gravemind one.
+
 ## Security
 
 - **RCON is plain text.** Keep the server's `[rcon] address` on `127.0.0.1` and reach it with `--ssh` (or a VPN). Never
@@ -555,11 +564,15 @@ work is. oni-rcon doesn't speak for ReclaimerForge; it's a separate community pr
 
 ## Disclaimer
 
-oni-rcon is an unofficial, fan-made tool. It is not affiliated with or endorsed by Microsoft, Halo Studios or the
-Project Reclaimer team. Halo and related names are trademarks of Microsoft Corporation, and the ONI styling is a fan
+oni-rcon is an unofficial, fan-made tool. It is not affiliated with or endorsed by Microsoft, Halo Studios, the
+Project Reclaimer team or any other community project it works with. Halo and related names are trademarks of Microsoft Corporation, and the ONI styling is a fan
 tribute: the emblem in the interface is a fan-made pixel rendition, and the Windows icon is the ONI emblem. oni-rcon
 contains no game files.
 
 ## Licence
 
-[GPL-3.0-or-later](LICENSE) © 2026 Arche Labs, with portions © 2026 ibigs, LLC (RifleJock). Releases up to v0.9.0 and desktop-v1.4.1 remain available under MIT; see [NOTICE](NOTICE).
+[AGPL-3.0-or-later](LICENSE) © 2026 Arche Labs (viik), with portions © 2026 ibigs, LLC (RifleJock), which remain under
+GPL-3.0-or-later. Anyone who runs a modified ONI RCON for others over a network has to offer those users its source.
+[NOTICE](NOTICE) has two additional terms (section 7): a modified version keeps the About screen's credits and says it's
+modified. Releases up to desktop-v1.10.0 remain available under GPL-3.0-or-later, and up to v0.9.0 and desktop-v1.4.1
+under MIT.

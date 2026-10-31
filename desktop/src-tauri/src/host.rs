@@ -6,7 +6,7 @@ use crate::rcon::SSH_OPTS;
 use crate::util::{command, which, write_atomic};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -331,6 +331,31 @@ pub fn playlist_file(p: &serde_json::Value) -> Result<(String, String), String> 
     Ok((format!("playlists/{slug}.playlist.json"), serde_json::to_string_pretty(&checked).unwrap() + "\n"))
 }
 
+/// The bundled Flood Infection mode, a copy of it, or a mode built on it (H4 Flood): all load the campaign's Flood from
+/// FLOOD_MAP, which `dedicated init` doesn't copy and `dedicated check` doesn't ask for. Without it a vote for the game
+/// passes, the game fails to load and the vote starts over. From rcburke92's project-reclaimer-server-manager.
+pub const FLOOD_MAP: &str = "halo3/maps/050_floodvoi.map";
+
+pub fn plays_flood(game: &str) -> bool {
+    static FLOOD: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)flood[-_ ]?infection|h4[-_ ]?flood").unwrap());
+    FLOOD.is_match(game)
+}
+
+/// FLOOD_MAP from MCC into the server's game folder, when MCC has it and the server doesn't: hard-linked when they share
+/// a drive (as init does with the other maps), else copied. Whether it was put there.
+fn add_flood_map(game: &Path, server_game: &Path) -> std::io::Result<bool> {
+    let (from, to) = (game.join(FLOOD_MAP), server_game.join(FLOOD_MAP));
+    if to.exists() || !from.is_file() || !server_game.join("halo3/maps").is_dir() {
+        return Ok(false);
+    }
+    if std::fs::hard_link(&from, &to).is_err() {
+        let part = to.with_extension("map.part");
+        std::fs::copy(&from, &part)?;
+        std::fs::rename(&part, &to)?;
+    }
+    Ok(true)
+}
+
 /// A playlist file the console made, and so may rewrite: playlists/<name>.playlist.json, nothing deeper.
 pub fn console_playlist(path: &str) -> Result<String, String> {
     let p = crate::install::safe_path(path)?;
@@ -407,15 +432,93 @@ pub fn set_server_admin(text: &str, rcon_port: u16, id: &str, add: bool) -> Resu
     })
 }
 
+/// A server's character mods (0.9.18), set in [defaults] or its [[server]]: the mods whose characters its games include,
+/// whether players must accept them to join, whether Halo 3's own characters are left out, and whether players can
+/// download mods they're missing from it.
+#[derive(Deserialize, Serialize, Default, Clone, Debug, PartialEq)]
+pub struct Mods {
+    pub customization: Vec<String>,
+    pub require_customization: bool,
+    pub no_vanilla_characters: bool,
+    pub share_mods: bool,
+}
+
+impl Mods {
+    /// Read from a table's keys, each one it leaves out taken from `under` (what it inherits).
+    fn from_table(t: &toml_edit::Table, under: &Mods) -> Mods {
+        let flag = |k: &str, d: bool| t.get(k).and_then(toml_edit::Item::as_bool).unwrap_or(d);
+        let names = t.get("customization").and_then(toml_edit::Item::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        Mods {
+            customization: names.unwrap_or_else(|| under.customization.clone()),
+            require_customization: flag("require_customization", under.require_customization),
+            no_vanilla_characters: flag("no_vanilla_characters", under.no_vanilla_characters),
+            share_mods: flag("share_mods", under.share_mods),
+        }
+    }
+}
+
+/// The character-mod settings the [[server]] on `rcon_port` plays with: its own, else [defaults]', else off.
+pub fn server_mods(text: &str, rcon_port: u16) -> Result<Mods, String> {
+    let doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let under = defaults_mods(&doc);
+    let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+    let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    Ok(Mods::from_table(t, &under))
+}
+
+fn defaults_mods(doc: &toml_edit::DocumentMut) -> Mods {
+    doc.get("defaults").and_then(toml_edit::Item::as_table).map(|t| Mods::from_table(t, &Mods::default())).unwrap_or_default()
+}
+
+/// `m` saved in the [[server]] on `rcon_port`. A key that comes out the same as what it inherits from [defaults] (or the
+/// server's own default) is left out, so only what this server does differently is written, and an older server never
+/// meets a key nobody changed.
+pub fn set_server_mods(text: &str, rcon_port: u16, m: &Mods) -> Result<String, String> {
+    let mut names: Vec<String> = Vec::new();
+    for n in m.customization.iter().map(|n| n.trim()) {
+        if n.is_empty() || n.chars().count() > 100 || n.chars().any(char::is_control) {
+            return Err(format!("{n:?} isn't a mod name."));
+        }
+        if !names.iter().any(|x| x == n) {
+            names.push(n.to_string());
+        }
+    }
+    if names.len() > 64 {
+        return Err("A server takes at most 64 character mods here.".into());
+    }
+    if names.is_empty() && (m.require_customization || m.no_vanilla_characters) {
+        return Err("Players accepting them, or playing only as them, needs at least one character mod.".into());
+    }
+    let under = defaults_mods(&text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?);
+    edit_server(text, rcon_port, |t| {
+        if names == under.customization {
+            t.remove("customization");
+        } else {
+            t["customization"] = toml_edit::value(names.iter().collect::<toml_edit::Array>());
+        }
+        for (k, on, was) in [("require_customization", m.require_customization, under.require_customization),
+            ("no_vanilla_characters", m.no_vanilla_characters, under.no_vanilla_characters), ("share_mods", m.share_mods, under.share_mods)] {
+            if on == was {
+                t.remove(k);
+            } else {
+                t[k] = toml_edit::value(on);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Whether this [[server]] answers RCON on `rcon_port` (its own rcon_port, else its game port).
+fn on_port(t: &toml_edit::Table, rcon_port: u16) -> bool {
+    let port = |k: &str| t.get(k).and_then(toml_edit::Item::as_integer);
+    port("rcon_port").or(port("port")) == Some(i64::from(rcon_port))
+}
+
 fn edit_server(text: &str, rcon_port: u16, edit: impl FnOnce(&mut toml_edit::Table) -> Result<(), String>) -> Result<String, String> {
-    use toml_edit::{DocumentMut, Item, Table};
+    use toml_edit::{DocumentMut, Item};
     let mut doc: DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
     let list = doc.get_mut("server").and_then(Item::as_array_of_tables_mut).ok_or("dedicated.toml has no [[server]]")?;
-    let port = |t: &Table, k: &str| t.get(k).and_then(Item::as_integer);
-    let t = list
-        .iter_mut()
-        .find(|t| port(t, "rcon_port").or(port(t, "port")) == Some(i64::from(rcon_port)))
-        .ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    let t = list.iter_mut().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
     edit(t)?;
     Ok(doc.to_string())
 }
@@ -628,6 +731,14 @@ pub async fn host_windows(folder: &Path, game: Option<&Path>, settings: Option<&
         let mut c = command(&exe.display().to_string());
         c.args(["dedicated", "init"]).arg(folder).arg("--from").arg(game);
         stream(c, say, "dedicated init").await?;
+    }
+    // every time, so a server folder made before this, or by hand, gets it too
+    if let Some(game) = game {
+        match add_flood_map(game, &folder.join("game")) {
+            Ok(true) => say("Added 050_floodvoi.map to the server's game folder, for Flood Infection."),
+            Ok(false) => {}
+            Err(e) => say(&format!("Couldn't add 050_floodvoi.map to the server's game folder ({e}): copy it from MCC's halo3\\maps into game\\halo3\\maps there, or Flood Infection games won't load.")),
+        }
     }
     let disk = read(&toml)?;
     let base = match settings {
@@ -1042,6 +1153,21 @@ mod tests {
     const TOML: &str = "game = \"game\"\n[master]\nport = 49175\n\n[rcon]\npassword = \"\"             # set one to turn on the remote console\naddress = \"127.0.0.1\"\n\n[[server]]\nname = \"Community Rotation\"\nport = 49176\npassword = \"join me\"\n\n[[server]]\nname = \"Snipers Only\"\nport = 49177\nrcon_port = 50177\n\n[[server]]\nname = \"Off\"\nport = 49178\nenabled = false\n";
 
     #[test]
+    fn flood_infection_gets_its_map_from_mcc_once() {
+        let (mcc, server) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // MCC has no such map: nothing to do
+        std::fs::create_dir_all(mcc.path().join("halo3/maps")).unwrap();
+        std::fs::write(mcc.path().join(FLOOD_MAP), b"flood").unwrap();
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // no maps folder in the server's: not a server folder
+        std::fs::create_dir_all(server.path().join("halo3/maps")).unwrap();
+        assert!(add_flood_map(mcc.path(), server.path()).unwrap());
+        assert_eq!(std::fs::read(server.path().join(FLOOD_MAP)).unwrap(), b"flood");
+        assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // there already
+        assert!(["Flood Infection", "flood_infection", "H4 Flood", "h4-flood"].iter().all(|g| plays_flood(g)));
+        assert!(!["Infection", "Slayer", "Floodgate Slayer"].iter().any(|g| plays_flood(g)));
+    }
+
+    #[test]
     fn a_new_game_type_keeps_to_the_ranges() {
         let o = |v: serde_json::Value| v.as_object().unwrap().clone();
         let (path, json) = new_game_type("Team Swords", "Slayer", Some(50), &o(serde_json::json!({"rounds.teams": 1, "rounds.minutes": 12}))).unwrap();
@@ -1122,6 +1248,28 @@ game = \"Slayer\""), 50177, "playlist", "playlists/a.playlist.json".into()).unwr
         assert!(!text.contains("abc123") && text.contains("def456"));
         assert!(set_server_admin(&text, 50177, "abc123", false).is_err());
         assert!(set_server_admin(TOML, 50177, "#3", true).is_err(), "a slot number isn't an ID");
+    }
+
+    #[test]
+    fn character_mods_are_its_own_or_what_defaults_give_it() {
+        let with_defaults = TOML.replace("[[server]]\nname = \"Community", "[defaults]\nshare_mods = true\ncustomization = [\"Alpha-Nine\"]\n\n[[server]]\nname = \"Community");
+        let m = |names: &[&str], accept, only, share| Mods { customization: names.iter().map(|s| s.to_string()).collect(), require_customization: accept, no_vanilla_characters: only, share_mods: share };
+        assert_eq!(server_mods(TOML, 50177).unwrap(), Mods::default());
+        assert_eq!(server_mods(&with_defaults, 50177).unwrap(), m(&["Alpha-Nine"], false, false, true));
+        let text = set_server_mods(&with_defaults, 50177, &m(&[" Spartan Pack", "Elites", "Spartan Pack"], true, false, true)).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        let s = &t["server"][1];
+        assert_eq!(s["customization"].as_array().unwrap(), &["Spartan Pack", "Elites"].map(toml::Value::from).to_vec(), "trimmed, once each");
+        assert_eq!((s["require_customization"].as_bool(), s.get("no_vanilla_characters"), s.get("share_mods")), (Some(true), None, None), "only what differs");
+        assert!(t["server"][0].get("customization").is_none(), "the other server is left alone");
+        assert_eq!(server_mods(&text, 50177).unwrap(), m(&["Spartan Pack", "Elites"], true, false, true));
+        let back = set_server_mods(&text, 50177, &m(&["Alpha-Nine"], false, false, true)).unwrap();
+        assert_eq!(back.parse::<toml::Table>().unwrap(), with_defaults.parse::<toml::Table>().unwrap(), "back to what it inherits: its own keys go");
+        let none = set_server_mods(&with_defaults, 50177, &m(&[], false, false, false)).unwrap();
+        assert_eq!(server_mods(&none, 50177).unwrap(), Mods::default(), "turned off against [defaults]: written as none");
+        assert!(set_server_mods(TOML, 50177, &m(&[], true, false, false)).is_err(), "accepting nothing");
+        assert!(set_server_mods(TOML, 50177, &m(&["bad\nname"], false, false, false)).is_err());
+        assert!(set_server_mods(TOML, 1234, &m(&["A"], false, false, false)).is_err());
     }
 
     #[test]

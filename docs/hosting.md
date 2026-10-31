@@ -29,6 +29,8 @@ Then **CREATE & START**:
    published SHA-256, and saves it as `project-reclaimer.exe`. A download that doesn't match is thrown away.
 3. It makes the server folder with `project-reclaimer dedicated init`: `reclaimer` at the root of the drive MCC is on
    (`D:\reclaimer`), so the maps are hard-linked instead of copied.
+   It adds `050_floodvoi.map`, which init leaves out and Flood Infection needs (a server folder that's there already
+   gets it too).
 4. It saves your choices in `dedicated.toml` (comments kept). A custom server is one server: the first of the two
    `dedicated init` makes is yours, the second is turned off (`enabled = false`, not deleted).
    It turns the remote console on: a new random password goes into `dedicated.toml` under `[rcon]`, with the address
@@ -74,6 +76,7 @@ their folders, into `~/reclaimer/server/game`:
 - `halo3/halo3.dll`
 - `halo3/maps/shared.map`, and `halo3/maps/<map>.map` with `halo3/maps/info/<map>.mapinfo` for each map you host
 - `campaign.map` and `040_voi.map` from `halo3/maps`, for Forge's campaign vehicles and AI
+- `050_floodvoi.map` from `halo3/maps`, for Flood Infection (without it a vote for it passes and the game fails to load)
 
 For example, from a Windows PC: `scp -r "<MCC folder>\halo3" admin@game-box:~/reclaimer/server/game/` (all of it, a
 few GB). Then HOST ONE HERE again.

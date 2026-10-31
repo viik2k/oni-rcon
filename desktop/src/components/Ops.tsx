@@ -2,10 +2,11 @@
 import { useState } from "react";
 import { AMBER, CYAN, DIM, GOLD, GREEN, RED, TEAM_COLOR, WHITE } from "../art/palette";
 import { oni, SPREE, useV } from "../engine";
-import { BAN_OPS, OPS, OP_GROUPS, TIPS, bl, op } from "../actions";
+import { BAN_OPS, OPS, OP_GROUPS, RECLAIMER_OPS, TIPS, bl, op } from "../actions";
+import { projectOf, reclaimerOnly } from "../lib/projects";
 import { norm, refsOf } from "../lib/forge";
 import { LEVEL_COLOR, TARGET, level } from "../lib/perf";
-import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, type Dict, type Kick, type Line } from "../lib/util";
+import { behind, kickLeft, num, pick, redactAddr, redactText, sides, teamOf, until, voteText, vpnLists, type Dict, type Kick, type Line } from "../lib/util";
 import { Btn, L, Panel, Table, useSize, type Row } from "./ui";
 
 const QUIET = new Set(["", "unknown", "none"]);
@@ -63,11 +64,13 @@ export function Operations() {
   useV((s) => s.forge);
   const [tref, { w: tw }] = useSize<HTMLDivElement>();
   const st = oni.cur, s: Dict = st.data.status ?? {}, vote: Dict = st.data.vote ?? {}, info = st.info ?? {};
-  const old = st.online ? behind(info.version, oni.reclaimer) : "";
+  const game = projectOf(info), known = Object.keys(info).length > 0; // known once it has signed in
+  const old = st.online && game.reclaimer ? behind(info.version, oni.reclaimer) : "";
   const credit = playing(st.where, s.map, s.mode);
   const fr: Dict | undefined = oni.health.frames?.[String(st.index)];
   const rows: [string, Line | string][] = [
     ["STATION", [[String(s.name || info.server || st.label), AMBER]]],
+    ...(known ? [["GAME", [[game.game, game.reclaimer ? WHITE : CYAN], [`  ${game.name}`, DIM]]] as [string, Line]] : []),
     ["UPLINK", old ? [[`${st.where}   v${info.version}`, WHITE], [`   ${old} out: only players on v${info.version} can join`, AMBER]] : `${st.where}   v${info.version ?? "?"}`],
     ["PUBLIC ADDRESS", [[redactAddr(s.address, oni.redact), oni.redact ? RED : WHITE]]],
     ["PHASE", QUIET.has(String(s.phase ?? "").toLowerCase()) ? [["—", DIM]] : [[String(s.phase).replace(/_/g, " ").toUpperCase(), CYAN]]],
@@ -82,7 +85,7 @@ export function Operations() {
     ["VPN BLOCK", yesNo(s.block_vpn)], ["TEXT CHAT", yesNo(s.text_chat)], ["VOICE", yesNo(s.voice)], ["HIDDEN", yesNo(s.hidden, "YES", "NO")],
   ];
   const voting = "vote" in st.data ? !!vote.vote : null;
-  const off = (o: string) => (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "camera", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
+  const off = (o: string) => (RECLAIMER_OPS.includes(o) && !game.reclaimer) || (o === "restart" ? !st.canRestart : o === "remove" ? false : ["capacity", "camera", "charmods", "playlist", "playlists", "newgametype"].includes(o) ? !st.contentDir : o === "newplaylist" ? !st.contentDir || !st.online : o !== "reconnect" && !st.online) || (["passvote", "cancelvote"].includes(o) && voting === false) || (o === "startvote" && voting === true);
   const ops = Object.fromEntries(OPS.map(([o, l, v]) => [o, [l, v]]));
   const here = norm(s.map);
   const pulledRefs = new Set<string>();
@@ -112,7 +115,7 @@ export function Operations() {
             <div key={g}>
               <div className="head">{g}</div>
               <div className="grid3">
-                {names.map((o) => <Btn key={o} id={`op-${o}`} label={ops[o][0]} variant={ops[o][1]} disabled={off(o)} title={TIPS[`op-${o}`]} onClick={() => op(o)} />)}
+                {names.map((o) => <Btn key={o} id={`op-${o}`} label={ops[o][0]} variant={ops[o][1]} disabled={off(o)} title={(RECLAIMER_OPS.includes(o) && reclaimerOnly(info, ops[o][0])) || TIPS[`op-${o}`]} onClick={() => op(o)} />)}
               </div>
             </div>
           ))}
@@ -174,6 +177,11 @@ export function Blacklist() {
     const on = pick(e, "online", "connected") ?? (id ? online.has(id) : undefined);
     arows.push({ id: key, cells: [[[name || "—", name ? AMBER : DIM]], id || "—", [[on ? "ON" : on === false ? "—" : "?", on ? GREEN : DIM]], [[from || "—", DIM]]] });
   }
+  const lists = vpnLists(v), bad = lists.filter((l) => l.stale || l.problem).length;
+  const lrows: Row[] = lists.map((l, i) => ({ id: String(i), cells: [[[l.name, l.stale || l.problem ? AMBER : WHITE]], [[l.size, DIM]],
+    [[l.age, l.stale ? RED : GREEN]], [[l.problem || "—", l.problem ? RED : DIM]]] }));
+  const ltitle = !("lists" in v) ? "VPN LISTS · needs server 0.9.22 or later" : !v.lists ? "VPN LISTS · none fetched yet"
+    : `VPN LISTS · ${lists.length}${bad ? ` · ${bad} need a look` : ""}`;
   blUi.kicks = st.kicks;
   const krows: Row[] = [...st.kicks].reverse().map(([key, k]) => {
     const left = kickLeft(k);
@@ -189,9 +197,14 @@ export function Blacklist() {
         <Table id="bans" cols={["TYPE", "TARGET", "NAME", "REASON", "EXPIRES", "BY"]} rows={rows} selected={blUi.ban} onSelect={sel("ban")} />
       </Panel>
       <div className="hsplit grow">
-        <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}`} className="grow">
-          <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
-        </Panel>
+        <div className="vsplit grow">
+          <Panel title={`VPN ALLOWANCES · blocking ${v.block_vpn ? "ON" : "OFF"}${typeof v.ranges === "number" ? ` · ${v.ranges} ranges` : ""}${v.fail_closed ? " · fail-closed" : ""}`} className="grow">
+            <Table id="vpn" cols={["ALLOWED THROUGH VPN", "NOTE"]} rows={vrows} selected={blUi.vpn} onSelect={sel("vpn")} />
+          </Panel>
+          <Panel title={ltitle} className="grow">
+            <Table id="vpnlists" cols={["LIST", "SIZE", "AGE", "PROBLEM"]} rows={lrows} cursor={false} />
+          </Panel>
+        </div>
         <Panel title={a ? `ADMINS · ${arows.length}` : "ADMINS · needs server 0.9.16 or later"} className="grow">
           <Table id="admins" cols={["ADMIN", "PLAYER ID", "ON", "FROM"]} rows={arows} selected={blUi.admin} onSelect={sel("admin")} />
         </Panel>

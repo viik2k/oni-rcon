@@ -4,9 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { DIM, TEAM_COLOR, TEAMS, WHITE, AMBER, CYAN } from "./art/palette";
 import { bump, oni, type Station } from "./engine";
 import { newPlaylist, type Playlist } from "./lib/content";
+import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, CAMERAS, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
@@ -18,9 +19,11 @@ export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "prima
   ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""],
-  ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
+  ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
+/** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
+export const RECLAIMER_OPS = ["capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
   ["pardon", "PARDON  o", ""]];
@@ -46,6 +49,7 @@ export const TIPS: Record<string, string> = {
   "op-maxping": "Stop players with a high ping from joining.",
   "op-capacity": "How many players the server takes at once. Saved in its dedicated.toml, so it holds after a restart. Server 0.9.18 or later applies it at once; an older one needs a restart.",
   "op-camera": "First person, third person, or each player's choice, for players on foot. Saved in its dedicated.toml; server 0.9.20 or later applies it from the next game.",
+  "op-charmods": "Which character mods (cosmetic mods with a customization.json) its games include, whether players must accept them or play only as them, and whether players can download mods they're missing from it. Saved in its dedicated.toml; needs server 0.9.18 or later.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml: server 0.9.18 or later takes it up without a restart; an older one needs one.",
   "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
@@ -160,7 +164,7 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
 }
 
 /** When a dedicated.toml edit takes effect on this server. */
-const liveReload = (st: Station) => st.online && hotReloads(st.info.version);
+const liveReload = (st: Station) => st.online && projectOf(st.info).reclaimer && hotReloads(st.info.version);
 const takesEffect = (st: Station) => (liveReload(st) ? "at once, no restart" : "after a restart");
 
 /** A dedicated.toml setting saved. Server 0.9.18 or later is told to reload, and its reply says what changed;
@@ -177,6 +181,35 @@ async function saveSetting(st: Station, key: string, value: unknown, what: strin
   }
   if (st.canRestart) return op("restart", st); // the server just saved, even if the selection moved meanwhile
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
+}
+
+/** CHARACTER MODS (0.9.18): the character mods its games include, from its content folder's Mods, whether players must
+ *  accept them to join or play only as them, and whether players can download mods they're missing from it. */
+async function characterMods(st: Station) {
+  const what = `CHARACTER MODS · ${st.label}`;
+  if (behind(st.info.version, "0.9.18")) return oni.notify(`${st.label} runs ${st.info.version}: character mods need server 0.9.18 or later.`, what, "warning");
+  let cur: Dict;
+  try {
+    cur = await invoke<Dict>("server_mods", { index: st.index });
+  } catch (e) {
+    return oni.notify(String(e), what, "error", 15);
+  }
+  const found: string[] = cur.found ?? [];
+  const yes = (on: boolean): [string, string][] => (on ? [["Yes", "1"], ["No", "0"]] : [["No", "0"], ["Yes", "1"]]); // the first is chosen
+  const f = await oni.form("CHARACTER MODS", [
+    ["mods", "Character mods its games include  (names, comma-separated; empty for none)", (cur.customization ?? []).join(", ")],
+    ["accept", "Players must accept them to join", yes(cur.require_customization)],
+    ["only", "No Halo 3 characters: everyone plays as one of the mods' characters", yes(cur.no_vanilla_characters)],
+    ["share", "Players can download mods they're missing from this server", yes(cur.share_mods)],
+  ], { verb: "SAVE", note: (found.length ? `In its content folder's Mods: ${found.join(", ")}.`
+      : "No character mods in its content folder's Mods yet: copy each mod's folder (the one with customization.json in it) there.")
+    + ` Saved in its dedicated.toml: it takes effect ${takesEffect(st)}. The server uses character mods only with all 27 Halo 3 multiplayer maps in its game folder.` });
+  if (!f) return;
+  const mods = [...new Set(String(f.mods).split(",").map((x) => x.trim()).filter(Boolean))];
+  const value = { customization: mods, require_customization: f.accept === "1", no_vanilla_characters: f.only === "1", share_mods: f.share === "1" };
+  await saveSetting(st, "character_mods", value, "CHARACTER MODS", mods.length ? mods.join(", ") : "no character mods");
+  const odd = mods.filter((m) => !found.some((x) => x.toLowerCase() === m.toLowerCase()));
+  if (odd.length) oni.notify(`Not a folder in its content folder's Mods: ${odd.join(", ")}. The server's reply to reload says whether it has them.`, what, "warning", 12);
 }
 
 const BASE_MODES: [string, string][] = [["Slayer", "Slayer"], ["Capture the Flag", "CaptureTheFlag"], ["Oddball", "Oddball"], ["King of the Hill", "KingOfTheHill"],
@@ -262,6 +295,7 @@ async function editPlaylist(st: Station, p: Playlist, path: string | null, note 
           if (!(await oni.confirm("REPLACE PLAYLIST", `${saved.path} is there already.`, "REPLACE", true))) continue;
           saved = await invoke<Dict>("save_playlist", { ...args, replace: true });
         }
+        if (saved.flood) oni.notify(String(saved.flood), `FLOOD INFECTION · ${st.label}`, "warning", 20);
         return saved.path;
       } catch (e) {
         oni.notify(String(e), `PLAYLIST NOT SAVED · ${st.label}`, "error", 15);
@@ -304,6 +338,8 @@ async function playlistsManager(st: Station): Promise<void> {
 
 export async function op(name: string, st = oni.cur) {
   const s = st.data.status ?? {};
+  const theirs = RECLAIMER_OPS.includes(name) ? reclaimerOnly(st.info, OPS.find(([o]) => o === name)?.[1]) : "";
+  if (theirs) return oni.notify(theirs, st.label, "warning");
   if (name === "broadcast") return broadcast();
   if (name === "reconnect") {
     let pw: string | undefined;
@@ -344,6 +380,7 @@ export async function op(name: string, st = oni.cur) {
     if (f) return saveSetting(st, "camera", f.c, "CAMERA", CAMERAS.find(([, v]) => v === f.c)![0].toLowerCase());
     return;
   }
+  if (name === "charmods") return characterMods(st);
   if (name === "newgametype") return newGameType(st);
   if (name === "playlists") return playlistsManager(st);
   if (name === "newplaylist") {
@@ -463,7 +500,9 @@ export async function bl(name: string, ban?: string | null, vpn?: string | null,
     if (f) oni.send(st, "pardon", [f.target.trim()]);
   } else if (name === "vpncheck") {
     const f = await oni.form("CHECK AN ADDRESS", [["ip", "IP address", ""]], { verb: "CHECK", required: ["ip"] });
-    if (f) oni.send(st, "vpn", [f.ip]);
+    if (!f) return;
+    const r = await oni.cmd(st, "vpn", [f.ip.trim()], { toast: false });
+    if (r.ok) oni.notify(vpnCheck(oni.replyText(r), redactData(r.data, oni.redact)), `${st.label} · CHECK IP`);
   }
 }
 
