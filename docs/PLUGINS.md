@@ -13,8 +13,8 @@ Discord relay) mostly want to run 24/7 on a host, long after the console is clos
 
 So a plug-in is **never code in Oni's process**. It is a separate program that speaks a small JSON protocol, and it
 **describes its own panel** in a fixed vocabulary of blocks that both front-ends draw. Write it once, in any language;
-it appears in the desktop app and the terminal console alike. Oni (GPL-3.0-or-later) and a plug-in's licence stay
-separate, because they only exchange JSON.
+it appears in the desktop app and the terminal console alike. Oni (AGPL-3.0-or-later) and a plug-in's licence stay
+separate, because they only exchange JSON: a plug-in is its own program, under whatever licence its author picks.
 
 ## A plug-in on disk
 

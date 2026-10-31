@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AMBER, CYAN, DIM, TEAM_COLOR, WHITE } from "../art/palette";
 import { emblem } from "../art/archive";
 import { oni, useV, type Dialog } from "../engine";
+import { aboutLine } from "../lib/about";
 import { CREDIT } from "../lib/forge";
 import { everyone, rankedPlayers, type Found } from "../lib/search";
 import { plain, redactAddr, targetOf, type Dict, type Line } from "../lib/util";
@@ -243,7 +244,7 @@ function Help({ d }: { d: Dialog }) {
       <div ref={body} tabIndex={0} style={{ overflowY: "auto", flex: 1, outline: "none" }}>
         <div style={{ display: "flex", gap: 24, alignItems: "center", marginBottom: 14 }}>
           <Pixel pic={emblem(48)} width={96} />
-          <div><div style={{ color: AMBER }}>OFFICE OF NAVAL INTELLIGENCE</div><div style={{ color: DIM }}>SECTION THREE  ·  REMOTE CONSOLE TERMINAL</div><br /><div>Every key, button and readout, in plain words.</div></div>
+          <div><div style={{ color: AMBER }}>OFFICE OF NAVAL INTELLIGENCE</div><div style={{ color: DIM }}>SECTION THREE  ·  REMOTE CONSOLE TERMINAL</div><br /><div>Every key, button and readout, in plain words.</div><div style={{ color: DIM }}>{aboutLine()}  ·  About ONI RCON in Ctrl+P</div></div>
         </div>
         {GUIDE.map(([section, rows]) => (
           <div key={section} style={{ marginBottom: 14 }}>

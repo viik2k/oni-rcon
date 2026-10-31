@@ -38,7 +38,8 @@ from textual.worker import WorkerState
 from .archive import FILES, TOTAL, frame as archive_frame
 from .art import (AMBER, CYAN, DIM, GOLD, GREEN, GREY, INK, RED, WHITE, biosig, blend, decrypt, emblem, fit, gauge, hbar,
                   pixels, spark, split_bar)
-from . import health as hc
+from . import __version__, health as hc
+from .about import about_line, about_text
 from .config import Server, remember_forge_key
 from .forge import (CREDIT, SITE, SORTS, WINDOWED, WINDOWS, WITHDRAWN, ForgeClient, ForgeError, ForgeSetup, Secret,
                     Unverified, author_of, authors_of, before, blurb_of, change_key, change_listing, compat_of,
@@ -1018,7 +1019,8 @@ class Help(Dialog):
         crest.add_column(vertical="middle")
         crest.add_row(emblem(8, 16), Text.assemble(("OFFICE OF NAVAL INTELLIGENCE\n", AMBER),
                                                    ("SECTION THREE  ·  REMOTE CONSOLE TERMINAL\n\n", DIM),
-                                                   ("Every key, button and readout, in plain words.", WHITE)))
+                                                   ("Every key, button and readout, in plain words.\n", WHITE),
+                                                   (f"{about_line()}  ·  ABOUT in Ctrl+P", DIM)))
         parts = [crest, Text()]
         for section, rows in GUIDE:
             g = Table.grid(padding=(0, 2))
@@ -1035,6 +1037,17 @@ class Help(Dialog):
 
     def on_mount(self) -> None:
         self.query_one("#help-body").focus()
+
+
+class About(Dialog):
+    """Who made ONI RCON, its licence, no warranty, and where its source is: NOTICE asks a modified version to keep it."""
+    BINDINGS = [Binding("escape,enter,q", "dismiss", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Static("ABOUT ONI RCON", classes="dialog-title")
+            yield Static(Text(about_text(__version__)), classes="dialog-body")
+            yield self.keys("Esc or Enter close")
 
 
 class Archive(Screen):
@@ -3130,6 +3143,10 @@ class OniApp(App):
         if not isinstance(self.screen, Help):
             self.push_screen(Help())
 
+    def action_about(self) -> None:
+        if not isinstance(self.screen, About):
+            self.push_screen(About())
+
     @work(exclusive=True, group="dialog")
     async def action_add_server(self) -> None:
         if await self.push_screen_wait(Confirm(
@@ -3221,6 +3238,7 @@ class OniApp(App):
                 yield SystemCommand(escape(f"{pg.m.title} › {a['label']}"), escape(a["confirm"] or "a plug-in action  (F10)"),
                                     lambda pg=pg, a=a: self.plugin_action(pg, a))
         yield SystemCommand("Help: field manual", "what everything does, in plain words  (?)", self.action_help)
+        yield SystemCommand("About ONI RCON", "who made it, its licence and where its source is", self.action_about)
         yield SystemCommand("Add a server", "open the setup screen", self.action_add_server)
         yield SystemCommand("Forge: Load API key", "your own ReclaimerForge key, for F6", lambda: self.action_forge("key"))
         yield SystemCommand("Forge: Refresh catalog", "fetch the catalog again", lambda: self.forge_load(fresh=True))

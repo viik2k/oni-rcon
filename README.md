@@ -2,7 +2,8 @@
 
 ![oni-rcon boot screen: the ONI emblem over the clearance check](docs/boot.png)
 
-**An ONI-themed terminal admin console for Project Reclaimer Halo 3 dedicated servers.**
+**An ONI-themed admin console for community Halo dedicated servers: Project Reclaimer (Halo 3) first, and [other
+projects](docs/OTHER-GAMES.md) that speak its remote console.** By Arche Labs (viik).
 Every server you run on one screen: players, live intercepts, kicks and bans, map and mode control, votes, VPN
 allowances and a raw command console, wrapped in Office of Naval Intelligence, Section Three dossier styling.
 
@@ -563,11 +564,15 @@ work is. oni-rcon doesn't speak for ReclaimerForge; it's a separate community pr
 
 ## Disclaimer
 
-oni-rcon is an unofficial, fan-made tool. It is not affiliated with or endorsed by Microsoft, Halo Studios or the
-Project Reclaimer team. Halo and related names are trademarks of Microsoft Corporation, and the ONI styling is a fan
+oni-rcon is an unofficial, fan-made tool. It is not affiliated with or endorsed by Microsoft, Halo Studios, the
+Project Reclaimer team or any other community project it works with. Halo and related names are trademarks of Microsoft Corporation, and the ONI styling is a fan
 tribute: the emblem in the interface is a fan-made pixel rendition, and the Windows icon is the ONI emblem. oni-rcon
 contains no game files.
 
 ## Licence
 
-[GPL-3.0-or-later](LICENSE) © 2026 Arche Labs, with portions © 2026 ibigs, LLC (RifleJock). Releases up to v0.9.0 and desktop-v1.4.1 remain available under MIT; see [NOTICE](NOTICE).
+[AGPL-3.0-or-later](LICENSE) © 2026 Arche Labs (viik), with portions © 2026 ibigs, LLC (RifleJock), which remain under
+GPL-3.0-or-later. Anyone who runs a modified ONI RCON for others over a network has to offer those users its source.
+[NOTICE](NOTICE) has two additional terms (section 7): a modified version keeps the About screen's credits and says it's
+modified. Releases up to desktop-v1.10.0 remain available under GPL-3.0-or-later, and up to v0.9.0 and desktop-v1.4.1
+under MIT.
