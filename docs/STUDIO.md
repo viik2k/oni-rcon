@@ -162,6 +162,7 @@ Every event also has these helpers, which act on its server and player: `ev.repl
 | Reports | `!report <player> <what they did>` notifies you in Oni and posts to Discord. |
 | Discord log | Posts joins, kicks and bans to a Discord webhook. |
 | Next-game vote | An admin types `!nextvote`, players answer with a number (their last answer counts), standings go out with 30 and 10 s left, and the winner is queued with `nextmap` so the current game finishes. `!nextvote end`, `cancel` and `list`. Votes on `CHOICES` at the top of the script, or on up to 5 games from the server's rotation. Only admins (matched by player ID) can start or stop one. |
+| Reserved slots | Keeps the last `SLOTS` places on each server for the player IDs in `WHITELIST` and for admins. When everyone else fills the public places, it sets the join password `PASSWORD`, so the server shows PRIVATE, and clears it when a place frees. Anyone else who still lands in a reserved place is kicked, newest first. It checks on every join and leave and every 10 s, and leaves a password an admin set alone. |
 
 ## On disk
 
