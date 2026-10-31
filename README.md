@@ -477,6 +477,14 @@ The first time, F10 shows what it runs, where, and what it may send, and asks yo
 `oni-plugin.toml` asks again. [`examples/plugins/hello`](examples/plugins/hello) is a working one in a single Python
 file. [docs/PLUGINS.md](docs/PLUGINS.md) is the protocol.
 
+## Other games
+
+The desktop app can also manage servers of other community projects, such as Project Gravemind (Halo 2) and Reach
+Renaissance (Halo: Reach), once their dedicated server speaks Reclaimer's remote console and names its game when it
+signs in. Such a server's card shows its game, and what is Reclaimer's alone (its `dedicated.toml` settings,
+ReclaimerForge, its release warnings) is turned off for it. [docs/OTHER-GAMES.md](docs/OTHER-GAMES.md) is what a server
+needs, written for those projects' developers. The demo's third server is a pretend Project Gravemind one.
+
 ## Security
 
 - **RCON is plain text.** Keep the server's `[rcon] address` on `127.0.0.1` and reach it with `--ssh` (or a VPN). Never

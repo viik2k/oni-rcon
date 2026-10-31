@@ -239,6 +239,20 @@ def test_self_update(tmp_path, monkeypatch):
     assert update.check(exe) == ""
 
 
+def test_projects():
+    from oni_rcon.projects import mixed_by_project, project_of
+    assert project_of({"server": "S", "version": "0.9.18"}).reclaimer and project_of(None).id == "reclaimer"
+    p = project_of({"project": "Project Gravemind"})
+    assert (p.id, p.game, p.tag, p.reclaimer) == ("gravemind", "Halo 2", "H2", False)
+    assert project_of({"project": "renaissance"}).tag == "REACH"
+    o = project_of({"project": "OpenCE\n", "game": "Halo: Combat Evolved"})
+    assert (o.name, o.tag, o.reclaimer) == ("OpenCE", "HCE", False)
+    st = lambda v, p=None: {"version": v, "project": p}
+    assert mixed_by_project([("A", st("0.9.18")), ("B", st("1.2.0", "gravemind"))]) == ""
+    assert mixed_by_project([("A", st("0.9.18")), ("B", st("0.9.17")), ("C", st("1.0.0", "gravemind"))]) == \
+        "Project Reclaimer: 0.9.17 on B · 0.9.18 on A"
+
+
 def test_reclaimer_drift():
     from oni_rcon.update import behind, mixed_versions
     assert behind("0.9.9", "v0.9.18") == "0.9.18"  # numeric, not text: 9 < 18
