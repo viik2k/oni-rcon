@@ -239,6 +239,29 @@ def test_self_update(tmp_path, monkeypatch):
     assert update.check(exe) == ""
 
 
+def test_about_keeps_the_legal_notices():
+    from oni_rcon.about import about_line, about_text
+    t = about_text("0.9.0")
+    for must in ("ONI RCON by Arche Labs (viik), version 0.9.0", "ibigs, LLC", "GNU Affero General Public License",
+                 "NO WARRANTY", "LICENSE", "https://github.com/viik2k/oni-rcon"):
+        assert must in t
+    assert about_line() == "ONI RCON by Arche Labs (viik) · AGPL-3.0-or-later · no warranty · https://github.com/viik2k/oni-rcon"
+
+    async def go():
+        ports, _ = await serve_fakes(tick=False)
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False)
+        async with app.run_test(size=(160, 48)) as pilot:
+            app.action_about()
+            await pilot.pause()
+            assert type(app.screen).__name__ == "About"
+            assert "Arche Labs (viik)" in str(app.screen.query(".dialog-body").first().render())
+            await pilot.press("escape")
+            app.action_help()
+            await pilot.pause()
+            assert isinstance(app.screen, Help)
+    asyncio.run(go())
+
+
 def test_projects():
     from oni_rcon.projects import mixed_by_project, project_of
     assert project_of({"server": "S", "version": "0.9.18"}).reclaimer and project_of(None).id == "reclaimer"

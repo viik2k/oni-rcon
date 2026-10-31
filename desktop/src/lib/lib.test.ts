@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
 import { mixedByProject, projectOf, reclaimerOnly } from "./projects";
+import { aboutLine, aboutText } from "./about";
 import { compatible, latestOf, refsOf, votesOf } from "./forge";
 import { Superintendent, classify } from "../art/superintendent";
 import { BASE, face, faceClass } from "../art/archive";
@@ -535,5 +536,14 @@ describe("vpn lists (0.9.22)", () => {
     expect(vpnCheck("refused", { listed: true, list: "x4bnet", refused: true })).toBe("refused · matched x4bnet");
     expect(vpnCheck("refused", { listed: false, refused: true, fail_closed: true })).toContain("fail_closed");
     expect(vpnCheck("fine", null)).toBe("fine");
+  });
+});
+
+describe("about", () => {
+  it("shows the legal notices NOTICE asks a modified version to keep", () => {
+    const t = aboutText("1.11.0");
+    for (const must of ["ONI RCON by Arche Labs (viik), version 1.11.0", "ibigs, LLC", "GNU Affero General Public License", "NO WARRANTY",
+      "LICENSE", "https://github.com/viik2k/oni-rcon"]) expect(t).toContain(must);
+    expect(aboutLine()).toBe("ONI RCON by Arche Labs (viik) · AGPL-3.0-or-later · no warranty · https://github.com/viik2k/oni-rcon");
   });
 });
