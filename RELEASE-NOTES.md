@@ -1,10 +1,10 @@
-# ONI RCON desktop 1.11.1
+# ONI RCON desktop 1.11.2
 
 A maintenance release: updated dependencies, no changes to how ONI RCON works.
 
 ## Fixes
 
-- Updated the desktop app's libraries (Rust and JavaScript) and the Python package's to their latest compatible versions.
+- Updated the desktop app's libraries (Rust and JavaScript) to their latest compatible versions.
 
 ## Upgrading
 
