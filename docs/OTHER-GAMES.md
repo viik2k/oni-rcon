@@ -29,6 +29,10 @@ playlist and game-type files), ReclaimerForge, and the warning that a newer Recl
 
 ## The connection
 
+Reach Renaissance's dedicated server is the exception: it speaks Valve's Source RCON, which the desktop app speaks too
+(`protocol = "source"` on the server, or `source://HOST` on the setup screen). Its text replies to `status` and
+`players` are read into the station card and roster; it pushes no events. Everything below is the protocol for the rest.
+
 A WebSocket (`ws://`, or `wss://` behind a proxy) that ONI reaches directly or through an ssh tunnel to the game box.
 Reclaimer listens on TCP, on the server's game port unless the config gives it an `rcon_port`, and on `127.0.0.1`
 unless told otherwise. A password must be set for it to listen at all. Every message is one JSON object in a text frame.
