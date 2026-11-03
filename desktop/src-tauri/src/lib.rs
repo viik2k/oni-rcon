@@ -169,6 +169,10 @@ struct Spec {
 /// What parse_target reads, from the setup screen's two boxes: an address may carry its own port, or be a URL.
 fn spec_server(s: &Spec) -> Result<Server, String> {
     let (address, port) = (s.address.trim(), s.port.trim());
+    let (address, source) = match address.strip_prefix("source://") {
+        Some(a) => (a, true),
+        None => (address, false),
+    };
     let target = if address.contains("://") || port.is_empty() {
         address.to_string()
     } else if address.matches(':').count() > 1 && !address.starts_with('[') {
@@ -178,6 +182,7 @@ fn spec_server(s: &Spec) -> Result<Server, String> {
     } else {
         format!("{}:{port}", if address.is_empty() { "127.0.0.1" } else { address })
     };
+    let target = if source { format!("source://{target}") } else { target };
     let mut srv = config::parse_target(&target, s.ssh.trim(), s.name.trim())
         .map_err(|_| "That address doesn't look right. Use an IP or host name, and the port number.".to_string())?;
     srv.password = s.password.clone();
@@ -208,7 +213,7 @@ async fn probe(s: Server) -> Value {
                 }
             }
         }));
-        (format!("ws://127.0.0.1:{}", t.local_port(&s.host, s.port)), Some(t.ready.subscribe()))
+        (format!("{}://127.0.0.1:{}", s.scheme(), t.local_port(&s.host, s.port)), Some(t.ready.subscribe()))
     } else {
         (s.direct_url(), None)
     };

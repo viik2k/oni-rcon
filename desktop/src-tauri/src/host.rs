@@ -805,7 +805,7 @@ fn windows_restart(exe: &Path, folder: &Path) -> String {
 /// The restart for a server hosted on this computer whose config has no restart_cmd: one added by hand, or before
 /// HOST ONE HERE wrote it. Found only when the server's folder lists that port; empty otherwise.
 pub fn default_restart(s: &Server) -> String {
-    if !cfg!(windows) || !s.ssh.is_empty() || !s.url.is_empty() || !["127.0.0.1", "localhost", "::1"].contains(&s.host.as_str()) {
+    if !cfg!(windows) || !s.ssh.is_empty() || !s.url.is_empty() || s.protocol == "source" || !["127.0.0.1", "localhost", "::1"].contains(&s.host.as_str()) {
         return String::new();
     }
     let folder = match Path::new(&s.content_dir).parent().filter(|p| !p.as_os_str().is_empty()) {
