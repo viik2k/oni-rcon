@@ -384,8 +384,12 @@ fn source_line(command: &str, args: &[String]) -> String {
 
 /// A Source RCON reply shaped as a Reclaimer one. Only its text says whether it worked.
 fn source_reply(id: i32, command: &str, text: &str) -> Value {
-    // ponytail: failure read from Reach Renaissance's wording; a server that words it otherwise reads as ok
-    let failed = ["unknown command", "usage:", "that command failed", "the engine wouldn't"].iter().any(|f| text.starts_with(f));
+    // ponytail: failure read from Reach Renaissance's wording (dedicated/src/Rcon.cs, Chat.cs); a server that words it otherwise reads as ok
+    let failed = ["unknown command", "usage:", "that command failed", "the engine wouldn't", "couldn't write the announcement", "nothing to announce"]
+        .iter()
+        .any(|f| text.starts_with(f))
+        // say with match chat down: the file is written and dropped, so no player saw it
+        || text.contains(" — nobody saw it: ");
     let mut r = json!({"type": "reply", "id": id, "ok": !failed, "text": text});
     let data = match command {
         _ if failed => None,
@@ -563,8 +567,14 @@ mod tests {
         let p = source_reply(2, "players", "1. name: viik, the one, id: 00ab, peer: 5, address: 1.2.3.4, relayed\n2. name: x, joined after this game started\n2/16 players");
         assert_eq!(p["data"]["players"], json!([{"name": "viik, the one", "id": "00ab", "peer": "5", "address": "1.2.3.4"}, {"name": "x"}]));
         assert_eq!(p["data"]["max_players"], 16);
-        let bad = source_reply(3, "nextmap", "unknown command \"nextmap\". Try: help");
+        let bad = source_reply(3, "endmatch", "unknown command \"endmatch\". Try: help");
         assert_eq!((&bad["ok"], bad.get("data")), (&json!(false), None));
+        // say: RR's Chat.cs wording when match chat is up, down, or the file can't be written
+        assert_eq!(source_reply(4, "say", "announced: hi all")["ok"], true);
+        let unseen = "announced: hi all — nobody saw it: the engine's match chat isn't up (no online session)";
+        assert_eq!(source_reply(5, "say", unseen)["ok"], false);
+        assert_eq!(source_reply(6, "say", "couldn't write the announcement: Access denied")["ok"], false);
+        assert_eq!(source_reply(7, "say", "nothing to announce")["ok"], false);
         assert_eq!(source_line("kick", &["a b".into(), "being rude".into()]), "kick \"a b\" being rude");
         assert_eq!(source_line("say", &["hello all".into()]), "say hello all");
     }
