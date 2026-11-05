@@ -179,7 +179,7 @@ async function restart(st: Station) {
     return oni.restartNow(st);
   }
   const s = st.data.status ?? {};
-  const busy = num(s.players) !== 0 && !restartDue(true, s);
+  const busy = st.online && num(s.players) !== 0 && !restartDue(true, s); // offline, its status is stale
   const when = busy ? await oni.pick(`RESTART  ${st.label}`, [["AFTER THIS GAME · players are told, nobody is dropped mid-game", "after"], ["NOW · everyone is dropped mid-game", "now"]]) : "now";
   if (when === "after") {
     st.restartAfter = true;
