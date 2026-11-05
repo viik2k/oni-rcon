@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
+import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, restartDue, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
 import { mixedByProject, projectOf, reclaimerOnly } from "./projects";
 import { aboutLine, aboutText } from "./about";
@@ -435,6 +435,21 @@ describe("hot reload", () => {
   it("is 0.9.18 and later; older, unknown and demo servers keep the restart", () => {
     for (const v of ["0.9.18", "v0.9.18", "0.9.19-rc1", "0.10.0", "1.0.0"]) expect(hotReloads(v), v).toBe(true);
     for (const v of ["0.9.17", "0.9.7-demo", "0.8.30", "", "?", undefined, null]) expect(hotReloads(v), String(v)).toBe(false);
+  });
+});
+
+describe("restart after this game", () => {
+  it("waits out the game, runs once it's finished or empty, and never once cancelled", () => {
+    expect(restartDue(true, { phase: "playing", players: 6 })).toBe(false);
+    expect(restartDue(true, { phase: "round_over", players: 6 })).toBe(false);
+    expect(restartDue(true, { phase: "in_game", players: 2 })).toBe(false); // Reach
+    expect(restartDue(true, { phase: "finished", players: 6 })).toBe(true);
+    expect(restartDue(true, { phase: "no_game", players: 6 })).toBe(true); // the finished poll was missed
+    expect(restartDue(true, { phase: "postgame", players: 2 })).toBe(true); // Reach
+    expect(restartDue(true, { phase: "playing", players: 0 })).toBe(true); // empty: nobody to drop
+    expect(restartDue(true, { players: 3 })).toBe(false); // no phase reported: waits for it to empty
+    expect(restartDue(true, undefined)).toBe(false);
+    expect(restartDue(false, { phase: "finished", players: 0 })).toBe(false); // cancelled
   });
 });
 
