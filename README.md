@@ -257,7 +257,9 @@ quiet.
 ### Restarting a server
 
 RESTART SERVER on F3 (desktop app) runs the server's `restart_cmd` where the server is: on its `ssh` host, or on
-this machine without one. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
+this machine without one. While a game is on it asks NOW or AFTER THIS GAME: after the game, players are told in
+chat, the server's card shows `↻ AFTER GAME`, and it restarts once the game ends (or at once if everyone leaves); RESTART
+SERVER again calls it off. The console has to stay open until then. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
 machine that its server folder lists gets one without any config; for others, add it to the
 `[[server]]` block (or `[defaults]`; `{port}` is the server's RCON port):
 
