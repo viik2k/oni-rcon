@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
+import { behind, since, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
 import { mixedByProject, projectOf, reclaimerOnly } from "./projects";
 import { aboutLine, aboutText } from "./about";
@@ -445,6 +445,11 @@ describe("server version", () => {
     expect(behind("0.9.18", "0.10.0")).toBe("0.10.0");
     for (const [have, latest] of [["0.9.18", "0.9.18"], ["0.9.19-rc1", "0.9.18"], ["?", "0.9.18"], [undefined, "0.9.18"], ["0.9.17", ""]])
       expect(behind(have, latest), `${have} vs ${latest}`).toBe("");
+  });
+
+  it("is since a release only when the version is known and not older", () => {
+    for (const v of ["0.10.0", "v0.10.1", "0.10.0-rc1", "1.0.0"]) expect(since(v, "0.10.0"), v).toBe(true);
+    for (const v of ["0.9.23", "0.9.100", "?", undefined, ""]) expect(since(v, "0.10.0"), String(v)).toBe(false);
   });
 
   it("names a mixed fleet once, oldest first, and stays quiet when it agrees", () => {

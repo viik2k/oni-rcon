@@ -50,7 +50,7 @@ from .health import BARE, OOM, RESTART, SIGNATURE, HealthSetup, Monitor, Notice,
 from .install import SSH_OPTS, InstallError, place, plan, size_words, target_for
 from . import plugins as pl
 from .projects import mixed_by_project, project_of
-from .update import behind
+from .update import behind, since
 from .plugins import ACTION_TIMEOUT, VIEW_TIMEOUT, Manifest, PluginError, PluginSetup, server_name
 from .medals import Medals
 from .prefs import Prefs
@@ -68,9 +68,11 @@ TEAM_COLOR = dict(zip(TEAMS, ["#E5484D", "#4C8DFF", "#4CC27A", "#F08A24", "#A066
 BAN_TIMES = [("Permanent", ""), ("30 minutes", "30m"), ("2 hours", "2h"), ("12 hours", "12h"), ("1 day", "1d"),
              ("7 days", "7d"), ("2 weeks", "2w"), ("30 days", "30d")]
 MUTE_TIMES = [("Until restart", ""), ("10 minutes", "10m"), ("1 hour", "1h"), ("12 hours", "12h"), ("1 day", "1d")]
+KICK_TIMES = [("Next step (10, 30, 60, then 120 minutes)", ""), ("None: they can rejoin at once", "0"),
+              ("10 minutes", "10m"), ("1 hour", "1h"), ("2 hours", "2h")]
 COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke",
             "mute", "unmute", "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername",
-            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "pardon", "admin", "help"]
+            "password", "maxping", "teamcount", "shuffle", "team", "vote", "startvote", "passvote", "cancelvote", "pardon", "admin", "next", "replay", "health", "mutes", "queue", "immune", "help"]
 
 CATS = {"chat": WHITE, "combat": RED, "traffic": CYAN, "moderation": AMBER, "ops": GREY}
 KIND = {"chat": "chat", "kill": "combat", "join": "traffic", "leave": "traffic", "refused": "traffic",
@@ -112,7 +114,7 @@ FREE_TEXT = {"say": 0, "tell": 1, "kick": 1, "servername": 0}  # console command
 
 OPS = [("load", "LOAD MAP+MODE", "primary"), ("map", "CHANGE MAP", "default"), ("mode", "CHANGE MODE", "default"),
        ("nextmap", "QUEUE NEXT", "default"), ("endround", "END ROUND", "warning"), ("endgame", "END GAME", "error"),
-       ("shuffle", "SHUFFLE TEAMS", "default"), ("teamcount", "TEAM COUNT", "default"),
+       ("next", "NEXT GAME", "warning"), ("replay", "REPLAY", "warning"), ("shuffle", "SHUFFLE TEAMS", "default"), ("teamcount", "TEAM COUNT", "default"),
        ("startvote", "CALL VOTE", "default"), ("passvote", "PASS VOTE", "success"),
        ("cancelvote", "CANCEL VOTE", "default"), ("broadcast", "BROADCAST", "primary"),
        ("servername", "RENAME", "default"), ("password", "JOIN PASSWORD", "default"),
@@ -121,7 +123,7 @@ BAN_OPS = [("newban", "NEW BAN", "error"), ("unban", "UNBAN  u", "warning"), ("v
            ("vpnrevoke", "VPN REVOKE  r", "default"), ("vpncheck", "CHECK IP", "default"),
            ("pardon", "PARDON  o", "default"), ("adminadd", "ADD ADMIN  p", "primary"),
            ("adminremove", "REMOVE ADMIN  d", "warning")]
-OP_GROUPS = [("MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]),
+OP_GROUPS = [("MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame", "next", "replay"]),
              ("TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]),
              ("SERVER", ["broadcast", "servername", "password", "maxping", "reconnect"])]
 PLAYER_OPS = [("tell", "TELL", "t"), ("kick", "KICK", "k"), ("ban", "BAN", "b"), ("mute", "MUTE", "m"),
@@ -137,7 +139,9 @@ TIPS = {
     "op-endround": "End this round as if its time ran out.",
     "op-endgame": "End the whole game now, with the scores as they stand.",
     "op-shuffle": "Mix the players up across the teams.",
-    "op-teamcount": "Spread the players over 2 to 8 teams.",
+    "op-next": "End this game and start the next one now. Needs server 0.10 or later.",
+    "op-replay": "End this game and play it again from the start. Needs server 0.10 or later.",
+    "op-teamcount": "Spread the players over 2 to 8 teams (up to 64 on server 0.10 or later).",
     "op-startvote": "Ask the players to vote: end the round, shuffle, kick someone, and more.",
     "op-passvote": "Pass the vote that's under way, whatever the count.",
     "op-cancelvote": "Call off the vote that's under way.",
@@ -247,6 +251,12 @@ def team_of(p: dict) -> str:
     if isinstance(t, int) and not isinstance(t, bool) and 0 <= t < len(TEAMS):
         return TEAMS[t]
     return str(t).lower() if t is not None else ""
+
+
+def v010(st) -> bool:
+    """A Project Reclaimer server on 0.10 or later: kick takes a block time, teamcount goes to 64, next and replay exist."""
+    info = st.rcon.info if st.rcon else None
+    return project_of(info).reclaimer and since((info or {}).get("version"), "0.10.0")
 
 
 def target_of(p: dict) -> str:
@@ -2878,7 +2888,7 @@ class OniApp(App):
         voting = bool(vote.get("vote")) if "vote" in st.data else None  # unknown until the first fetch: leave on
         for op, *_ in OPS:  # greyed out when it can't work right now, so nobody wonders why nothing happened
             off = (op != "reconnect" and not st.online or op in ("passvote", "cancelvote") and voting is False
-                   or op == "startvote" and voting is True)
+                   or op == "startvote" and voting is True or op in ("next", "replay") and not v010(st))
             self.query_one(f"#op-{op}", Button).disabled = off
         self.paint_theatre()
         here = str(s.get("map") or "").lower().replace(" ", "_")
@@ -3283,11 +3293,12 @@ class OniApp(App):
             if f:
                 self.send(st, "tell", t, f["text"])
         elif what == "kick":
-            f = await self.push_screen_wait(Form(f"KICK · {name}", [("reason", "Reason (they read it)", "")],
-                                                 verb="KICK", danger=True,
+            timed = v010(st)
+            f = await self.push_screen_wait(Form(f"KICK · {name}", [("time", "Block rejoining", KICK_TIMES)] * timed
+                                                 + [("reason", "Reason (they read it)", "")], verb="KICK", danger=True,
                                                  note="Repeat kicks block rejoining for 10, 30, 60, then 120 minutes."))
             if f is not None:
-                self.send(st, "kick", t, *opt(f["reason"]), then=("players", "status"))
+                self.send(st, "kick", t, *(opt(f["time"]) if timed else ()), *opt(f["reason"]), then=("players", "status"))
         elif what == "ban":
             f = await self.push_screen_wait(Form(f"BAN · {name}", [("time", "Duration", BAN_TIMES),
                                                                    ("reason", "Reason", "")], verb="BAN", danger=True,
@@ -3367,14 +3378,16 @@ class OniApp(App):
                                                            "the new one starts in the next lobby.")):
                 return
             self.send(st, name, *args, then=("status", "nextmap"))
-        elif name in ("endround", "endgame", "shuffle"):
+        elif name in ("endround", "endgame", "next", "replay", "shuffle"):
             body = {"endround": "Ends the round as if its time ran out.",
                     "endgame": "Ends the game with the scores as they stand.",
+                    "next": "Ends this game and starts the next one now.",
+                    "replay": "Ends this game and starts it again from the beginning.",
                     "shuffle": "Shuffles players across the teams that have players."}[name]
             if await self.push_screen_wait(Confirm(name.upper(), body, danger=name != "shuffle")):
                 self.send(st, name, then=("status", "players"))
         elif name == "teamcount":
-            n = await self.push_screen_wait(Pick("SPREAD PLAYERS OVER", [(f"{i} teams", str(i)) for i in range(2, 9)]))
+            n = await self.push_screen_wait(Pick("SPREAD PLAYERS OVER", [(f"{i} teams", str(i)) for i in range(2, 65 if v010(st) else 9)]))
             if n:
                 self.send(st, "teamcount", n, then=("players",))
         elif name == "startvote":

@@ -277,7 +277,9 @@ def test_projects():
 
 
 def test_reclaimer_drift():
-    from oni_rcon.update import behind, mixed_versions
+    from oni_rcon.update import behind, mixed_versions, since
+    assert since("0.10.0", "0.10.0") and since("v0.10.1-rc1", "0.10.0") and since("1.0.0", "0.10.0")
+    assert not since("0.9.23", "0.10.0") and not since("?", "0.10.0") and not since(None, "0.10.0")
     assert behind("0.9.9", "v0.9.18") == "0.9.18"  # numeric, not text: 9 < 18
     assert behind("0.9.18", "0.9.18") == behind("0.9.19", "0.9.18") == ""  # current or ahead
     assert behind("?", "0.9.18") == behind("0.9.17", "") == ""  # unknown never counts as behind
@@ -299,6 +301,11 @@ def test_reclaimer_drift():
             st.rcon.info["version"] = "0.9.18"
             app.note_mixed()
             assert app.lag(st) == "" and any("MIXED VERSIONS  0.9.7 on" in str(e.get("text")) for _, e in app.feed)
+            next_off = lambda: app.query_one("#op-next", appmod.Button).disabled
+            assert app.cur is st and next_off() and not appmod.v010(st)  # 0.9: no NEXT GAME / REPLAY
+            st.rcon.info["version"] = "0.10.0"
+            app.paint_ops()
+            assert appmod.v010(st) and not next_off()
     asyncio.run(go())
 
 
