@@ -7,22 +7,23 @@ import { newPlaylist, type Playlist } from "./lib/content";
 import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, since, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
+export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
 export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke", "mute", "unmute",
   "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername", "password", "maxping", "teamcount", "shuffle", "team",
-  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "help"];
+  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "next", "replay", "health", "mutes", "queue", "immune", "help"];
 
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
-  ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
+  ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["next", "NEXT GAME", "warning"], ["replay", "REPLAY", "warning"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""],
   ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 /** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
 export const RECLAIMER_OPS = ["capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
-export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
+export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame", "next", "replay"]],
   ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
@@ -39,7 +40,9 @@ export const TIPS: Record<string, string> = {
   "op-endround": "End this round as if its time ran out.",
   "op-endgame": "End the whole game now, with the scores as they stand.",
   "op-shuffle": "Mix the players up across the teams.",
-  "op-teamcount": "Spread the players over 2 to 8 teams.",
+  "op-next": "End this game and start the next one now. Needs server 0.10 or later.",
+  "op-replay": "End this game and play it again from the start. Needs server 0.10 or later.",
+  "op-teamcount": "Spread the players over 2 to 8 teams (up to 64 on server 0.10 or later).",
   "op-startvote": "Ask the players to vote: end the round, shuffle, kick someone, and more.",
   "op-passvote": "Pass the vote that's under way, whatever the count.",
   "op-cancelvote": "Call off the vote that's under way.",
@@ -99,6 +102,8 @@ export const TAB_TIPS: Record<string, string> = {
 };
 
 const opt = (v: string) => (v ? [v] : []);
+/** A Project Reclaimer server on 0.10 or later: kick takes a block time, teamcount goes to 64, next and replay exist. */
+export const v010 = (st: Station) => projectOf(st.info).reclaimer && since(st.info.version, "0.10.0");
 
 export function entries(st: Station, what: string): [Line, string][] {
   return (st.data[what]?.entries ?? []).map((e: Dict) => [
@@ -126,8 +131,10 @@ export async function player(what: string, p: Dict | undefined) {
     const f = await oni.form(`TELL · ${name}`, [["text", "Message (only they see it)", ""]], { verb: "SEND", required: ["text"] });
     if (f) oni.send(st, "tell", [t, f.text]);
   } else if (what === "kick") {
-    const f = await oni.form(`KICK · ${name}`, [["reason", "Reason (they read it)", ""]], { verb: "KICK", danger: true, note: "Repeat kicks block rejoining for 10, 30, 60, then 120 minutes." });
-    if (f) oni.send(st, "kick", [t, ...opt(f.reason)], ["players", "status"]);
+    const timed = v010(st), fields: [string, string, string | [string, string][]][] = [["reason", "Reason (they read it)", ""]];
+    if (timed) fields.unshift(["time", "Block rejoining", KICK_TIMES]);
+    const f = await oni.form(`KICK · ${name}`, fields, { verb: "KICK", danger: true, note: "Repeat kicks block rejoining for 10, 30, 60, then 120 minutes." });
+    if (f) oni.send(st, "kick", [t, ...(timed ? opt(f.time) : []), ...opt(f.reason)], ["players", "status"]);
   } else if (what === "ban") {
     const f = await oni.form(`BAN · ${name}`, [["time", "Duration", BAN_TIMES], ["reason", "Reason", ""]], { verb: "BAN", danger: true,
       note: "Bans their player ID, address and device together, on every server sharing this ban list." });
@@ -421,12 +428,13 @@ export async function op(name: string, st = oni.cur) {
     const args = [mp, md].filter(Boolean);
     if (name !== "nextmap" && !(await oni.confirm(`${name.toUpperCase()}  ${args.join(" / ")}`, "Ends the current game for everyone on this station; the new one starts in the next lobby."))) return;
     oni.send(st, name, args, ["status", "nextmap"]);
-  } else if (["endround", "endgame", "shuffle"].includes(name)) {
+  } else if (["endround", "endgame", "next", "replay", "shuffle"].includes(name)) {
     const body = ({ endround: "Ends the round as if its time ran out.", endgame: "Ends the game with the scores as they stand.",
+      next: "Ends this game and starts the next one now.", replay: "Ends this game and starts it again from the beginning.",
       shuffle: "Shuffles players across the teams that have players." } as Dict)[name];
     if (await oni.confirm(name.toUpperCase(), body, "EXECUTE", name !== "shuffle")) oni.send(st, name, [], ["status", "players"]);
   } else if (name === "teamcount") {
-    const n = await oni.pick("SPREAD PLAYERS OVER", [2, 3, 4, 5, 6, 7, 8].map((i) => [`${i} teams`, String(i)]));
+    const n = await oni.pick("SPREAD PLAYERS OVER", Array.from({ length: v010(st) ? 63 : 7 }, (_, i) => i + 2).map((i) => [`${i} teams`, String(i)]));
     if (n) oni.send(st, "teamcount", [n], ["players"]);
   } else if (name === "startvote") {
     const subjects: string[] = st.data.vote?.subjects ?? ["endround", "endgame", "shuffle", "kick", "playlist"];
