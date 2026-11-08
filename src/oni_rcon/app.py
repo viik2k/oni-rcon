@@ -68,6 +68,8 @@ TEAM_COLOR = dict(zip(TEAMS, ["#E5484D", "#4C8DFF", "#4CC27A", "#F08A24", "#A066
 BAN_TIMES = [("Permanent", ""), ("30 minutes", "30m"), ("2 hours", "2h"), ("12 hours", "12h"), ("1 day", "1d"),
              ("7 days", "7d"), ("2 weeks", "2w"), ("30 days", "30d")]
 MUTE_TIMES = [("Until restart", ""), ("10 minutes", "10m"), ("1 hour", "1h"), ("12 hours", "12h"), ("1 day", "1d")]
+MUTE_KINDS = [("Text and voice", "all"), ("Voice only", "voice"), ("Text only", "text")]  # 0.10: mute <p> [kind] [time] [reason] [shadow]
+MUTE_SHADOW = [("No: they're told", ""), ("Yes: a shadow mute, they aren't told", "shadow")]
 KICK_TIMES = [("Next step (10, 30, 60, then 120 minutes)", ""), ("None: they can rejoin at once", "0"),
               ("10 minutes", "10m"), ("1 hour", "1h"), ("2 hours", "2h")]
 COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke",
@@ -161,7 +163,7 @@ TIPS = {
     "pl-tell": "Send a private message only they can see.  Key: t",
     "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
     "pl-ban": "Keep them out, for a while or for good.  Key: b",
-    "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
+    "pl-mute": "Silence their chat: text, voice or both on server 0.10 (or lift it).  Key: m",
     "pl-team": "Move them to another team.  Key: j",
     "pl-vpnallow": "Let them join through a VPN.  Key: v",
     "pl-admin": "Make them an admin (or take it back), on every server sharing the ban list.  Key: p",
@@ -3310,11 +3312,15 @@ class OniApp(App):
             if p.get("muted"):
                 self.send(st, "unmute", t, then=("players",))
                 return
-            f = await self.push_screen_wait(Form(f"MUTE · {name}", [("time", "Duration", MUTE_TIMES),
-                                                                    ("reason", "Reason", "")], verb="MUTE",
-                                                 note="Silences their text and voice chat. Rejoining keeps it."))
+            kinds = v010(st)
+            f = await self.push_screen_wait(Form(f"MUTE · {name}", [("kind", "Silence", MUTE_KINDS)] * kinds
+                                                 + [("time", "Duration", MUTE_TIMES), ("reason", "Reason", "")]
+                                                 + [("shadow", "Shadow mute", MUTE_SHADOW)] * kinds, verb="MUTE",
+                                                 note="Rejoining keeps it." if kinds
+                                                 else "Silences their text and voice chat. Rejoining keeps it."))
             if f is not None:
-                self.send(st, "mute", t, *opt(f["time"]), *opt(f["reason"]), then=("players",))
+                self.send(st, "mute", t, *((f["kind"],) if kinds else ()), *opt(f["time"]), *opt(f["reason"]),
+                          *(opt(f["shadow"]) if kinds else ()), then=("players",))
         elif what == "team":
             team = await self.push_screen_wait(Pick(f"MOVE {name} TO", [(Text(c.upper(), TEAM_COLOR[c]), c)
                                                                          for c in TEAMS]))

@@ -12,6 +12,9 @@ import { behind, since, CAMERAS, redactData, hotReloads, notesText, num, pardonT
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
+/** Server 0.10's `mute <player> [voice|text|all] [time] [reason] [shadow]`. */
+export const MUTE_KINDS: [string, string][] = [["Text and voice", "all"], ["Voice only", "voice"], ["Text only", "text"]];
+export const MUTE_SHADOW: [string, string][] = [["No: they're told", ""], ["Yes: a shadow mute, they aren't told", "shadow"]];
 export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke", "mute", "unmute",
   "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername", "password", "maxping", "teamcount", "shuffle", "team",
   "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "next", "replay", "health", "mutes", "queue", "immune", "help"];
@@ -71,7 +74,7 @@ export const TIPS: Record<string, string> = {
   "pl-tell": "Send a private message only they can see.  Key: t",
   "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
   "pl-ban": "Keep them out, for a while or for good.  Key: b",
-  "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
+  "pl-mute": "Silence their chat: text, voice or both on server 0.10 (or lift it).  Key: m",
   "pl-team": "Move them to another team.  Key: j",
   "pl-vpnallow": "Let them join through a VPN.  Key: v",
   "pl-admin": "Make them an admin (or take it away): on every server sharing the ban list at once, or of this server only.  Key: p",
@@ -141,8 +144,10 @@ export async function player(what: string, p: Dict | undefined) {
     if (f) oni.send(st, "ban", [t, ...opt(f.time), ...opt(f.reason)], ["players", "status", "bans"]);
   } else if (what === "mute") {
     if (p.muted) return oni.send(st, "unmute", [t], ["players"]);
-    const f = await oni.form(`MUTE · ${name}`, [["time", "Duration", MUTE_TIMES], ["reason", "Reason", ""]], { verb: "MUTE", note: "Silences their text and voice chat. Rejoining keeps it." });
-    if (f) oni.send(st, "mute", [t, ...opt(f.time), ...opt(f.reason)], ["players"]);
+    const kinds = v010(st), fields: [string, string, string | [string, string][]][] = [["time", "Duration", MUTE_TIMES], ["reason", "Reason", ""]];
+    if (kinds) fields.unshift(["kind", "Silence", MUTE_KINDS]), fields.push(["shadow", "Shadow mute", MUTE_SHADOW]);
+    const f = await oni.form(`MUTE · ${name}`, fields, { verb: "MUTE", note: kinds ? "Rejoining keeps it." : "Silences their text and voice chat. Rejoining keeps it." });
+    if (f) oni.send(st, "mute", [t, ...(kinds ? [f.kind] : []), ...opt(f.time), ...opt(f.reason), ...(kinds ? opt(f.shadow) : [])], ["players"]);
   } else if (what === "team") {
     const team = await oni.pick(`MOVE ${name} TO`, TEAMS.map((c) => [[[c.toUpperCase(), TEAM_COLOR[c]]], c]));
     if (team) oni.send(st, "team", [t, team], ["players"]);

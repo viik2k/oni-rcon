@@ -486,6 +486,36 @@ def test_markup_in_a_name_is_just_a_name():
     asyncio.run(go())
 
 
+def test_mute_says_what_on_010():
+    async def go():
+        ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False)
+        sent = []
+        app.send = lambda st, *a, then=(): sent.append(a)
+        async with app.run_test(size=(160, 48)) as pilot:
+            await settle(app, pilot, "players")
+            st, t = app.stations[0], app.query_one("#players")
+            victim = next(p for p in app.row_players.values() if not p.get("muted"))
+            t.move_cursor(row=next(i for i, k in enumerate(t.ids) if app.row_players[k] is victim))
+            t.focus()
+            for version, fields, want in (
+                    ("0.9.23", {"time": "10m", "reason": "mic spam"}, ("mute", victim["player_id"], "10m", "mic spam")),
+                    ("0.10.0", {"kind": "voice", "time": "10m", "reason": "mic spam", "shadow": "shadow"},
+                     ("mute", victim["player_id"], "voice", "10m", "mic spam", "shadow")),
+                    ("0.10.0", {}, ("mute", victim["player_id"], "all"))):  # defaults: everything, until restart, told
+                st.rcon.info["version"] = version
+                await pilot.press("m")
+                assert await until(pilot, lambda: isinstance(app.screen, Form))
+                assert bool(app.screen.query("#field-kind")) == (version != "0.9.23")
+                for k, v in fields.items():
+                    app.screen.query_one(f"#field-{k}").value = v
+                await pilot.click("#yes")
+                assert await until(pilot, lambda: not isinstance(app.screen, Form))
+                assert sent.pop() == want, version
+
+    asyncio.run(go())
+
+
 def test_boot_waits_for_the_tunnel(monkeypatch):
     class SlowTunnel(Tunnel):
         def __init__(self, dest, remotes, on_state):
