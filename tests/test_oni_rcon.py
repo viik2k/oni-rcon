@@ -509,7 +509,7 @@ def test_mute_says_what_on_010():
                 assert bool(app.screen.query("#field-kind")) == (version != "0.9.23")
                 for k, v in fields.items():
                     app.screen.query_one(f"#field-{k}").value = v
-                await pilot.click("#yes")
+                app.screen.query_one("#yes").press()  # not a click: on a slow runner it can land before layout
                 assert await until(pilot, lambda: not isinstance(app.screen, Form))
                 assert sent.pop() == want, version
 
