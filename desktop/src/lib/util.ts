@@ -367,9 +367,21 @@ const EXPLAIN: [string[], string, string][] = [
 ];
 
 /** Server 0.9.18 and later apply dedicated.toml edits without a restart, and `reload` says what changed. */
-export function hotReloads(version: unknown): boolean {
-  const v = semver(version);
-  return !!v && cmpVer(v, [0, 9, 18]) >= 0;
+export const hotReloads = (version: unknown) => since(version, "0.9.18");
+
+/** Whether a server's version is known and at least `min` ("0.10.0"). */
+export const since = (version: unknown, min: string) => !!semver(version) && !behind(version, min);
+
+/** Phases with a game under way: Reclaimer's playing/round_over/between_rounds, Reach's in_game. */
+const MID_GAME = new Set(["playing", "round_over", "between_rounds", "in_game", "ingame"]);
+
+/** Whether a RESTART AFTER THIS GAME waiting on this status runs now: the game is over (finished, or already past it:
+ *  lobby, loading, postgame) or nobody's on. A phase the server doesn't report waits for the server to empty. */
+export function restartDue(pending: boolean, status: Dict | undefined): boolean {
+  if (!pending || !status) return false;
+  if (num(status.players) === 0) return true;
+  const phase = String(status.phase ?? "").toLowerCase();
+  return phase !== "" && phase !== "unknown" && phase !== "none" && !MID_GAME.has(phase);
 }
 
 /** A version's major.minor.patch ("v0.9.18-rc1" is [0, 9, 18]); null when it isn't one. */

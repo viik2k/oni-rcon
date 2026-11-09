@@ -7,22 +7,26 @@ import { newPlaylist, type Playlist } from "./lib/content";
 import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, since, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
+export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
 export const MUTE_TIMES: [string, string][] = [["Until restart", ""], ["10 minutes", "10m"], ["1 hour", "1h"], ["12 hours", "12h"], ["1 day", "1d"]];
+/** Server 0.10's `mute <player> [voice|text|all] [time] [reason] [shadow]`. */
+export const MUTE_KINDS: [string, string][] = [["Text and voice", "all"], ["Voice only", "voice"], ["Text only", "text"]];
+export const MUTE_SHADOW: [string, string][] = [["No: they're told", ""], ["Yes: a shadow mute, they aren't told", "shadow"]];
 export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "banip", "unban", "bans", "vpn", "vpnallow", "vpnrevoke", "mute", "unmute",
   "endround", "endgame", "maps", "modes", "map", "mode", "load", "nextmap", "servername", "password", "maxping", "teamcount", "shuffle", "team",
-  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "help"];
+  "vote", "startvote", "passvote", "cancelvote", "admin", "admins", "pardon", "reload", "next", "replay", "health", "mutes", "queue", "immune", "help"];
 
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
-  ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["shuffle", "SHUFFLE TEAMS", ""],
+  ["nextmap", "QUEUE NEXT", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["next", "NEXT GAME", "warning"], ["replay", "REPLAY", "warning"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
   ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""],
   ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 /** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
 export const RECLAIMER_OPS = ["capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
-export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame"]],
+export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "endround", "endgame", "next", "replay"]],
   ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
@@ -39,7 +43,9 @@ export const TIPS: Record<string, string> = {
   "op-endround": "End this round as if its time ran out.",
   "op-endgame": "End the whole game now, with the scores as they stand.",
   "op-shuffle": "Mix the players up across the teams.",
-  "op-teamcount": "Spread the players over 2 to 8 teams.",
+  "op-next": "End this game and start the next one now. Needs server 0.10 or later.",
+  "op-replay": "End this game and play it again from the start. Needs server 0.10 or later.",
+  "op-teamcount": "Spread the players over 2 to 8 teams (up to 64 on server 0.10 or later).",
   "op-startvote": "Ask the players to vote: end the round, shuffle, kick someone, and more.",
   "op-passvote": "Pass the vote that's under way, whatever the count.",
   "op-cancelvote": "Call off the vote that's under way.",
@@ -55,7 +61,7 @@ export const TIPS: Record<string, string> = {
   "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
-  "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
+  "op-restart": "Restart the server itself, now or after the game being played: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "op-remove": "Take this server out of your list (the config file). The server itself isn't touched.",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
@@ -68,7 +74,7 @@ export const TIPS: Record<string, string> = {
   "pl-tell": "Send a private message only they can see.  Key: t",
   "pl-kick": "Remove them from the game. They can rejoin after a short wait.  Key: k",
   "pl-ban": "Keep them out, for a while or for good.  Key: b",
-  "pl-mute": "Silence their text and voice chat (or lift it).  Key: m",
+  "pl-mute": "Silence their chat: text, voice or both on server 0.10 (or lift it).  Key: m",
   "pl-team": "Move them to another team.  Key: j",
   "pl-vpnallow": "Let them join through a VPN.  Key: v",
   "pl-admin": "Make them an admin (or take it away): on every server sharing the ban list at once, or of this server only.  Key: p",
@@ -99,6 +105,8 @@ export const TAB_TIPS: Record<string, string> = {
 };
 
 const opt = (v: string) => (v ? [v] : []);
+/** A Project Reclaimer server on 0.10 or later: kick takes a block time, teamcount goes to 64, next and replay exist. */
+export const v010 = (st: Station) => projectOf(st.info).reclaimer && since(st.info.version, "0.10.0");
 
 export function entries(st: Station, what: string): [Line, string][] {
   return (st.data[what]?.entries ?? []).map((e: Dict) => [
@@ -126,16 +134,20 @@ export async function player(what: string, p: Dict | undefined) {
     const f = await oni.form(`TELL · ${name}`, [["text", "Message (only they see it)", ""]], { verb: "SEND", required: ["text"] });
     if (f) oni.send(st, "tell", [t, f.text]);
   } else if (what === "kick") {
-    const f = await oni.form(`KICK · ${name}`, [["reason", "Reason (they read it)", ""]], { verb: "KICK", danger: true, note: "Repeat kicks block rejoining for 10, 30, 60, then 120 minutes." });
-    if (f) oni.send(st, "kick", [t, ...opt(f.reason)], ["players", "status"]);
+    const timed = v010(st), fields: [string, string, string | [string, string][]][] = [["reason", "Reason (they read it)", ""]];
+    if (timed) fields.unshift(["time", "Block rejoining", KICK_TIMES]);
+    const f = await oni.form(`KICK · ${name}`, fields, { verb: "KICK", danger: true, note: "Repeat kicks block rejoining for 10, 30, 60, then 120 minutes." });
+    if (f) oni.send(st, "kick", [t, ...(timed ? opt(f.time) : []), ...opt(f.reason)], ["players", "status"]);
   } else if (what === "ban") {
     const f = await oni.form(`BAN · ${name}`, [["time", "Duration", BAN_TIMES], ["reason", "Reason", ""]], { verb: "BAN", danger: true,
       note: "Bans their player ID, address and device together, on every server sharing this ban list." });
     if (f) oni.send(st, "ban", [t, ...opt(f.time), ...opt(f.reason)], ["players", "status", "bans"]);
   } else if (what === "mute") {
     if (p.muted) return oni.send(st, "unmute", [t], ["players"]);
-    const f = await oni.form(`MUTE · ${name}`, [["time", "Duration", MUTE_TIMES], ["reason", "Reason", ""]], { verb: "MUTE", note: "Silences their text and voice chat. Rejoining keeps it." });
-    if (f) oni.send(st, "mute", [t, ...opt(f.time), ...opt(f.reason)], ["players"]);
+    const kinds = v010(st), fields: [string, string, string | [string, string][]][] = [["time", "Duration", MUTE_TIMES], ["reason", "Reason", ""]];
+    if (kinds) fields.unshift(["kind", "Silence", MUTE_KINDS]), fields.push(["shadow", "Shadow mute", MUTE_SHADOW]);
+    const f = await oni.form(`MUTE · ${name}`, fields, { verb: "MUTE", note: kinds ? "Rejoining keeps it." : "Silences their text and voice chat. Rejoining keeps it." });
+    if (f) oni.send(st, "mute", [t, ...(kinds ? [f.kind] : []), ...opt(f.time), ...opt(f.reason), ...(kinds ? opt(f.shadow) : [])], ["players"]);
   } else if (what === "team") {
     const team = await oni.pick(`MOVE ${name} TO`, TEAMS.map((c) => [[[c.toUpperCase(), TEAM_COLOR[c]]], c]));
     if (team) oni.send(st, "team", [t, team], ["players"]);
@@ -161,6 +173,34 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
     [`THIS SERVER ONLY · dedicated.toml, ${takesEffect(st)}`, "one"]]);
   if (scope === "all") oni.send(st, "admin", ["add", target], ["admins", "players"]);
   else if (scope === "one") return saveSetting(st, "admin_add", target, "ADMIN", `${name} as an admin of this server`);
+}
+
+/** RESTART SERVER: now, or after the game being played (players are told, and it can be called off until then). */
+async function restart(st: Station) {
+  const head = `RESTART · ${st.label}`;
+  if (st.restartAfter) {
+    const got = await oni.pick(`RESTART PENDING · ${st.label}`, [["CANCEL · it plays on, nobody is dropped", "cancel"], ["RESTART NOW · everyone is dropped", "now"]]);
+    if (got === "cancel") {
+      st.restartAfter = false;
+      bump("cards", "ops");
+      oni.call(st, "say", ["The restart after this game is cancelled."], 3);
+      return oni.notify("Cancelled: it won't restart after this game.", head);
+    }
+    if (got !== "now" || !(await oni.confirm(`RESTART NOW  ${st.label}`, "Everyone on it is dropped mid-game.", "RESTART", true))) return;
+    st.restartAfter = false;
+    return oni.restartNow(st);
+  }
+  const s = st.data.status ?? {};
+  const busy = st.online && num(s.players) !== 0 && !restartDue(true, s); // offline, its status is stale
+  const when = busy ? await oni.pick(`RESTART  ${st.label}`, [["AFTER THIS GAME · players are told, nobody is dropped mid-game", "after"], ["NOW · everyone is dropped mid-game", "now"]]) : "now";
+  if (when === "after") {
+    st.restartAfter = true;
+    bump("cards", "ops");
+    oni.call(st, "say", ["The server restarts after this game. It's back a minute or so later."], 3);
+    return oni.notify("It restarts when this game ends, or at once if everyone leaves. RESTART SERVER again calls it off.", head, "warning", 10);
+  }
+  if (when !== "now" || !(await oni.confirm(`RESTART  ${st.label}`, "Everyone on it is dropped and the game starts over; it's back in a minute or so. Servers sharing its container or window restart with it, and what was changed from here (name, join password, ping limit) goes back to dedicated.toml's.", "RESTART", true))) return;
+  return oni.restartNow(st);
 }
 
 /** When a dedicated.toml edit takes effect on this server. */
@@ -352,12 +392,7 @@ export async function op(name: string, st = oni.cur) {
     }
     return oni.reconnect(st, pw);
   }
-  if (name === "restart") {
-    if (!(await oni.confirm(`RESTART  ${st.label}`, "Everyone on it is dropped and the game starts over; it's back in a minute or so. Servers sharing its container or window restart with it, and what was changed from here (name, join password, ping limit) goes back to dedicated.toml's.", "RESTART", true))) return;
-    oni.notify("Restarting… the console reconnects by itself.", `RESTART · ${st.label}`, "warning");
-    return invoke("restart_server", { index: st.index }).then(() => oni.notify("Restarted.", `RESTART · ${st.label}`),
-      (e) => oni.notify(String(e), `RESTART FAILED · ${st.label}`, "error", 15));
-  }
+  if (name === "restart") return restart(st);
   if (name === "remove") {
     if (!(await oni.confirm(`REMOVE  ${st.label}`, "Takes it out of your config file, so the console stops managing it. The server itself keeps running, and ADD SERVER puts it back.", "REMOVE", true))) return;
     try {
@@ -421,12 +456,13 @@ export async function op(name: string, st = oni.cur) {
     const args = [mp, md].filter(Boolean);
     if (name !== "nextmap" && !(await oni.confirm(`${name.toUpperCase()}  ${args.join(" / ")}`, "Ends the current game for everyone on this station; the new one starts in the next lobby."))) return;
     oni.send(st, name, args, ["status", "nextmap"]);
-  } else if (["endround", "endgame", "shuffle"].includes(name)) {
+  } else if (["endround", "endgame", "next", "replay", "shuffle"].includes(name)) {
     const body = ({ endround: "Ends the round as if its time ran out.", endgame: "Ends the game with the scores as they stand.",
+      next: "Ends this game and starts the next one now.", replay: "Ends this game and starts it again from the beginning.",
       shuffle: "Shuffles players across the teams that have players." } as Dict)[name];
     if (await oni.confirm(name.toUpperCase(), body, "EXECUTE", name !== "shuffle")) oni.send(st, name, [], ["status", "players"]);
   } else if (name === "teamcount") {
-    const n = await oni.pick("SPREAD PLAYERS OVER", [2, 3, 4, 5, 6, 7, 8].map((i) => [`${i} teams`, String(i)]));
+    const n = await oni.pick("SPREAD PLAYERS OVER", Array.from({ length: v010(st) ? 63 : 7 }, (_, i) => i + 2).map((i) => [`${i} teams`, String(i)]));
     if (n) oni.send(st, "teamcount", [n], ["players"]);
   } else if (name === "startvote") {
     const subjects: string[] = st.data.vote?.subjects ?? ["endround", "endgame", "shuffle", "kick", "playlist"];

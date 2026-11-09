@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { behind, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
+import { behind, since, describe as describeEvent, explain, hotReloads, mixedVersions, idForms, kickLeft, notesText, noteKick, pardonTarget, parseCommand, plain, pluginPace, pluginReply, pluginSnapshot, reactionWords, restartDue, redactData, redactText, sides, splitTag, typedParams, vpnCheck, vpnLists, type Kick } from "./util";
 import { Medals } from "./medals";
 import { mixedByProject, projectOf, reclaimerOnly } from "./projects";
 import { aboutLine, aboutText } from "./about";
@@ -438,6 +438,21 @@ describe("hot reload", () => {
   });
 });
 
+describe("restart after this game", () => {
+  it("waits out the game, runs once it's finished or empty, and never once cancelled", () => {
+    expect(restartDue(true, { phase: "playing", players: 6 })).toBe(false);
+    expect(restartDue(true, { phase: "round_over", players: 6 })).toBe(false);
+    expect(restartDue(true, { phase: "in_game", players: 2 })).toBe(false); // Reach
+    expect(restartDue(true, { phase: "finished", players: 6 })).toBe(true);
+    expect(restartDue(true, { phase: "no_game", players: 6 })).toBe(true); // the finished poll was missed
+    expect(restartDue(true, { phase: "postgame", players: 2 })).toBe(true); // Reach
+    expect(restartDue(true, { phase: "playing", players: 0 })).toBe(true); // empty: nobody to drop
+    expect(restartDue(true, { players: 3 })).toBe(false); // no phase reported: waits for it to empty
+    expect(restartDue(true, undefined)).toBe(false);
+    expect(restartDue(false, { phase: "finished", players: 0 })).toBe(false); // cancelled
+  });
+});
+
 describe("server version", () => {
   it("is behind only when both versions are known and the server's is older", () => {
     expect(behind("0.9.17", "0.9.18")).toBe("0.9.18");
@@ -445,6 +460,11 @@ describe("server version", () => {
     expect(behind("0.9.18", "0.10.0")).toBe("0.10.0");
     for (const [have, latest] of [["0.9.18", "0.9.18"], ["0.9.19-rc1", "0.9.18"], ["?", "0.9.18"], [undefined, "0.9.18"], ["0.9.17", ""]])
       expect(behind(have, latest), `${have} vs ${latest}`).toBe("");
+  });
+
+  it("is since a release only when the version is known and not older", () => {
+    for (const v of ["0.10.0", "v0.10.1", "0.10.0-rc1", "1.0.0"]) expect(since(v, "0.10.0"), v).toBe(true);
+    for (const v of ["0.9.23", "0.9.100", "?", undefined, ""]) expect(since(v, "0.10.0"), String(v)).toBe(false);
   });
 
   it("names a mixed fleet once, oldest first, and stays quiet when it agrees", () => {

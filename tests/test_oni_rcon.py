@@ -277,7 +277,9 @@ def test_projects():
 
 
 def test_reclaimer_drift():
-    from oni_rcon.update import behind, mixed_versions
+    from oni_rcon.update import behind, mixed_versions, since
+    assert since("0.10.0", "0.10.0") and since("v0.10.1-rc1", "0.10.0") and since("1.0.0", "0.10.0")
+    assert not since("0.9.23", "0.10.0") and not since("?", "0.10.0") and not since(None, "0.10.0")
     assert behind("0.9.9", "v0.9.18") == "0.9.18"  # numeric, not text: 9 < 18
     assert behind("0.9.18", "0.9.18") == behind("0.9.19", "0.9.18") == ""  # current or ahead
     assert behind("?", "0.9.18") == behind("0.9.17", "") == ""  # unknown never counts as behind
@@ -299,6 +301,11 @@ def test_reclaimer_drift():
             st.rcon.info["version"] = "0.9.18"
             app.note_mixed()
             assert app.lag(st) == "" and any("MIXED VERSIONS  0.9.7 on" in str(e.get("text")) for _, e in app.feed)
+            next_off = lambda: app.query_one("#op-next", appmod.Button).disabled
+            assert app.cur is st and next_off() and not appmod.v010(st)  # 0.9: no NEXT GAME / REPLAY
+            st.rcon.info["version"] = "0.10.0"
+            app.paint_ops()
+            assert appmod.v010(st) and not next_off()
     asyncio.run(go())
 
 
@@ -475,6 +482,36 @@ def test_markup_in_a_name_is_just_a_name():
                                                      "text": "admin [b]help[/b]"})
             await pilot.pause(0.2)
             assert app.is_running
+
+    asyncio.run(go())
+
+
+def test_mute_says_what_on_010():
+    async def go():
+        ports, keep = await serve_fakes(tick=False, specs=[("Probe", 16, 2)])
+        app = OniApp([Server(port=p, password="demo") for p in ports], by="pytest", intro=False)
+        sent = []
+        app.send = lambda st, *a, then=(): sent.append(a)
+        async with app.run_test(size=(160, 48)) as pilot:
+            await settle(app, pilot, "players")
+            st, t = app.stations[0], app.query_one("#players")
+            victim = next(p for p in app.row_players.values() if not p.get("muted"))
+            t.move_cursor(row=next(i for i, k in enumerate(t.ids) if app.row_players[k] is victim))
+            t.focus()
+            for version, fields, want in (
+                    ("0.9.23", {"time": "10m", "reason": "mic spam"}, ("mute", victim["player_id"], "10m", "mic spam")),
+                    ("0.10.0", {"kind": "voice", "time": "10m", "reason": "mic spam", "shadow": "shadow"},
+                     ("mute", victim["player_id"], "voice", "10m", "mic spam", "shadow")),
+                    ("0.10.0", {}, ("mute", victim["player_id"], "all"))):  # defaults: everything, until restart, told
+                st.rcon.info["version"] = version
+                await pilot.press("m")
+                assert await until(pilot, lambda: isinstance(app.screen, Form))
+                assert bool(app.screen.query("#field-kind")) == (version != "0.9.23")
+                for k, v in fields.items():
+                    app.screen.query_one(f"#field-{k}").value = v
+                app.screen.query_one("#yes").press()  # not a click: on a slow runner it can land before layout
+                assert await until(pilot, lambda: not isinstance(app.screen, Form))
+                assert sent.pop() == want, version
 
     asyncio.run(go())
 
