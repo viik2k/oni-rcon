@@ -22,7 +22,8 @@ function cardLines(st: Station, cols: number): [Line, Line, Line[]] {
   const count: Line = st.online && n !== undefined ? [[`${n}/${mx}`, n ? AMBER : DIM]] : [];
   const fr = st.online ? slowFps(st) : undefined;
   const lag: Line = fr ? [[`${fr}fps  `, LEVEL_COLOR[level(fr)]]] : [];
-  const right: Line = st.alerts ? [[`⚑ ${st.alerts}  `, RED], ...lag, ...count] : [...lag, ...count];
+  const pend: Line = st.online && st.restartAfter ? [["↻ AFTER GAME  ", AMBER]] : [];
+  const right: Line = st.alerts ? [[`⚑ ${st.alerts}  `, RED], ...pend, ...lag, ...count] : [...pend, ...lag, ...count];
   const game = projectOf(st.info);
   const top: Line = [[glyph[0] + " ", glyph[1]], [`${st.index + 1}  ${st.label.toUpperCase()}`, WHITE], ...(game.reclaimer ? [] : [[`  ${game.tag}`, CYAN]] as Line)];
   if (!st.online) {
@@ -74,7 +75,7 @@ function cardKey(st: Station, cols: number) {
   const s = st.data.status ?? {};
   const left = st.retryAt > performance.now() ? Math.ceil((st.retryAt - performance.now()) / 1000) : 0;
   const trace = st.online ? st.rate(oni.fleet ? 10 : Math.max(4, cols - 13), 5000, oni.fleet).join(",") : "";
-  return [st.state, st.label, st.tag, st.alerts, s.players, s.max_players, s.map, s.mode, s.phase, st.info.version, st.info.project, oni.reclaimer, left, trace, slowFps(st), st.flash > performance.now(), oni.why(st)].join("|");
+  return [st.state, st.label, st.tag, st.alerts, st.restartAfter, s.players, s.max_players, s.map, s.mode, s.phase, st.info.version, st.info.project, oni.reclaimer, left, trace, slowFps(st), st.flash > performance.now(), oni.why(st)].join("|");
 }
 
 export function Stations({ cols }: { cols: number }) {

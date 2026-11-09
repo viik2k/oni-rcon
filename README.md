@@ -251,13 +251,16 @@ port = 49177
 **Reach Renaissance** (desktop app): a `[[server]]` with `protocol = "source"` speaks the Source RCON that
 Reach Renaissance's dedicated server answers once its `dedicated.toml` sets an `[rcon]` password (on the game port
 unless it sets `rcon_port`). On the setup screen, type the address as `source://HOST`. Cards, F1 and F3 fill from its
-`status` and `players`; kick, ban, unban, say, end game and the F5 console work. It sends no live feed, so F2 stays
-quiet.
+`status` and `players`, the F4 blacklist from `bans`, and the map and mode pickers from `maps` and `modes`; kick, ban,
+unban, say, end game and the F5 console work. A `say` sent while the game's match chat isn't up shows as failed, since
+no player saw it. It sends no live feed, so F2 stays quiet.
 
 ### Restarting a server
 
 RESTART SERVER on F3 (desktop app) runs the server's `restart_cmd` where the server is: on its `ssh` host, or on
-this machine without one. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
+this machine without one. While a game is on it asks NOW or AFTER THIS GAME: after the game, players are told in
+chat, the server's card shows `↻ AFTER GAME`, and it restarts once the game ends (or at once if everyone leaves); RESTART
+SERVER again calls it off. The console has to stay open until then. The setup screen writes it for the servers it finds or hosts, and a server on this Windows
 machine that its server folder lists gets one without any config; for others, add it to the
 `[[server]]` block (or `[defaults]`; `{port}` is the server's RCON port):
 

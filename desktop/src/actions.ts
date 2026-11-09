@@ -7,7 +7,7 @@ import { newPlaylist, type Playlist } from "./lib/content";
 import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, since, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, since, CAMERAS, redactData, hotReloads, notesText, num, pardonTarget, pick, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
@@ -61,7 +61,7 @@ export const TIPS: Record<string, string> = {
   "op-playlists": "The playlists in the server's playlists folder and installed from F6: make, edit and use them.",
   "op-newplaylist": "Make a playlist from the server's own maps and modes: three games at least, that players vote between. Saved in its playlists folder.",
   "op-newgametype": "Make a game type: a base mode with its score, teams, time, rounds, lives, respawn and shields. Saved in the server's content folder, Game Modes.",
-  "op-restart": "Restart the server itself: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
+  "op-restart": "Restart the server itself, now or after the game being played: everyone is dropped and it comes back in a minute or so. Needs restart_cmd in the config (setup adds it).",
   "op-remove": "Take this server out of your list (the config file). The server itself isn't touched.",
   "bl-newban": "Ban a player ID, an IP address or a whole range.",
   "bl-unban": "Lift the selected ban.  Key: u",
@@ -173,6 +173,34 @@ async function makeAdmin(st: Station, target: string, name: string, asked = fals
     [`THIS SERVER ONLY · dedicated.toml, ${takesEffect(st)}`, "one"]]);
   if (scope === "all") oni.send(st, "admin", ["add", target], ["admins", "players"]);
   else if (scope === "one") return saveSetting(st, "admin_add", target, "ADMIN", `${name} as an admin of this server`);
+}
+
+/** RESTART SERVER: now, or after the game being played (players are told, and it can be called off until then). */
+async function restart(st: Station) {
+  const head = `RESTART · ${st.label}`;
+  if (st.restartAfter) {
+    const got = await oni.pick(`RESTART PENDING · ${st.label}`, [["CANCEL · it plays on, nobody is dropped", "cancel"], ["RESTART NOW · everyone is dropped", "now"]]);
+    if (got === "cancel") {
+      st.restartAfter = false;
+      bump("cards", "ops");
+      oni.call(st, "say", ["The restart after this game is cancelled."], 3);
+      return oni.notify("Cancelled: it won't restart after this game.", head);
+    }
+    if (got !== "now" || !(await oni.confirm(`RESTART NOW  ${st.label}`, "Everyone on it is dropped mid-game.", "RESTART", true))) return;
+    st.restartAfter = false;
+    return oni.restartNow(st);
+  }
+  const s = st.data.status ?? {};
+  const busy = st.online && num(s.players) !== 0 && !restartDue(true, s); // offline, its status is stale
+  const when = busy ? await oni.pick(`RESTART  ${st.label}`, [["AFTER THIS GAME · players are told, nobody is dropped mid-game", "after"], ["NOW · everyone is dropped mid-game", "now"]]) : "now";
+  if (when === "after") {
+    st.restartAfter = true;
+    bump("cards", "ops");
+    oni.call(st, "say", ["The server restarts after this game. It's back a minute or so later."], 3);
+    return oni.notify("It restarts when this game ends, or at once if everyone leaves. RESTART SERVER again calls it off.", head, "warning", 10);
+  }
+  if (when !== "now" || !(await oni.confirm(`RESTART  ${st.label}`, "Everyone on it is dropped and the game starts over; it's back in a minute or so. Servers sharing its container or window restart with it, and what was changed from here (name, join password, ping limit) goes back to dedicated.toml's.", "RESTART", true))) return;
+  return oni.restartNow(st);
 }
 
 /** When a dedicated.toml edit takes effect on this server. */
@@ -364,12 +392,7 @@ export async function op(name: string, st = oni.cur) {
     }
     return oni.reconnect(st, pw);
   }
-  if (name === "restart") {
-    if (!(await oni.confirm(`RESTART  ${st.label}`, "Everyone on it is dropped and the game starts over; it's back in a minute or so. Servers sharing its container or window restart with it, and what was changed from here (name, join password, ping limit) goes back to dedicated.toml's.", "RESTART", true))) return;
-    oni.notify("Restarting… the console reconnects by itself.", `RESTART · ${st.label}`, "warning");
-    return invoke("restart_server", { index: st.index }).then(() => oni.notify("Restarted.", `RESTART · ${st.label}`),
-      (e) => oni.notify(String(e), `RESTART FAILED · ${st.label}`, "error", 15));
-  }
+  if (name === "restart") return restart(st);
   if (name === "remove") {
     if (!(await oni.confirm(`REMOVE  ${st.label}`, "Takes it out of your config file, so the console stops managing it. The server itself keeps running, and ADD SERVER puts it back.", "REMOVE", true))) return;
     try {
