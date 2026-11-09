@@ -15,7 +15,7 @@ import { mixedByProject } from "./lib/projects";
 import { Findings, publicRoster, quietKillMode, type Finding, type Who } from "./lib/findings";
 import {
   CATS, ID_LIKE, KIND, cmdLine, commonPrefix, explain, idForms, num, pick, playerIds, plain, reactionWords,
-  pluginPace, pluginReply, pluginSnapshot, redactData, redactText, resolve, splitTag, stripEnds, who, noteKick, typedParams,
+  pluginPace, pluginReply, pluginSnapshot, redactData, redactText, resolve, restartDue, splitTag, stripEnds, who, noteKick, typedParams,
   type Dict, type Kick, type Line, type Pace,
 } from "./lib/util";
 
@@ -88,6 +88,7 @@ export class Station {
   flash = 0;
   firstSeen = new Map<string, number>();
   painted = false;
+  restartAfter = false; // RESTART AFTER THIS GAME is waiting on this server
   polled = 0;
   pings = new Map<string, number>();
   here = new Map<string, string>();
@@ -346,6 +347,10 @@ class Oni {
     st.state = state;
     st.detail = detail;
     st.info = m.info ?? st.info;
+    if (state !== "online" && st.restartAfter) { // it went down anyway: restarting it once it's back would drop everyone again
+      st.restartAfter = false;
+      this.notify("The link dropped, so the restart waiting for the end of the game is off.", `RESTART · ${st.label}`, "warning", 15);
+    }
     if (state !== "connecting") this.runner.connection(st.where, state === "online", st.label);
     if (state === "online") {
       st.medals.newGame(); // what happened while we were away is unknown
@@ -401,6 +406,21 @@ class Oni {
     if (kind === "admin_added" || kind === "admin_removed") this.fetch(st, "admins", "players");
     if (kind === "vote") this.fetch(st, "vote");
     if (kind === "control") this.fetch(st, "nextmap");
+    if (kind === "phase" && st.restartAfter) this.fetch(st, "status"); // the game may have just ended
+  }
+
+  /** RESTART SERVER: the server's restart_cmd. `after` = the RESTART AFTER THIS GAME it was waiting for, so the
+   *  players still on it hear why they're dropped. */
+  async restartNow(st: Station, after = false) {
+    const head = `RESTART · ${st.label}`;
+    if (after) {
+      st.restartAfter = false;
+      bump("cards", "ops");
+      await this.call(st, "say", ["Restarting the server now. It's back in a minute or so."], 3);
+    }
+    this.notify(after ? "The game's over: restarting… the console reconnects by itself." : "Restarting… the console reconnects by itself.", head, "warning");
+    return invoke("restart_server", { index: st.index }).then(() => this.notify("Restarted.", head),
+      (e) => this.notify(String(e), `RESTART FAILED · ${st.label}`, "error", 15));
   }
 
   // --- findings ----------------------------------------------------------------------------------------------------
@@ -491,6 +511,7 @@ class Oni {
         }
         if (w === "status") this.runner.status(st.where, r.data);
         st.data[w] = r.data;
+        if (w === "status" && restartDue(st.restartAfter, r.data)) this.restartNow(st, true);
       }
     });
     bump("cards");
