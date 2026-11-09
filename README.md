@@ -251,8 +251,9 @@ port = 49177
 **Reach Renaissance** (desktop app): a `[[server]]` with `protocol = "source"` speaks the Source RCON that
 Reach Renaissance's dedicated server answers once its `dedicated.toml` sets an `[rcon]` password (on the game port
 unless it sets `rcon_port`). On the setup screen, type the address as `source://HOST`. Cards, F1 and F3 fill from its
-`status` and `players`; kick, ban, unban, say, end game and the F5 console work. It sends no live feed, so F2 stays
-quiet.
+`status` and `players`, the F4 blacklist from `bans`, and the map and mode pickers from `maps` and `modes`; kick, ban,
+unban, say, end game and the F5 console work. A `say` sent while the game's match chat isn't up shows as failed, since
+no player saw it. It sends no live feed, so F2 stays quiet.
 
 ### Restarting a server
 

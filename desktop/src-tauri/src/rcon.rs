@@ -384,13 +384,32 @@ fn source_line(command: &str, args: &[String]) -> String {
 
 /// A Source RCON reply shaped as a Reclaimer one. Only its text says whether it worked.
 fn source_reply(id: i32, command: &str, text: &str) -> Value {
-    // ponytail: failure read from Reach Renaissance's wording; a server that words it otherwise reads as ok
-    let failed = ["unknown command", "usage:", "that command failed", "the engine wouldn't"].iter().any(|f| text.starts_with(f));
+    // ponytail: failure read from Reach Renaissance's wording (dedicated/src/Rcon.cs, Chat.cs); a server that words it otherwise reads as ok
+    let failed = [
+        "unknown command",
+        "usage:",
+        "that command failed",
+        "the engine wouldn't",
+        "couldn't write the announcement",
+        "nothing to announce",
+        "can't read the ban list",
+        "the engine's ban list didn't make sense",
+        "nobody here is banned as",
+        "nobody in this game",
+        "two players here are called",
+        "this server isn't running yet",
+    ]
+        .iter()
+        .any(|f| text.starts_with(f))
+        // say with match chat down: the file is written and dropped, so no player saw it
+        || text.contains(" — nobody saw it: ");
     let mut r = json!({"type": "reply", "id": id, "ok": !failed, "text": text});
     let data = match command {
         _ if failed => None,
         "status" => rr_status(text),
         "players" => Some(rr_players(text)),
+        "bans" => Some(rr_bans(text)),
+        "maps" | "modes" => Some(rr_entries(command, text)),
         _ => None,
     };
     if let Some(d) = data {
@@ -443,6 +462,46 @@ fn rr_players(text: &str) -> Value {
         }
     }
     json!({"players": players, "max_players": max})
+}
+
+/// Reach Renaissance's bans: "1. NAME: id HEX, address IP, until YYYY-MM-DD HH:MM | permanent, "REASON"", then a count.
+/// A ban with an id is a player ban (unban takes the id), one with only an address an address ban.
+fn rr_bans(text: &str) -> Value {
+    use chrono::TimeZone;
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static ROW: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"^\d+\. (.*?): (?:id ([0-9A-Fa-f]+), )?(?:address ([^,]+), )?(?:until (\d{4}-\d\d-\d\d \d\d:\d\d)|permanent)(?:, "(.*)")?$"#).unwrap()
+    });
+    let (mut players, mut ips) = (vec![], vec![]);
+    for c in text.lines().filter_map(|l| ROW.captures(l)) {
+        // ponytail: RR prints the end in the server's local time; read as this PC's, so EXPIRES is off by the zone gap when they differ
+        let expires = c.get(4).and_then(|t| chrono::NaiveDateTime::parse_from_str(t.as_str(), "%Y-%m-%d %H:%M").ok())
+            .and_then(|t| chrono::Local.from_local_datetime(&t).earliest())
+            .map(|t| t.timestamp() as f64);
+        let mut b = json!({"name": &c[1], "reason": c.get(5).map(|r| r.as_str()), "expires": expires});
+        match (c.get(2), c.get(3)) {
+            (Some(id), _) => {
+                b["id"] = json!(id.as_str());
+                players.push(b)
+            }
+            (None, Some(ip)) => {
+                b["ip"] = json!(ip.as_str());
+                ips.push(b)
+            }
+            _ => {}
+        }
+    }
+    json!({"players": players, "ips": ips, "devices": []})
+}
+
+/// Reach Renaissance's maps and modes: one name per line (scenario names; game type file names), or a "no …" line.
+fn rr_entries(command: &str, text: &str) -> Value {
+    let kind = if command == "maps" { "map" } else { "mode" };
+    let e: Vec<Value> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("no maps in") && !l.starts_with("no game types found"))
+        .map(|l| json!({"kind": kind, "name": l, "reference": l}))
+        .collect();
+    json!({"entries": e})
 }
 
 pub fn free_port() -> u16 {
@@ -563,8 +622,26 @@ mod tests {
         let p = source_reply(2, "players", "1. name: viik, the one, id: 00ab, peer: 5, address: 1.2.3.4, relayed\n2. name: x, joined after this game started\n2/16 players");
         assert_eq!(p["data"]["players"], json!([{"name": "viik, the one", "id": "00ab", "peer": "5", "address": "1.2.3.4"}, {"name": "x"}]));
         assert_eq!(p["data"]["max_players"], 16);
-        let bad = source_reply(3, "nextmap", "unknown command \"nextmap\". Try: help");
+        let bad = source_reply(3, "endmatch", "unknown command \"endmatch\". Try: help");
         assert_eq!((&bad["ok"], bad.get("data")), (&json!(false), None));
+        // say: RR's Chat.cs wording when match chat is up, down, or the file can't be written
+        assert_eq!(source_reply(4, "say", "announced: hi all")["ok"], true);
+        let unseen = "announced: hi all — nobody saw it: the engine's match chat isn't up (no online session)";
+        assert_eq!(source_reply(5, "say", unseen)["ok"], false);
+        assert_eq!(source_reply(6, "say", "couldn't write the announcement: Access denied")["ok"], false);
+        assert_eq!(source_reply(7, "say", "nothing to announce")["ok"], false);
+        let id = format!("{}00ab", "0".repeat(60));
+        let b = source_reply(8, "bans", &format!("1. Griefer: id {id}, address 1.2.3.4, until 2030-01-02 03:04, \"team: killing\"\n2. no name: address 5.6.7.0, permanent\n2 ban(s) in bans.json, shared by every server"));
+        assert_eq!(b["data"]["players"][0]["id"], json!(id));
+        assert_eq!((&b["data"]["players"][0]["name"], &b["data"]["players"][0]["reason"]), (&json!("Griefer"), &json!("team: killing")));
+        assert!(b["data"]["players"][0]["expires"].as_f64().unwrap() > 1.8e9);
+        assert_eq!(b["data"]["ips"], json!([{"name": "no name", "ip": "5.6.7.0", "reason": null, "expires": null}]));
+        assert_eq!(source_reply(9, "bans", "nobody is banned")["data"]["players"], json!([]));
+        assert_eq!(source_reply(10, "bans", "can't read the ban list: refused")["ok"], false);
+        let m = source_reply(11, "maps", "Boneyard\nSwordBase");
+        assert_eq!(m["data"]["entries"][1], json!({"kind": "map", "name": "SwordBase", "reference": "SwordBase"}));
+        assert_eq!(source_reply(12, "modes", "no game types found; put .bin files in Game Modes or set mcc")["data"]["entries"], json!([]));
+        assert_eq!(source_reply(13, "unban", "nobody here is banned as \"x\" (try: bans)")["ok"], false);
         assert_eq!(source_line("kick", &["a b".into(), "being rude".into()]), "kick \"a b\" being rude");
         assert_eq!(source_line("say", &["hello all".into()]), "say hello all");
     }
