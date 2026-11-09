@@ -367,10 +367,10 @@ const EXPLAIN: [string[], string, string][] = [
 ];
 
 /** Server 0.9.18 and later apply dedicated.toml edits without a restart, and `reload` says what changed. */
-export function hotReloads(version: unknown): boolean {
-  const v = semver(version);
-  return !!v && cmpVer(v, [0, 9, 18]) >= 0;
-}
+export const hotReloads = (version: unknown) => since(version, "0.9.18");
+
+/** Whether a server's version is known and at least `min` ("0.10.0"). */
+export const since = (version: unknown, min: string) => !!semver(version) && !behind(version, min);
 
 /** Phases with a game under way: Reclaimer's playing/round_over/between_rounds, Reach's in_game. */
 const MID_GAME = new Set(["playing", "round_over", "between_rounds", "in_game", "ingame"]);
