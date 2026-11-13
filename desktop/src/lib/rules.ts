@@ -196,15 +196,17 @@ const SERVER_ROLES: Dict = { admin: "admin", moderator: "mod", mod: "mod", vip: 
 /** The server keeps up to 16 private commands (RCON `commands add`, Reclaimer 0.10.3+). */
 export const MAX_PRIVATE = 16;
 
-/** The private commands a server's enabled !command rules answer: [word without its "!", the rule's name as `/help` shows it].
- *  On 0.10.3+ the console registers these, so a player's !word reaches only the server, never everyone's chat. */
-export function privateCommands(rules: Dict[], server: string): [string, string][] {
+/** The private commands a server's enabled !command rules answer, then Studio's (`studio`, every server): [word without its
+ *  "!", what `/help` shows: the rule's name, or the word]. On 0.10.3+ the console registers these, so a player's !word
+ *  reaches only the server, never everyone's chat. */
+export function privateCommands(rules: Dict[], server: string, studio: string[] = []): [string, string][] {
   const out = new Map<string, string>();
   for (const r of rules) {
     if (!r.enabled || r.when?.type !== "command" || !(r.servers === "all" || r.servers?.includes(server))) continue;
     const word = String(r.when.command).slice(1);
     if (!out.has(word)) out.set(word, String(r.name).slice(0, 60));
   }
+  for (const w of studio) if (!out.has(w)) out.set(w, `!${w}`);
   return [...out].slice(0, MAX_PRIVATE);
 }
 

@@ -200,6 +200,7 @@ describe("rules", () => {
     expect(privateCommands(rules, "s1")).toEqual([["admin", "!admin rule"]]);
     expect(privateCommands(rules, "s2")).toEqual([["admin", "!admin rule"], ["kills", "!kills rule"]]);
     expect(privateCommands(Array.from({ length: 20 }, (_, i) => cmd(`!c${i}`)), "s1")).toHaveLength(MAX_PRIVATE);
+    expect(privateCommands(rules, "s1", ["kills", "admin"])).toEqual([["admin", "!admin rule"], ["kills", "!kills"]]); // Studio's, after the rules'
   });
 
   it("registering private commands: fresh adds all (removing first), then only the difference", async () => {

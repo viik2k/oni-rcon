@@ -194,6 +194,8 @@ class Oni {
   findings = new Findings();
   /** Automation rules: they run while this console is open, and act through the same calls as the buttons do. */
   rules: Dict[] = [];
+  /** The words running Studio scripts hook with command(): registered as private commands after the rules' own. */
+  studioWords: string[] = [];
   roles: Roles = {};
   runner = new Runner({
     call: (where, command, args) => {
@@ -286,6 +288,13 @@ class Oni {
     for (const st of this.stations) this.syncCommands(st);
   }
 
+  studioCommands(words: unknown[]) {
+    const ok = [...new Set(words.map((w) => String(w).toLowerCase()).filter((w) => /^[a-z0-9_-]{1,23}$/.test(w)))].sort();
+    if (ok.join(" ") === this.studioWords.join(" ")) return;
+    this.studioWords = ok;
+    for (const st of this.stations) this.syncCommands(st);
+  }
+
   /** Reclaimer 0.10.3+ private commands: register the words this server's !command rules answer, so a player's !word
    *  (or /word) reaches only the server, never everyone's chat, and /help lists it. They last until a restart, which
    *  drops the link, so `fresh` (a new link) adds them all again: remove first, as a reconnect may find them still there.
@@ -297,7 +306,7 @@ class Oni {
       if (fresh) st.privateCmds = (await this.call(st, "commands")).ok ? new Map() : null;
       const had = st.privateCmds;
       if (!had) return;
-      const failed = await registerCommands((args) => this.call(st, "commands", args), had, privateCommands(this.rules, st.where), fresh);
+      const failed = await registerCommands((args) => this.call(st, "commands", args), had, privateCommands(this.rules, st.where, this.studioWords), fresh);
       const head: Line = [[new Date().toTimeString().slice(0, 9), DIM], [`${st.label} `, CYAN]];
       if (fresh && had.size) this.logLine([...head, [`PRIVATE COMMANDS  ${[...had.keys()].map((w) => "!" + w).join(" ")}`, DIM]]);
       if (failed.length) this.logLine([...head, [`PRIVATE COMMANDS NOT ADDED  ${failed.join(" · ")}`, AMBER]]);
