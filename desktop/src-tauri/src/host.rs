@@ -407,6 +407,12 @@ pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options:
 
 /// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
+    if let (true, Some(m)) = (key == "max_players", v.as_integer()) {
+        let (bots, _) = server_bots(text, rcon_port)?;
+        if bots > m - 1 {
+            return Err(format!("This server has {bots} combat bots, and they must leave a place for a player: lower COMBAT BOTS first, or take {} or more.", bots + 1));
+        }
+    }
     edit_server(text, rcon_port, |t| {
         if key == "playlist" {
             for other in SOURCE_KEYS {
@@ -430,6 +436,49 @@ pub fn server_flag(text: &str, rcon_port: u16, key: &str) -> Result<bool, String
     let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
     let under = doc.get("defaults").and_then(|d| d.get(key));
     Ok(t.get(key).or(under).and_then(toml_edit::Item::as_bool).unwrap_or(false))
+}
+
+/// A whole-number `key` as the [[server]] on `rcon_port` has it, else as [defaults] has it; None when neither sets it.
+fn server_int(doc: &toml_edit::DocumentMut, t: &toml_edit::Table, key: &str) -> Option<i64> {
+    t.get(key).or_else(|| doc.get("defaults").and_then(|d| d.get(key))).and_then(toml_edit::Item::as_integer)
+}
+
+/// Combat bots (0.10.6): `combat_bots` and `bot_pilots` as the [[server]] on `rcon_port` has them, else [defaults]; 0 when unset.
+pub fn server_bots(text: &str, rcon_port: u16) -> Result<(i64, i64), String> {
+    let doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+    let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    Ok((server_int(&doc, t, "combat_bots").unwrap_or(0), server_int(&doc, t, "bot_pilots").unwrap_or(0)))
+}
+
+/// Combat bots (0.10.6) set on the [[server]] on `rcon_port`, refused as the server itself would refuse them: pilots are
+/// part of the bots, and bots share max_players with humans, leaving at least one place for a player. 0 takes a key out.
+pub fn set_server_bots(text: &str, rcon_port: u16, bots: i64, pilots: i64) -> Result<String, String> {
+    if bots < 0 || pilots < 0 {
+        return Err("Bots and pilots are 0 or more.".into());
+    }
+    if pilots > bots {
+        return Err("Bot pilots are part of the combat bots: no more pilots than bots.".into());
+    }
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let max = {
+        let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+        let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+        server_int(&doc, t, "max_players")
+    };
+    // ponytail: with no max_players in the file the server's built-in default applies, unknown here; the form checks the live one
+    if let Some(m) = max.filter(|m| bots > m - 1) {
+        return Err(format!("Bots share the server's {m} places with players and must leave one for a player: {} at most.", m - 1));
+    }
+    let t = doc.get_mut("server").and_then(toml_edit::Item::as_array_of_tables_mut).and_then(|l| l.iter_mut().find(|t| on_port(t, rcon_port))).ok_or("dedicated.toml has no such [[server]]")?;
+    for (k, n) in [("combat_bots", bots), ("bot_pilots", pilots)] {
+        if n == 0 {
+            t.remove(k); // the server's default
+        } else {
+            t[k] = toml_edit::value(n);
+        }
+    }
+    Ok(doc.to_string())
 }
 
 /// `id` added to, or taken off, the admins of the [[server]] on `rcon_port` only: Reclaimer has no other tiers.
@@ -1214,6 +1263,26 @@ mod tests {
         assert!(server_flag(&all, 49176, "restore_state").unwrap(), "[defaults] holds for every server");
         assert!(!server_flag(&set_server_key(&all, 49176, "restore_state", false.into()).unwrap(), 49176, "restore_state").unwrap());
         assert!(server_flag(TOML, 1234, "restore_state").is_err());
+    }
+
+    #[test]
+    fn combat_bots_round_trip_and_refuse_what_the_server_would() {
+        let capped = set_server_key(TOML, 50177, "max_players", 8.into()).unwrap();
+        let on = set_server_bots(&capped, 50177, 7, 3).unwrap();
+        let t: toml::Table = on.parse().unwrap();
+        assert_eq!((t["server"][1]["combat_bots"].as_integer(), t["server"][1]["bot_pilots"].as_integer()), (Some(7), Some(3)));
+        assert!(t["server"][0].get("combat_bots").is_none(), "only the server it was set on");
+        assert_eq!((server_bots(&on, 50177).unwrap(), server_bots(&on, 49176).unwrap()), ((7, 3), (0, 0)));
+        assert!(set_server_bots(&capped, 50177, 2, 3).unwrap_err().contains("no more pilots than bots"));
+        assert!(set_server_bots(&capped, 50177, 8, 0).unwrap_err().contains("7 at most"), "one place left for a human");
+        assert!(set_server_key(&on, 50177, "max_players", 7.into()).unwrap_err().contains("COMBAT BOTS"), "capacity can't squeeze the bots out");
+        assert!(set_server_key(&on, 50177, "max_players", 8.into()).is_ok());
+        let off = set_server_bots(&on, 50177, 0, 0).unwrap();
+        assert_eq!(off, capped, "0 takes both keys out, the rest kept");
+        let all = format!("[defaults]\nmax_players = 4\ncombat_bots = 2\n{TOML}");
+        assert_eq!(server_bots(&all, 49176).unwrap(), (2, 0), "[defaults] holds for every server");
+        assert!(set_server_bots(&all, 49176, 4, 0).is_err() && set_server_bots(&all, 49176, 3, 0).is_ok());
+        assert!(set_server_bots(TOML, 50177, 40, 10).is_ok(), "no max_players in the file: left to the form and the server");
     }
 
     #[test]
