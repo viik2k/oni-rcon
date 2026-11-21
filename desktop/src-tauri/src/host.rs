@@ -206,8 +206,13 @@ impl Settings {
     }
 }
 
-/// What a [[server]] plays from besides a playlist: one map and game type, a variant, a campaign, or (0.9.19) ODST.
-const SOURCE_KEYS: [&str; 6] = ["map", "game", "base_map", "variant", "campaign", "odst"];
+/// What a [[server]] plays from besides a playlist: one map and game type, a variant, a campaign, or (0.9.19) ODST, or
+/// Reach's own key.
+const SOURCE_KEYS: [&str; 7] = ["map", "game", "base_map", "variant", "campaign", "odst", "reach"];
+/// dedicated.toml's `campaign` difficulty (campaign-servers.html); left out, it's normal.
+pub const DIFFICULTIES: [&str; 4] = ["easy", "normal", "heroic", "legendary"];
+/// The most players a co-op campaign holds.
+const CAMPAIGN_MAX_PLAYERS: i64 = 16;
 /// dedicated.toml's `camera` (0.9.20): how players see their own character on foot. Left out, it's first person.
 pub const CAMERAS: [&str; 3] = ["first_person", "player_choice", "third_person"];
 /// dedicated.toml's `sandbox` (0.10.5): whose weapons and vehicles a map plays with; "" leaves the key out (the map's own).
@@ -417,6 +422,33 @@ pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value
             t.remove(key); // the server's own default (sandbox: the map's own; network_model: enhanced)
         } else {
             t[key] = toml_edit::Item::Value(v);
+        }
+        Ok(())
+    })
+}
+
+/// The [[server]] on `rcon_port` put on a co-op campaign (0.10.7: `campaign`, `mission` by file, title or number,
+/// `difficulty`) in place of whatever it played. Its modifiers and characters stay as they were; `insertion` belonged to
+/// the old first mission, so it goes. A campaign holds 16 players at most, so a higher max_players comes down to that.
+pub fn set_server_campaign(text: &str, rcon_port: u16, campaign: &str, mission: toml_edit::Value, difficulty: &str) -> Result<String, String> {
+    let max = text.parse::<toml::Table>().ok().and_then(|d| d.get("defaults")?.get("max_players")?.as_integer());
+    edit_server(text, rcon_port, |t| {
+        let mut c = toml_edit::InlineTable::new();
+        c.insert("campaign", campaign.into());
+        c.insert("mission", mission);
+        c.insert("difficulty", difficulty.into());
+        for (k, v) in t.get("campaign").and_then(toml_edit::Item::as_inline_table).into_iter().flat_map(|o| o.iter()) {
+            if !c.contains_key(k) && k != "insertion" {
+                c.insert(k, v.clone());
+            }
+        }
+        c.fmt();
+        for other in SOURCE_KEYS.iter().chain(&["playlist"]) {
+            t.remove(other); // a campaign server plays nothing else
+        }
+        t["campaign"] = toml_edit::Item::Value(c.into());
+        if t.get("max_players").and_then(toml_edit::Item::as_integer).or(max).is_some_and(|n| n > CAMPAIGN_MAX_PLAYERS) {
+            t["max_players"] = toml_edit::value(CAMPAIGN_MAX_PLAYERS);
         }
         Ok(())
     })
@@ -1183,6 +1215,29 @@ mod tests {
         assert!(!add_flood_map(mcc.path(), server.path()).unwrap()); // there already
         assert!(["Flood Infection", "flood_infection", "H4 Flood", "h4-flood"].iter().all(|g| plays_flood(g)));
         assert!(!["Infection", "Slayer", "Floodgate Slayer"].iter().any(|g| plays_flood(g)));
+    }
+
+    #[test]
+    fn a_campaign_replaces_the_servers_source_and_keeps_its_options() {
+        let was = TOML.replace("rcon_port = 50177", "rcon_port = 50177\nmax_players = 24\nplaylist = \"playlists/a.playlist.json\"\nreach = { map = \"ff20_courtyard\", campaign = true }\ncampaign = { mission = 3040, insertion = 2, modifiers = { skulls = 257 } }");
+        let out = set_server_campaign(&was, 50177, "halo1", "a10".into(), "heroic").unwrap();
+        let t: toml::Table = out.parse().unwrap();
+        let s = &t["server"][1];
+        assert_eq!(s["campaign"]["campaign"].as_str(), Some("halo1"));
+        assert_eq!((s["campaign"]["mission"].as_str(), s["campaign"]["difficulty"].as_str()), (Some("a10"), Some("heroic")));
+        assert_eq!(s["campaign"]["modifiers"]["skulls"].as_integer(), Some(257), "modifiers kept");
+        assert!(s["campaign"].get("insertion").is_none(), "the old mission's start goes");
+        assert!(s.get("playlist").is_none() && s.get("reach").is_none(), "one source");
+        assert_eq!(s["max_players"].as_integer(), Some(16));
+        assert!(t["server"][0].get("campaign").is_none(), "only the server it was set on");
+        // from [defaults], too; and a playlist takes the campaign off again
+        let d = TOML.replace("[master]", "[defaults]\nmax_players = 32\n\n[master]");
+        let t: toml::Table = set_server_campaign(&d, 50177, "reach", "m10".into(), "legendary").unwrap().parse().unwrap();
+        assert_eq!(t["server"][1]["max_players"].as_integer(), Some(16));
+        let back: toml::Table = set_server_key(&out, 50177, "playlist", "playlists/a.playlist.json".into()).unwrap().parse().unwrap();
+        assert!(back["server"][1].get("campaign").is_none());
+        let small: toml::Table = set_server_campaign(TOML, 50177, "halo3", 3010i64.into(), "normal").unwrap().parse().unwrap();
+        assert!(small["server"][1].get("max_players").is_none(), "nothing set, nothing written");
     }
 
     #[test]

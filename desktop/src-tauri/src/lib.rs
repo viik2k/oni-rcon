@@ -606,6 +606,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
         ("playlist", _) => install::safe_path(value.as_str().unwrap_or_default()).map_err(|_| format!("Not a playlist in the server folder: {value}"))?.into(),
         ("admin_add" | "admin_remove", _) => value.as_str().ok_or("That's not a player ID.")?.into(),
         ("character_mods", _) => "".into(), // host::Mods, written whole by set_server_mods below
+        ("campaign", _) => "".into(), // {campaign, mission, difficulty}, written by set_server_campaign below
         _ => return Err(format!("{key} can't be set from here")),
     };
     if let Some(d) = h.hsetup.demo.clone() {
@@ -619,6 +620,16 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
     let text = match key.as_str() {
         "admin_add" | "admin_remove" => host::set_server_admin(&text, s.port, v.as_str().unwrap_or_default(), key == "admin_add")?,
         "character_mods" => host::set_server_mods(&text, s.port, &serde_json::from_value(value).map_err(|_| "Those aren't character mod settings.")?)?,
+        "campaign" => {
+            let name = |k: &str| value[k].as_str().map(str::trim).filter(|s| !s.is_empty() && s.chars().count() <= 100 && !s.chars().any(char::is_control));
+            let campaign = name("campaign").ok_or("Name the campaign: a game's or a mod's title.")?;
+            let mission: toml_edit::Value = match value["mission"].as_i64() {
+                Some(n) if n > 0 => n.into(),
+                _ => name("mission").ok_or("Name the mission: its file, its title or its number.")?.into(),
+            };
+            let d = value["difficulty"].as_str().filter(|d| host::DIFFICULTIES.contains(d)).ok_or("Difficulty is easy, normal, heroic or legendary.")?;
+            host::set_server_campaign(&text, s.port, campaign, mission, d)?
+        }
         _ => host::set_server_key(&text, s.port, &key, v)?,
     };
     t.write_text("../dedicated.toml", &text).await
