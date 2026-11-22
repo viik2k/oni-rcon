@@ -576,3 +576,6 @@ export const CAMERAS: [string, string][] = [["First person", "first_person"], ["
 /** dedicated.toml's sandbox (0.10.5) and network_model (0.10.4), as host::SANDBOXES / NETWORK_MODELS have them; "" leaves the key out. */
 export const SANDBOXES: [string, string][] = [["Map's own", ""], ["Halo 3", "halo3"], ["Halo: Reach", "reach"]];
 export const NETWORK_MODELS: [string, string][] = [["Enhanced", ""], ["Classic (Halo 3's own)", "classic"]];
+/** dedicated.toml's anti_cheat_hits (0.10.8), as host::HIT_CHECKS has it. Written out even for detect (the default), so a
+ *  [defaults] value can't outvote what was chosen for this server. */
+export const HIT_CHECKS: [string, string][] = [["Log and report (the default)", "detect"], ["Remove them", "enforce"], ["Nothing: hit check off", "off"]];

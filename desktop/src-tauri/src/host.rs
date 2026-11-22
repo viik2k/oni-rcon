@@ -214,6 +214,8 @@ pub const CAMERAS: [&str; 3] = ["first_person", "player_choice", "third_person"]
 pub const SANDBOXES: [&str; 3] = ["", "halo3", "reach"];
 /// dedicated.toml's `network_model` (0.10.4): "" leaves the key out (enhanced networking, the default again).
 pub const NETWORK_MODELS: [&str; 2] = ["", "classic"];
+/// dedicated.toml's `anti_cheat_hits` (0.10.8): what the hit check does. Always written, `detect` too, so [defaults] can't outvote it.
+pub const HIT_CHECKS: [&str; 3] = ["detect", "enforce", "off"];
 
 /// dedicated.toml with the settings in it and the comments left alone. `dedicated init` writes two servers; a custom
 /// one is a single server, so the first enabled [[server]] is kept and any other turned off (not deleted).
@@ -1214,6 +1216,20 @@ mod tests {
         assert!(server_flag(&all, 49176, "restore_state").unwrap(), "[defaults] holds for every server");
         assert!(!server_flag(&set_server_key(&all, 49176, "restore_state", false.into()).unwrap(), 49176, "restore_state").unwrap());
         assert!(server_flag(TOML, 1234, "restore_state").is_err());
+    }
+
+    #[test]
+    fn hit_check_and_stalled_joins_are_written_out() {
+        let enforce = set_server_key(TOML, 50177, "anti_cheat_hits", "enforce".into()).unwrap();
+        let off = set_server_key(&enforce, 50177, "rejoin_stalled_joins", false.into()).unwrap();
+        let t: toml::Table = off.parse().unwrap();
+        assert_eq!(t["server"][1]["anti_cheat_hits"].as_str(), Some("enforce"));
+        assert_eq!(t["server"][1]["rejoin_stalled_joins"].as_bool(), Some(false), "off is written, not dropped");
+        assert!(t["server"][0].get("anti_cheat_hits").is_none(), "only the server it was set on");
+        assert!(!server_flag(&off, 50177, "rejoin_stalled_joins").unwrap());
+        let on = set_server_key(&off, 50177, "rejoin_stalled_joins", true.into()).unwrap();
+        assert!(server_flag(&on, 50177, "rejoin_stalled_joins").unwrap());
+        assert!(HIT_CHECKS.iter().all(|h| !h.is_empty()), "detect is written, never left to [defaults]");
     }
 
     #[test]
