@@ -180,13 +180,16 @@ export const itemsFor = (entries: Dict[], installed: Record<string, Dict>): Item
 };
 
 // --- playlists: the files a lobby's `playlist = "playlists/<file>.json"` names ---------------------------------------
-export const MIN_GAMES = 3; // the server's ballots offer three different games each time
-export const MAX_GAMES = 128; // the most the dedicated server plays in one rotation
-const PLAYLIST_KEYS = new Set(["version", "name", "vote_seconds", "games"]);
-const GAME_KEYS = new Set(["map", "game", "name", "weight", "options", "world", "rules", "anti_cheat", "voice_team_only"]);
+export const MAX_GAMES = 256; // the most the dedicated server plays in one rotation
+// host.html's "Playlist file reference" (read 2026-11-22), plus co-op entries and 0.10.9's start-together keys.
+const PLAYLIST_KEYS = new Set(["version", "name", "vote_seconds", "players", "recommended_players", "games"]);
+const GAME_KEYS = new Set(["map", "base_map", "game", "weight", "players", "recommended_players", "name", "teams", "rules", "options", "world",
+  "anti_cheat", "voice_team_only", "preview_image", "campaign", "odst", "start_rule", "start_wait_seconds", "start_at_limit", "spawn_hold_seconds"]);
 
-export interface Game { map: string; game: string; weight?: number; name?: string; options?: unknown; world?: unknown; rules?: unknown }
-export interface Playlist { version: 2; name: string; vote_seconds: number; games: Game[] }
+/** A multiplayer game (map + game), or a co-op entry (campaign or odst). Other fields pass through to the server. */
+export interface Game { map?: string; game?: string; weight?: number; name?: string; campaign?: Dict; odst?: Dict; [k: string]: unknown }
+/** vote_seconds is a number, or a curve ({points: [[players, seconds], ...]}) that follows the lobby's size. */
+export interface Playlist { version: 2; name: string; vote_seconds: number | Dict; games: Game[]; players?: string | number; recommended_players?: string | number }
 
 export class PlaylistError extends Error {}
 
@@ -206,10 +209,10 @@ export function checkPlaylist(p: unknown): Playlist {
   const name = String(o.name ?? "").trim();
   if (!name) throw new PlaylistError("Give the playlist a name.");
   const vote = o.vote_seconds ?? 20;
-  if (!whole(vote, 5, 120)) throw new PlaylistError("The vote lasts 5 to 120 seconds.");
+  const curve = !!vote && typeof vote === "object" && !Array.isArray(vote); // the server checks a curve's points
+  if (!curve && !whole(vote, 5, 120)) throw new PlaylistError("The vote lasts 5 to 120 seconds.");
   const games = o.games;
-  if (!Array.isArray(games) || games.length < MIN_GAMES)
-    throw new PlaylistError(`A playlist needs at least ${MIN_GAMES} games (it has ${Array.isArray(games) ? games.length : 0}): players vote on three different games each time.`);
+  if (!Array.isArray(games) || !games.length) throw new PlaylistError("A playlist needs at least one game.");
   if (games.length > MAX_GAMES) throw new PlaylistError(`A playlist holds at most ${MAX_GAMES} games; this one has ${games.length}.`);
   const seen = new Set<string>();
   const out = games.map((g, i): Game => {
@@ -217,20 +220,26 @@ export function checkPlaylist(p: unknown): Playlist {
     if (!g || typeof g !== "object" || Array.isArray(g)) throw new PlaylistError(`Game ${n} isn't a map and game type.`);
     const bad = Object.keys(g).filter((k) => !GAME_KEYS.has(k));
     if (bad.length) throw new PlaylistError(`Game ${n} has unknown settings: ${bad.sort().join(", ")}.`);
-    if (!String(g.map ?? "").trim() || !String(g.game ?? "").trim()) throw new PlaylistError(`Game ${n} needs both a map and a game type.`);
+    const coop = ["campaign", "odst"].filter((k) => k in g);
+    if (coop.length && (coop.length > 1 || "map" in g || "game" in g || !g[coop[0]] || typeof g[coop[0]] !== "object"))
+      throw new PlaylistError(`Game ${n} is a co-op entry: one campaign or odst object, with no map or game type.`);
+    if (!coop.length && (!String(g.map ?? "").trim() || !String(g.game ?? "").trim())) throw new PlaylistError(`Game ${n} needs both a map and a game type.`);
     if (!whole(g.weight ?? 1, 1, 100)) throw new PlaylistError(`Game ${n}'s weight must be a whole number from 1 to 100.`);
-    const pair = `${g.map}\0${g.game}`;
-    if (seen.has(pair)) throw new PlaylistError(`${g.game} on ${g.map} is in it twice: give it a higher weight instead.`);
+    const pair = coop.length ? `${coop[0]}\0${JSON.stringify(g[coop[0]])}` : `${g.map}\0${g.game}`;
+    if (seen.has(pair)) throw new PlaylistError(`${gameLabel(g as Game)} is in it twice: give it a higher weight instead.`);
     seen.add(pair);
     return Object.fromEntries(Object.entries(g).filter(([k, v]) => !(k === "weight" && v === 1) && v !== "" && v !== null && v !== undefined)) as unknown as Game;
   });
-  return { version: 2, name, vote_seconds: vote as number, games: out };
+  const sizes = Object.fromEntries((["players", "recommended_players"] as const).filter((k) => o[k] !== undefined && o[k] !== null && o[k] !== "").map((k) => [k, o[k]]));
+  return { version: 2, name, vote_seconds: vote as number | Dict, ...sizes, games: out };
 }
 
 /** "Team Slayer on Guardian ×3", the way the server's own playlist listing words it. */
 export function gameLabel(g: Game): string {
   const w = g.weight ?? 1;
-  const label = g.name || `${g.game ?? "?"} on ${g.map ?? "?"}`;
+  const coop = g.campaign ? "Campaign" : g.odst ? (g.odst.mode === "firefight" ? "Firefight" : "ODST") : "";
+  const mission = (g.campaign ?? g.odst)?.mission;
+  const label = g.name || (coop ? `${coop}${mission === undefined ? "" : ` mission ${mission}`}` : `${g.game ?? "?"} on ${g.map ?? "?"}`);
   return w && w !== 1 ? `${label}  ×${w}` : label;
 }
 
