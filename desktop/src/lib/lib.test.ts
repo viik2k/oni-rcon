@@ -11,7 +11,7 @@ import { decrypt, noise } from "../art/palette";
 import { advice, asksHealth, level, rate, rconFrames, scaleTop } from "./perf";
 import { filterTerms, nameDistance, rankedPlayers, type Found } from "./search";
 import { Findings, chatRequest, publicRoster } from "./findings";
-import { arrange, catalogItems, checkPlaylist, gameLabel, itemsFor, ordered, slug } from "./content";
+import { arrange, catalogItems, checkPlaylist, gameLabel, itemsFor, ordered, slug, type Game } from "./content";
 
 describe("console lines", () => {
   it("keeps a message whole for say, tell, kick and rename", () => {
@@ -419,12 +419,27 @@ describe("playlists", () => {
     expect(checkPlaylist(good)).toEqual({ version: 2, name: "Team Mix", vote_seconds: 20,
       games: [{ map: "Guardian", game: "Team Slayer", weight: 3 }, { map: "Valhalla", game: "Slayer" }, { map: "The Pit", game: "Slayer" }] });
     const many = (n: number) => Array.from({ length: n }, (_, i) => ({ map: `m${i}`, game: "b" }));
-    for (const [bad, words] of [[{ name: "", games: good.games }, "name"], [{ name: "x", games: [] }, "at least 3"],
-      [{ name: "x", games: good.games.slice(0, 2) }, "at least 3 games \\(it has 2\\)"], [{ name: "x", games: [{ map: "Guardian" }, { map: "a" }, { map: "b" }] }, "both a map and a game type"],
-      [{ name: "x", games: many(3).map((g) => ({ ...g, weight: 0 })) }, "weight"], [{ name: "x", games: many(129) }, "at most 128"],
+    expect(checkPlaylist({ name: "x", games: good.games.slice(0, 1) }).games).toHaveLength(1);
+    expect(checkPlaylist({ name: "x", games: many(256) }).games).toHaveLength(256);
+    for (const [bad, words] of [[{ name: "", games: good.games }, "name"], [{ name: "x", games: [] }, "at least one"],
+      [{ name: "x", games: [{ map: "Guardian" }, { map: "a" }, { map: "b" }] }, "both a map and a game type"],
+      [{ name: "x", games: many(3).map((g) => ({ ...g, weight: 0 })) }, "weight"], [{ name: "x", games: many(257) }, "at most 256"],
+      [{ name: "x", games: [{ campaign: { mission: 3010 }, map: "a" }] }, "co-op entry"], [{ name: "x", games: [{ campaign: { mission: 1 }, odst: { mission: 2 } }] }, "co-op entry"],
+      [{ name: "x", games: [{ odst: { mission: 6100 } }, { odst: { mission: 6100 } }] }, "ODST mission 6100 is in it twice"],
       [{ name: "x", games: good.games, shuffle: true }, "Unknown playlist setting"], [{ name: "x", games: many(3).map((g) => ({ ...g, script: 1 })) }, "unknown settings"],
       [{ name: "x", vote_seconds: 4, games: good.games }, "5 to 120"], [{ name: "x", games: [...good.games, good.games[0]] }, "twice"]] as [unknown, string][])
       expect(() => checkPlaylist(bad)).toThrow(new RegExp(words));
+  });
+
+  it("keep every field the server's playlist reference names", () => {
+    const every = { version: 2, name: "Every", players: "8-24", recommended_players: "12-20", vote_seconds: { points: [[2, 15], [16, 25]] }, games: [
+      { map: "Maps/arena.json", base_map: "Valhalla", game: "ctf", weight: 2, players: "12+", recommended_players: "8-16", name: "Arena CTF", teams: true,
+        rules: { score_to_win: 50 }, options: { "rounds.minutes": { points: [[4, 5], [16, 10]] } }, world: { sprint: "stamina" }, anti_cheat: false,
+        voice_team_only: true, preview_image: "arena.png", start_rule: "everyone", start_wait_seconds: 135, start_at_limit: "wait", spawn_hold_seconds: 3 },
+      { campaign: { mission: 3010, difficulty: "heroic" }, weight: 3 }, { odst: { mode: "firefight", mission: 6100, insertion: 4 } }] };
+    expect(checkPlaylist(every)).toEqual(every);
+    expect(gameLabel(every.games[1] as Game)).toBe("Campaign mission 3010  ×3");
+    expect(gameLabel(every.games[2] as Game)).toBe("Firefight mission 6100");
   });
 
   it("word a game the way the server lists it", () => {

@@ -636,6 +636,15 @@ impl FakeHost {
         }
     }
 
+    /// The combat bots `set` saved for server `i`, none when never set.
+    pub fn bots(&self, i: usize) -> (i64, i64) {
+        self.fakes.get(i).map_or((0, 0), |(_, f)| {
+            let f = f.lock();
+            let b = &f.status["combat_bots"];
+            (b["bots"].as_i64().unwrap_or(0), b["pilots"].as_i64().unwrap_or(0))
+        })
+    }
+
     /// A setting `set` saved for server `i`, off when never set.
     pub fn flag(&self, i: usize, key: &str) -> bool {
         self.fakes.get(i).is_some_and(|(_, f)| f.lock().status[key].as_bool() == Some(true))

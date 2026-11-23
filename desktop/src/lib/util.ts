@@ -579,3 +579,24 @@ export const NETWORK_MODELS: [string, string][] = [["Enhanced", ""], ["Classic (
 /** dedicated.toml's anti_cheat_hits (0.10.8), as host::HIT_CHECKS has it. Written out even for detect (the default), so a
  *  [defaults] value can't outvote what was chosen for this server. */
 export const HIT_CHECKS: [string, string][] = [["Log and report (the default)", "detect"], ["Remove them", "enforce"], ["Nothing: hit check off", "off"]];
+/** dedicated.toml's campaign (0.10.7): each game's key, title, the --maps its server folder needs, and its missions in
+ *  play order as [title, file] (projectreclaimer.dev/campaign-servers.html). The file is what gets written. */
+export const CAMPAIGNS: [string, string, string, [string, string][]][] = [
+  ["halo3", "Halo 3", "campaign", [["Arrival", "005_intro"], ["Sierra 117", "010_jungle"], ["Crow's Nest", "020_base"], ["Tsavo Highway", "030_outskirts"],
+    ["The Storm", "040_voi"], ["Floodgate", "050_floodvoi"], ["The Ark", "070_waste"], ["The Covenant", "100_citadel"], ["Cortana", "110_hc"],
+    ["Halo", "120_halo"], ["Epilogue", "130_epilogue"]]],
+  ["halo1", "Halo: Combat Evolved", "campaign,halo1-campaign", [["The Pillar of Autumn", "a10"], ["Halo", "a30"], ["The Truth and Reconciliation", "a50"],
+    ["The Silent Cartographer", "b30"], ["Assault on the Control Room", "b40"], ["343 Guilty Spark", "c10"], ["The Library", "c20"],
+    ["Two Betrayals", "c40"], ["Keyes", "d20"], ["The Maw", "d40"]]],
+  ["halo2", "Halo 2", "campaign,halo2-campaign", [["The Heretic", "00a_introduction"], ["Armory", "01a_tutorial"], ["Cairo Station", "01b_spacestation"],
+    ["Outskirts", "03a_oldmombasa"], ["Metropolis", "03b_newmombasa"], ["The Arbiter", "04a_gasgiant"], ["Oracle", "04b_floodlab"],
+    ["Delta Halo", "05a_deltaapproach"], ["Regret", "05b_deltatowers"], ["Sacred Icon", "06a_sentinelwalls"], ["Quarantine Zone", "06b_floodzone"],
+    ["Gravemind", "07a_highcharity"], ["Uprising", "08a_deltacliffs"], ["High Charity", "07b_forerunnership"], ["The Great Journey", "08b_deltacontrol"]]],
+  ["odst", "Halo 3: ODST", "campaign,odst", [["Prepare to Drop", "c100"], ["Mombasa Streets", "h100"], ["Tayari Plaza", "sc100"], ["Uplift Reserve", "sc110"],
+    ["Kizingo Boulevard", "sc120"], ["ONI Alpha Site", "sc130"], ["NMPD HQ", "sc140"], ["Kikowani Station", "sc150"], ["Data Hive", "l200"],
+    ["Coastal Highway", "l300"], ["Epilogue", "c200"]]],
+  ["reach", "Halo: Reach", "reach-campaign,campaign", [["NOBLE Actual", "m05"], ["Winter Contingency", "m10"], ["ONI: Sword Base", "m20"], ["Nightfall", "m30"],
+    ["Tip of the Spear", "m35"], ["Long Night of Solace", "m45"], ["Exodus", "m50"], ["New Alexandria", "m52"], ["The Package", "m60"],
+    ["The Pillar of Autumn", "m70"], ["Lone Wolf", "m70_bonus"]]]];
+/** host::DIFFICULTIES; a campaign plays on normal unless told. */
+export const DIFFICULTIES: [string, string][] = [["Easy", "easy"], ["Normal", "normal"], ["Heroic", "heroic"], ["Legendary", "legendary"]];

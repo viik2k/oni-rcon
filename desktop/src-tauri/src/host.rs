@@ -206,8 +206,13 @@ impl Settings {
     }
 }
 
-/// What a [[server]] plays from besides a playlist: one map and game type, a variant, a campaign, or (0.9.19) ODST.
-const SOURCE_KEYS: [&str; 6] = ["map", "game", "base_map", "variant", "campaign", "odst"];
+/// What a [[server]] plays from besides a playlist: one map and game type, a variant, a campaign, or (0.9.19) ODST, or
+/// Reach's own key.
+const SOURCE_KEYS: [&str; 7] = ["map", "game", "base_map", "variant", "campaign", "odst", "reach"];
+/// dedicated.toml's `campaign` difficulty (campaign-servers.html); left out, it's normal.
+pub const DIFFICULTIES: [&str; 4] = ["easy", "normal", "heroic", "legendary"];
+/// The most players a co-op campaign holds.
+const CAMPAIGN_MAX_PLAYERS: i64 = 16;
 /// dedicated.toml's `camera` (0.9.20): how players see their own character on foot. Left out, it's first person.
 pub const CAMERAS: [&str; 3] = ["first_person", "player_choice", "third_person"];
 /// dedicated.toml's `sandbox` (0.10.5): whose weapons and vehicles a map plays with; "" leaves the key out (the map's own).
@@ -277,8 +282,14 @@ fn slug(name: &str) -> Result<String, String> {
     if s.is_empty() { Err("Name it with a letter or number in it.".into()) } else { Ok(s) }
 }
 
-const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "games"];
-const GAME_KEYS: &[&str] = &["map", "game", "name", "weight", "options", "world", "rules", "anti_cheat", "voice_team_only"];
+// host.html's "Playlist file reference" (read 2026-11-22), plus co-op entries and 0.10.9's start-together keys, which
+// the server's template says "a playlist entry may set".
+const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "players", "recommended_players", "games"];
+const GAME_KEYS: &[&str] = &[
+    "map", "base_map", "game", "weight", "players", "recommended_players", "name", "teams", "rules", "options", "world", "anti_cheat",
+    "voice_team_only", "preview_image", "campaign", "odst", "start_rule", "start_wait_seconds", "start_at_limit", "spawn_hold_seconds",
+];
+const COOP_KEYS: &[&str] = &["campaign", "odst"];
 
 /// A playlist in the shape the dedicated server reads (version 2), or why it can't be saved. Unknown keys are refused,
 /// the way the server's own import refuses them; a weight of 1 and empty values are left out. Whether each map and game
@@ -296,13 +307,18 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
     if name.is_empty() {
         return Err("Give the playlist a name.".into());
     }
-    let vote = o.get("vote_seconds").map_or(Some(20), Value::as_i64).filter(|n| (5..=120).contains(n)).ok_or("The vote lasts 5 to 120 seconds.")?;
+    // A curve ({"points": [[players, seconds], ...]}) follows the lobby's size: the server checks its points.
+    let vote = match o.get("vote_seconds") {
+        None => json!(20),
+        Some(c) if c.is_object() => c.clone(),
+        Some(v) => json!(v.as_i64().filter(|n| (5..=120).contains(n)).ok_or("The vote lasts 5 to 120 seconds.")?),
+    };
     let games = o.get("games").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
-    if games.len() < 3 {
-        return Err(format!("A playlist needs at least 3 games (it has {}): players vote on three different games each time.", games.len()));
+    if games.is_empty() {
+        return Err("A playlist needs at least one game.".into());
     }
-    if games.len() > 128 {
-        return Err(format!("A playlist holds at most 128 games; this one has {}.", games.len()));
+    if games.len() > 256 {
+        return Err(format!("A playlist holds at most 256 games; this one has {}.", games.len()));
     }
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
@@ -313,7 +329,12 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
             return Err(format!("Game {n} has an unknown setting: {k}."));
         }
         let text = |k: &str| g.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let (map, game) = (text("map"), text("game"));
+        let coop: Vec<_> = COOP_KEYS.iter().filter_map(|k| g.get(*k).map(|v| (*k, v))).collect();
+        let (map, game) = match coop[..] {
+            [] => (text("map"), text("game")),
+            [(k, v)] if v.is_object() && !g.contains_key("map") && !g.contains_key("game") => (k.to_string(), v.to_string()),
+            _ => return Err(format!("Game {n} is a co-op entry: one campaign or odst object, with no map or game type.")),
+        };
         if map.is_empty() || game.is_empty() {
             return Err(format!("Game {n} needs both a map and a game type."));
         }
@@ -327,7 +348,13 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
             g.iter().filter(|(k, v)| !(k.as_str() == "weight" && v.as_i64() == Some(1)) && !v.is_null() && v.as_str() != Some("")).map(|(k, v)| (k.clone(), v.clone())).collect();
         out.push(Value::Object(kept));
     }
-    Ok(json!({"version": 2, "name": name, "vote_seconds": vote, "games": out}))
+    let mut top = json!({"version": 2, "name": name, "vote_seconds": vote, "games": out});
+    for k in ["players", "recommended_players"] {
+        if let Some(v) = o.get(k).filter(|v| !v.is_null() && v.as_str() != Some("")) {
+            top[k] = v.clone();
+        }
+    }
+    Ok(top)
 }
 
 /// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
@@ -409,6 +436,12 @@ pub fn new_game_type(name: &str, mode: &str, score_to_win: Option<i64>, options:
 
 /// `key` set on the [[server]] of a dedicated.toml that answers RCON on `rcon_port`, the rest left as it was.
 pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value) -> Result<String, String> {
+    if let (true, Some(m)) = (key == "max_players", v.as_integer()) {
+        let (bots, _) = server_bots(text, rcon_port)?;
+        if bots > m - 1 {
+            return Err(format!("This server has {bots} combat bots, and they must leave a place for a player: lower COMBAT BOTS first, or take {} or more.", bots + 1));
+        }
+    }
     edit_server(text, rcon_port, |t| {
         if key == "playlist" {
             for other in SOURCE_KEYS {
@@ -424,6 +457,33 @@ pub fn set_server_key(text: &str, rcon_port: u16, key: &str, v: toml_edit::Value
     })
 }
 
+/// The [[server]] on `rcon_port` put on a co-op campaign (0.10.7: `campaign`, `mission` by file, title or number,
+/// `difficulty`) in place of whatever it played. Its modifiers and characters stay as they were; `insertion` belonged to
+/// the old first mission, so it goes. A campaign holds 16 players at most, so a higher max_players comes down to that.
+pub fn set_server_campaign(text: &str, rcon_port: u16, campaign: &str, mission: toml_edit::Value, difficulty: &str) -> Result<String, String> {
+    let max = text.parse::<toml::Table>().ok().and_then(|d| d.get("defaults")?.get("max_players")?.as_integer());
+    edit_server(text, rcon_port, |t| {
+        let mut c = toml_edit::InlineTable::new();
+        c.insert("campaign", campaign.into());
+        c.insert("mission", mission);
+        c.insert("difficulty", difficulty.into());
+        for (k, v) in t.get("campaign").and_then(toml_edit::Item::as_inline_table).into_iter().flat_map(|o| o.iter()) {
+            if !c.contains_key(k) && k != "insertion" {
+                c.insert(k, v.clone());
+            }
+        }
+        c.fmt();
+        for other in SOURCE_KEYS.iter().chain(&["playlist"]) {
+            t.remove(other); // a campaign server plays nothing else
+        }
+        t["campaign"] = toml_edit::Item::Value(c.into());
+        if t.get("max_players").and_then(toml_edit::Item::as_integer).or(max).is_some_and(|n| n > CAMPAIGN_MAX_PLAYERS) {
+            t["max_players"] = toml_edit::value(CAMPAIGN_MAX_PLAYERS);
+        }
+        Ok(())
+    })
+}
+
 /// A true/false `key` as the [[server]] on `rcon_port` has it, else as [defaults] has it for every server; false when
 /// neither sets it, as Reclaimer reads it.
 pub fn server_flag(text: &str, rcon_port: u16, key: &str) -> Result<bool, String> {
@@ -432,6 +492,49 @@ pub fn server_flag(text: &str, rcon_port: u16, key: &str) -> Result<bool, String
     let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
     let under = doc.get("defaults").and_then(|d| d.get(key));
     Ok(t.get(key).or(under).and_then(toml_edit::Item::as_bool).unwrap_or(false))
+}
+
+/// A whole-number `key` as the [[server]] on `rcon_port` has it, else as [defaults] has it; None when neither sets it.
+fn server_int(doc: &toml_edit::DocumentMut, t: &toml_edit::Table, key: &str) -> Option<i64> {
+    t.get(key).or_else(|| doc.get("defaults").and_then(|d| d.get(key))).and_then(toml_edit::Item::as_integer)
+}
+
+/// Combat bots (0.10.6): `combat_bots` and `bot_pilots` as the [[server]] on `rcon_port` has them, else [defaults]; 0 when unset.
+pub fn server_bots(text: &str, rcon_port: u16) -> Result<(i64, i64), String> {
+    let doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+    let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    Ok((server_int(&doc, t, "combat_bots").unwrap_or(0), server_int(&doc, t, "bot_pilots").unwrap_or(0)))
+}
+
+/// Combat bots (0.10.6) set on the [[server]] on `rcon_port`, refused as the server itself would refuse them: pilots are
+/// part of the bots, and bots share max_players with humans, leaving at least one place for a player. 0 takes a key out.
+pub fn set_server_bots(text: &str, rcon_port: u16, bots: i64, pilots: i64) -> Result<String, String> {
+    if bots < 0 || pilots < 0 {
+        return Err("Bots and pilots are 0 or more.".into());
+    }
+    if pilots > bots {
+        return Err("Bot pilots are part of the combat bots: no more pilots than bots.".into());
+    }
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let max = {
+        let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+        let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+        server_int(&doc, t, "max_players")
+    };
+    // ponytail: with no max_players in the file the server's built-in default applies, unknown here; the form checks the live one
+    if let Some(m) = max.filter(|m| bots > m - 1) {
+        return Err(format!("Bots share the server's {m} places with players and must leave one for a player: {} at most.", m - 1));
+    }
+    let t = doc.get_mut("server").and_then(toml_edit::Item::as_array_of_tables_mut).and_then(|l| l.iter_mut().find(|t| on_port(t, rcon_port))).ok_or("dedicated.toml has no such [[server]]")?;
+    for (k, n) in [("combat_bots", bots), ("bot_pilots", pilots)] {
+        if n == 0 {
+            t.remove(k); // the server's default
+        } else {
+            t[k] = toml_edit::value(n);
+        }
+    }
+    Ok(doc.to_string())
 }
 
 /// `id` added to, or taken off, the admins of the [[server]] on `rcon_port` only: Reclaimer has no other tiers.
@@ -1188,6 +1291,29 @@ mod tests {
     }
 
     #[test]
+    fn a_campaign_replaces_the_servers_source_and_keeps_its_options() {
+        let was = TOML.replace("rcon_port = 50177", "rcon_port = 50177\nmax_players = 24\nplaylist = \"playlists/a.playlist.json\"\nreach = { map = \"ff20_courtyard\", campaign = true }\ncampaign = { mission = 3040, insertion = 2, modifiers = { skulls = 257 } }");
+        let out = set_server_campaign(&was, 50177, "halo1", "a10".into(), "heroic").unwrap();
+        let t: toml::Table = out.parse().unwrap();
+        let s = &t["server"][1];
+        assert_eq!(s["campaign"]["campaign"].as_str(), Some("halo1"));
+        assert_eq!((s["campaign"]["mission"].as_str(), s["campaign"]["difficulty"].as_str()), (Some("a10"), Some("heroic")));
+        assert_eq!(s["campaign"]["modifiers"]["skulls"].as_integer(), Some(257), "modifiers kept");
+        assert!(s["campaign"].get("insertion").is_none(), "the old mission's start goes");
+        assert!(s.get("playlist").is_none() && s.get("reach").is_none(), "one source");
+        assert_eq!(s["max_players"].as_integer(), Some(16));
+        assert!(t["server"][0].get("campaign").is_none(), "only the server it was set on");
+        // from [defaults], too; and a playlist takes the campaign off again
+        let d = TOML.replace("[master]", "[defaults]\nmax_players = 32\n\n[master]");
+        let t: toml::Table = set_server_campaign(&d, 50177, "reach", "m10".into(), "legendary").unwrap().parse().unwrap();
+        assert_eq!(t["server"][1]["max_players"].as_integer(), Some(16));
+        let back: toml::Table = set_server_key(&out, 50177, "playlist", "playlists/a.playlist.json".into()).unwrap().parse().unwrap();
+        assert!(back["server"][1].get("campaign").is_none());
+        let small: toml::Table = set_server_campaign(TOML, 50177, "halo3", 3010i64.into(), "normal").unwrap().parse().unwrap();
+        assert!(small["server"][1].get("max_players").is_none(), "nothing set, nothing written");
+    }
+
+    #[test]
     fn sandbox_and_network_model_set_and_clear() {
         let reach = set_server_key(TOML, 50177, "sandbox", "reach".into()).unwrap();
         let classic = set_server_key(&reach, 50177, "network_model", "classic".into()).unwrap();
@@ -1233,6 +1359,26 @@ mod tests {
     }
 
     #[test]
+    fn combat_bots_round_trip_and_refuse_what_the_server_would() {
+        let capped = set_server_key(TOML, 50177, "max_players", 8.into()).unwrap();
+        let on = set_server_bots(&capped, 50177, 7, 3).unwrap();
+        let t: toml::Table = on.parse().unwrap();
+        assert_eq!((t["server"][1]["combat_bots"].as_integer(), t["server"][1]["bot_pilots"].as_integer()), (Some(7), Some(3)));
+        assert!(t["server"][0].get("combat_bots").is_none(), "only the server it was set on");
+        assert_eq!((server_bots(&on, 50177).unwrap(), server_bots(&on, 49176).unwrap()), ((7, 3), (0, 0)));
+        assert!(set_server_bots(&capped, 50177, 2, 3).unwrap_err().contains("no more pilots than bots"));
+        assert!(set_server_bots(&capped, 50177, 8, 0).unwrap_err().contains("7 at most"), "one place left for a human");
+        assert!(set_server_key(&on, 50177, "max_players", 7.into()).unwrap_err().contains("COMBAT BOTS"), "capacity can't squeeze the bots out");
+        assert!(set_server_key(&on, 50177, "max_players", 8.into()).is_ok());
+        let off = set_server_bots(&on, 50177, 0, 0).unwrap();
+        assert_eq!(off, capped, "0 takes both keys out, the rest kept");
+        let all = format!("[defaults]\nmax_players = 4\ncombat_bots = 2\n{TOML}");
+        assert_eq!(server_bots(&all, 49176).unwrap(), (2, 0), "[defaults] holds for every server");
+        assert!(set_server_bots(&all, 49176, 4, 0).is_err() && set_server_bots(&all, 49176, 3, 0).is_ok());
+        assert!(set_server_bots(TOML, 50177, 40, 10).is_ok(), "no max_players in the file: left to the form and the server");
+    }
+
+    #[test]
     fn a_new_game_type_keeps_to_the_ranges() {
         let o = |v: serde_json::Value| v.as_object().unwrap().clone();
         let (path, json) = new_game_type("Team Swords", "Slayer", Some(50), &o(serde_json::json!({"rounds.teams": 1, "rounds.minutes": 12}))).unwrap();
@@ -1252,7 +1398,7 @@ mod tests {
         let (path, json) = playlist_file(&pl(" Friday Night! ", serde_json::json!([g("Guardian"), g("Valhalla"), g("The Pit")]))).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!((path.as_str(), &v["name"], &v["games"][2]["map"]), ("playlists/friday-night.playlist.json", &"Friday Night!".into(), &"The Pit".into()));
-        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla")]))).is_err(), "three at least");
+        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian")]))).is_ok(), "one game is a playlist");
         assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla"), g("Guardian")]))).is_err(), "no game twice");
         assert!(playlist_file(&pl("!!", serde_json::json!([g("a"), g("b"), g("c")]))).is_err());
     }
@@ -1267,8 +1413,11 @@ mod tests {
         let many = |n: usize| (0..n).map(|i| json!({"map": format!("m{i}"), "game": "b"})).collect::<Vec<_>>();
         for (bad, words) in [
             (json!({"name": "", "games": games}), "name"),
-            (json!({"name": "x", "games": []}), "at least 3"),
-            (json!({"name": "x", "games": many(129)}), "at most 128"),
+            (json!({"name": "x", "games": []}), "at least one"),
+            (json!({"name": "x", "games": many(257)}), "at most 256"),
+            (json!({"name": "x", "games": [{"campaign": {"mission": 3010}, "map": "a"}]}), "co-op entry"),
+            (json!({"name": "x", "games": [{"campaign": {"mission": 3010}, "odst": {"mission": 6100}}]}), "co-op entry"),
+            (json!({"name": "x", "games": [{"odst": {"mission": 6100}}, {"odst": {"mission": 6100}}]}), "twice"),
             (json!({"name": "x", "games": [{"map": "a"}, {"map": "b", "game": "c"}, {"map": "d", "game": "e"}]}), "both a map and a game type"),
             (json!({"name": "x", "games": [{"map": "a", "game": "b", "weight": 0}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "weight"),
             (json!({"name": "x", "games": [{"map": "a", "game": "b", "script": 1}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "unknown setting"),
@@ -1278,6 +1427,18 @@ mod tests {
             let e = check_playlist(&bad).unwrap_err();
             assert!(e.contains(words), "{e:?} should mention {words:?}");
         }
+        assert!(check_playlist(&json!({"name": "x", "games": many(256)})).is_ok());
+        // Every field host.html's playlist reference names, a co-op entry and 0.10.9's start keys: saved as written.
+        let every = json!({"version": 2, "name": "Every", "players": "8-24", "recommended_players": "12-20",
+            "vote_seconds": {"points": [[2, 15], [16, 25]]}, "games": [
+            {"map": "Maps/arena.json", "base_map": "Valhalla", "game": "ctf", "weight": 2, "players": "12+", "recommended_players": "8-16",
+             "name": "Arena CTF", "teams": true, "rules": {"score_to_win": 50}, "options": {"rounds.minutes": {"points": [[4, 5], [16, 10]]}},
+             "world": {"sprint": "stamina"}, "anti_cheat": false, "voice_team_only": true, "preview_image": "arena.png",
+             "start_rule": "everyone", "start_wait_seconds": 135, "start_at_limit": "wait", "spawn_hold_seconds": 3},
+            {"campaign": {"mission": 3010, "difficulty": "heroic"}, "weight": 3},
+            {"odst": {"mode": "firefight", "mission": 6100, "insertion": 4}}]});
+        let (_, saved) = playlist_file(&every).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap(), every);
         assert!(console_playlist("playlists/a.playlist.json").is_ok());
         for bad in ["playlists/a.json", "playlists/../a.playlist.json", "Maps/a.playlist.json", "playlists/x/a.playlist.json"] {
             assert!(console_playlist(bad).is_err(), "{bad}");
