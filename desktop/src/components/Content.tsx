@@ -153,7 +153,9 @@ export function PlaylistEditor({ d }: { d: Dialog }) {
   const [games, setGames] = useState<Game[]>(p.games);
   const [sel, setSel] = useState<string | null>(first ?? null);
   const [error, setError] = useState("");
-  const now = (): Playlist => ({ version: 2, name, vote_seconds: vote.trim() === "" ? NaN : Number(vote), games });
+  // A curve has no box of its own: left blank, the vote keeps it. Fields the editor doesn't show (lobby sizes) carry over.
+  const curve = typeof p.vote_seconds === "object" ? p.vote_seconds : null;
+  const now = (): Playlist => ({ ...p, version: 2, name, vote_seconds: vote.trim() === "" ? curve ?? NaN : Number(vote), games });
   sink.p = now();
   useEffect(() => { if (p.games.length) document.getElementById("pl-games")?.focus(); }, []);
   const at = sel === null ? -1 : Number(sel);
@@ -173,9 +175,9 @@ export function PlaylistEditor({ d }: { d: Dialog }) {
         <span style={{ color: DIM }}>NAME</span>
         <input className="input" style={{ flex: 1, minWidth: 200 }} autoFocus={!p.games.length} value={name} spellCheck={false} onChange={(e) => { setName(e.target.value); setError(""); }} />
         <span style={{ color: DIM }}>VOTE SECONDS</span>
-        <input className="input" style={{ width: 70 }} value={vote} spellCheck={false} onChange={(e) => { setVote(e.target.value); setError(""); }} />
+        <input className="input" style={{ width: 70 }} value={vote} placeholder={curve ? "curve" : ""} spellCheck={false} onChange={(e) => { setVote(e.target.value); setError(""); }} />
       </div>
-      <div style={{ color: games.length < 3 ? AMBER : DIM, marginBottom: 4 }}>{`${games.length} game${games.length === 1 ? "" : "s"} · three at least, each map and game type once (a higher weight comes up more often)`}</div>
+      <div style={{ color: games.length < 3 ? AMBER : DIM, marginBottom: 4 }}>{`${games.length} game${games.length === 1 ? "" : "s"} · voted on from three up, each map and game type once (a higher weight comes up more often)`}</div>
       <div style={{ flex: 1, minHeight: 120, display: "flex", flexDirection: "column" }}>
         {rows.length ? <Table id="pl-games" cols={["#", "GAME", "WEIGHT"]} rows={rows} selected={sel} onSelect={setSel} /> : <div style={{ color: DIM }}>No games yet: ADD GAME picks a map, then a game type.</div>}
       </div>

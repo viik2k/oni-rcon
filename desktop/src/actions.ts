@@ -7,7 +7,7 @@ import { newPlaylist, type Playlist } from "./lib/content";
 import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, since, CAMERAS, NETWORK_MODELS, SANDBOXES, redactData, hotReloads, notesText, num, pardonTarget, pick, queued, QUEUE_MAX, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, since, CAMERAS, CAMPAIGNS, DIFFICULTIES, HIT_CHECKS, NETWORK_MODELS, SANDBOXES, redactData, hotReloads, notesText, num, pardonTarget, pick, queued, QUEUE_MAX, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
@@ -22,12 +22,12 @@ export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "ban
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
   ["nextmap", "QUEUE NEXT", ""], ["queue", "GAME QUEUE", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["next", "NEXT GAME", "warning"], ["replay", "REPLAY", "warning"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
-  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""], ["restorestate", "RESTORE STATE", ""], ["sandbox", "SANDBOX", ""], ["netmodel", "NETWORKING", ""],
+  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""], ["restorestate", "RESTORE STATE", ""], ["sandbox", "SANDBOX", ""], ["netmodel", "NETWORKING", ""], ["campaign", "CAMPAIGN", ""], ["bots", "COMBAT BOTS", ""], ["hitcheck", "HIT CHECK", ""], ["stalledjoins", "STALLED JOINS", ""],
   ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 /** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
-export const RECLAIMER_OPS = ["capacity", "camera", "restorestate", "sandbox", "netmodel", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
+export const RECLAIMER_OPS = ["capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "queue", "endround", "endgame", "next", "replay"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "restorestate", "sandbox", "netmodel", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
   ["pardon", "PARDON  o", ""]];
@@ -59,6 +59,10 @@ export const TIPS: Record<string, string> = {
   "op-restorestate": "Whether a restart plays on from the game the server saved (map, mode, rotation, Forge map and settings changed from here) or starts a fresh one. Saved in its dedicated.toml and applied at once; needs server 0.10.3 or later.",
   "op-sandbox": "Play its maps with Halo 3's or Halo: Reach's weapons and vehicles instead of the map's own: a Battle Rifle becomes a DMR, a Hornet a Falcon. Players need that game installed. Saved in its dedicated.toml; needs server 0.10.5 or later.",
   "op-netmodel": "Enhanced networking (the default: each player gets what's near and in view first) or Halo 3's classic networking. Saved in its dedicated.toml; needs server 0.10.4 or later.",
+  "op-hitcheck": "What the hit check does about a player whose shots it finds impossible: log and report them (the default from 0.10.8), remove them (as before 0.10.8), or nothing. Saved in its dedicated.toml; needs server 0.10.8 or later.",
+  "op-stalledjoins": "Ask a player whose join into a running game has stalled for 45 seconds to join again, instead of leaving them stuck loading. Saved in its dedicated.toml; needs server 0.10.8 or later.",
+  "op-campaign": "Put it on a co-op campaign in place of its playlist or map: Halo 3's, Halo: CE's, Halo 2's, ODST's, Reach's or a mod's, from a mission and at a difficulty you pick. It holds 16 players at most and goes on to the next mission after each win. SWITCH PLAYLIST puts it back on multiplayer. Saved in its dedicated.toml; needs server 0.10.7 or later.",
+  "op-bots": "Fighting bots that play its multiplayer games, some of them flying or driving the map's vehicles, so a lone player gets a game. They take player places, leaving at least one for a person. Saved in its dedicated.toml; needs server 0.10.6 or later.",
   "op-charmods": "Which character mods (cosmetic mods with a customization.json) its games include, whether players must accept them or play only as them, and whether players can download mods they're missing from it. Saved in its dedicated.toml; needs server 0.9.18 or later.",
   "op-reconnect": "Drop this connection and sign in again.",
   "op-playlist": "Pick the playlist the server plays, from its playlists folder or installed from F6. Saved in its dedicated.toml: server 0.9.18 or later takes it up without a restart; an older one needs one.",
@@ -230,6 +234,58 @@ async function saveSetting(st: Station, key: string, value: unknown, what: strin
   return oni.notify(`Saved: ${saved} once the server restarts.`, `${what} · ${st.label}`);
 }
 
+/** CAMPAIGN (0.10.7): dedicated.toml's campaign = { campaign, mission, difficulty } in place of the server's playlist or
+ *  map. host::set_server_campaign keeps its modifiers and characters and brings max_players down to 16. */
+async function campaign(st: Station) {
+  const what = `CAMPAIGN · ${st.label}`;
+  if (behind(st.info.version, "0.10.7")) return oni.notify(`${st.label} runs ${st.info.version}: hosting a campaign by name needs server 0.10.7 or later.`, what, "warning");
+  const key = await oni.pick("CAMPAIGN · WHOSE", [...CAMPAIGNS.map(([k, title]) => [title, k] as [string, string]), ["A mod's campaign…", "mod"]]);
+  if (!key) return;
+  const game = CAMPAIGNS.find(([k]) => k === key);
+  let camp = key, mission: string | null, title: string;
+  if (game) {
+    mission = await oni.pick(`${game[1].toUpperCase()} · FROM MISSION`, game[3].map(([t, file]) => [`${t}  ·  ${file}`, file]));
+    title = `${game[1]}, ${game[3].find(([, file]) => file === mission)?.[0]}`;
+  } else {
+    const f = await oni.form("A MOD'S CAMPAIGN", [["c", "Campaign: its title", ""], ["m", "From mission: its file, title or number", ""]], { verb: "NEXT", required: ["c", "m"],
+      note: "The mod's folder (the one with ModInfo.json) goes in the server's content folder's Mods. `project-reclaimer dedicated content <word>` in the server folder lists each campaign it can host with the exact names to write." });
+    if (!f) return;
+    [camp, mission, title] = [f.c.trim(), f.m.trim(), `${f.c.trim()}, ${f.m.trim()}`];
+  }
+  if (!mission) return;
+  const difficulty = await oni.pick("CAMPAIGN · DIFFICULTY", DIFFICULTIES);
+  if (!difficulty) return;
+  const needs = game ? ` Its server folder needs the missions: \`dedicated init --maps ${game[2]}\` copies them from your game.` : "";
+  if (!(await oni.confirm(`CAMPAIGN  ${title} · ${difficulty}`,
+    `The server plays this campaign in co-op instead of its playlist or map, from this mission on, and holds 16 players at most. Players need ${game ? game[1] : "the mod"} installed.${needs} It restarts on it once no one's on; SWITCH PLAYLIST puts it back on multiplayer.`, "SAVE", false))) return;
+  const n = Number(mission);
+  return saveSetting(st, "campaign", { campaign: camp, mission: Number.isInteger(n) && n > 0 ? n : mission, difficulty }, "CAMPAIGN", `${title} on ${difficulty}`);
+}
+
+/** COMBAT BOTS (0.10.6): dedicated.toml's combat_bots and bot_pilots. host::set_server_bots refuses what the server
+ *  would against the file's max_players; this checks the live one too, for a file that leaves it to the default. */
+async function combatBots(st: Station) {
+  const what = `COMBAT BOTS · ${st.label}`;
+  if (behind(st.info.version, "0.10.6")) return oni.notify(`${st.label} runs ${st.info.version}: combat bots need server 0.10.6 or later.`, what, "warning");
+  let now: [number, number];
+  try {
+    now = await invoke<[number, number]>("server_bots", { index: st.index });
+  } catch (e) {
+    return oni.notify(String(e), what, "error", 15);
+  }
+  const max = num(st.data.status?.max_players);
+  const most = max ? ` (0 to ${max - 1})` : "";
+  const f = await oni.form("COMBAT BOTS", [["b", `Combat bots${most}`, String(now[0])], ["p", "Of them, bot pilots (vehicles)", String(now[1])]], { verb: "SAVE", required: ["b", "p"],
+    note: `Bots play multiplayer only (no co-op in its rotation), start games with no one on and stay across the rotation. They count against its ${max || "player"} limit, leaving at least one place for a person. 0 turns them off. Saved in the server's dedicated.toml: a change restarts its game once no one's on.` });
+  if (!f) return;
+  const [bots, pilots] = [Number(f.b), Number(f.p)];
+  const bad = ![bots, pilots].every((n) => Number.isInteger(n) && n >= 0) ? "Bots and pilots are whole numbers, 0 or more."
+    : pilots > bots ? "Bot pilots are part of the combat bots: no more pilots than bots."
+    : max && bots > max - 1 ? `Bots share the server's ${max} places with players and must leave one for a player: ${max - 1} at most.` : "";
+  if (bad) return oni.notify(bad, `${what} · NOT SAVED`, "error", 15);
+  return saveSetting(st, "combat_bots", { bots, pilots }, "COMBAT BOTS", bots ? `${bots} combat bots, ${pilots} of them pilots` : "no combat bots");
+}
+
 /** RESTORE STATE (0.10.3): dedicated.toml's restore_state. RESTART saves the game first either way (`state save`);
  *  with this on, the next start plays on from it. */
 async function restoreState(st: Station) {
@@ -245,6 +301,22 @@ async function restoreState(st: Station) {
   const f = await oni.form("RESTORE STATE", [["v", "After a restart", on ? choices : [choices[1], choices[0]]]], { verb: "SAVE",
     note: `It's ${on ? "on" : "off"} now. Saved in the server's dedicated.toml and applied at once. RESTART SERVER saves the game either way; with this on, the next start brings back its map, mode, rotation, Forge map and the settings changed from here.` });
   if (f) return saveSetting(st, "restore_state", f.v === "on", "RESTORE STATE", `restore state ${f.v}`);
+}
+
+/** STALLED JOINS (0.10.8): dedicated.toml's rejoin_stalled_joins, off unless set here or in [defaults]. */
+async function stalledJoins(st: Station) {
+  const what = `STALLED JOINS · ${st.label}`;
+  if (behind(st.info.version, "0.10.8")) return oni.notify(`${st.label} runs ${st.info.version}: asking stalled joins to join again needs server 0.10.8 or later.`, what, "warning");
+  let on: boolean;
+  try {
+    on = await invoke<boolean>("server_flag", { index: st.index, key: "rejoin_stalled_joins" });
+  } catch (e) {
+    return oni.notify(String(e), what, "error", 15);
+  }
+  const choices: [string, string][] = [["Ask them to join again after 45 seconds", "on"], ["Leave them (the server only logs the stall)", "off"]];
+  const f = await oni.form("STALLED JOINS", [["v", "A player stuck joining a running game", on ? choices : [choices[1], choices[0]]]], { verb: "SAVE",
+    note: `It's ${on ? "on" : "off"} now. Their game joins again by itself, into the game in progress; a player still loading the map is never asked, and nobody is asked twice in ten minutes. Saved in the server's dedicated.toml: it takes effect ${takesEffect(st)}.` });
+  if (f) return saveSetting(st, "rejoin_stalled_joins", f.v === "on", "STALLED JOINS", `stalled joins ${f.v}`);
 }
 
 /** CHARACTER MODS (0.9.18): the character mods its games include, from its content folder's Mods, whether players must
@@ -439,16 +511,21 @@ export async function op(name: string, st = oni.cur) {
     if (f) return saveSetting(st, "camera", f.c, "CAMERA", CAMERAS.find(([, v]) => v === f.c)![0].toLowerCase());
     return;
   }
-  if (name === "sandbox" || name === "netmodel") {
-    const [key, label, min, opts, ask, note] = name === "sandbox"
-      ? ["sandbox", "SANDBOX", "0.10.5", SANDBOXES, "Weapons and vehicles", "Halo: Reach's on a map of Halo 3's or ODST's, or Halo 3's on a map of Reach's, swaps each weapon and vehicle for that game's nearest; equipment, armor abilities and grenades stay the map's own. Players who join need that game installed."]
-      : ["network_model", "NETWORKING", "0.10.4", NETWORK_MODELS, "Networking", "Enhanced sends each player what's near and in view first, which keeps big games and far vehicles smooth. Players who join play with the server's choice."];
+  if (name === "sandbox" || name === "netmodel" || name === "hitcheck") {
+    const [key, label, min, opts, ask, note] = ({
+      sandbox: ["sandbox", "SANDBOX", "0.10.5", SANDBOXES, "Weapons and vehicles", "Halo: Reach's on a map of Halo 3's or ODST's, or Halo 3's on a map of Reach's, swaps each weapon and vehicle for that game's nearest; equipment, armor abilities and grenades stay the map's own. Players who join need that game installed."],
+      netmodel: ["network_model", "NETWORKING", "0.10.4", NETWORK_MODELS, "Networking", "Enhanced sends each player what's near and in view first, which keeps big games and far vehicles smooth. Players who join play with the server's choice."],
+      hitcheck: ["anti_cheat_hits", "HIT CHECK", "0.10.8", HIT_CHECKS, "A player the hit check catches", "From 0.10.8 the hit check only logs and reports unless this says Remove. The rest of the anti-cheat works as before, and anti_cheat = \"off\" turns the hit check off too."],
+    } as Record<string, [string, string, string, [string, string][], string, string]>)[name];
     if (behind(st.info.version, min)) return oni.notify(`${st.label} runs ${st.info.version}: ${label.toLowerCase()} needs server ${min} or later.`, `${label} · ${st.label}`, "warning");
     const f = await oni.form(label, [["v", ask, opts]], { verb: "SAVE", note: `${note} Saved in the server's dedicated.toml: it takes effect ${takesEffect(st)}.` });
-    if (f) return saveSetting(st, key, f.v, label, `${label.toLowerCase()} ${opts.find(([, v]) => v === f.v)![0].toLowerCase()}`);
+    if (f) return saveSetting(st, key, f.v, label, `${label.toLowerCase()}: ${opts.find(([, v]) => v === f.v)![0].toLowerCase()}`);
     return;
   }
   if (name === "restorestate") return restoreState(st);
+  if (name === "stalledjoins") return stalledJoins(st);
+  if (name === "campaign") return campaign(st);
+  if (name === "bots") return combatBots(st);
   if (name === "charmods") return characterMods(st);
   if (name === "newgametype") return newGameType(st);
   if (name === "playlists") return playlistsManager(st);
