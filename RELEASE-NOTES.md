@@ -1,16 +1,20 @@
-# ONI RCON desktop 1.15.0
+# ONI RCON desktop 1.16.0
 
-Three Reclaimer server settings you can now change from the console: restore state, sandbox and networking.
+Four more Reclaimer server settings you can now change from the console, plus a playlist check that accepts everything the server does.
 
 ## New
 
-- **Restore state.** F3 › SERVER › RESTORE STATE turns `restore_state` on or off for a Reclaimer 0.10.3+ server, so a restart plays on from the game it saved instead of starting fresh. Applied at once. ([#64](https://github.com/viik2k/oni-rcon/pull/64))
-- **Sandbox.** F3 › SERVER › SANDBOX plays a server's maps with Halo 3's or Halo: Reach's weapons and vehicles instead of the map's own (a Battle Rifle becomes a DMR, a Hornet a Falcon). Needs server 0.10.5+, and players need that game installed. ([#65](https://github.com/viik2k/oni-rcon/pull/65))
-- **Networking.** F3 › SERVER › NETWORKING switches between Enhanced (the default) and Halo 3's classic networking. Needs server 0.10.4+. ([#65](https://github.com/viik2k/oni-rcon/pull/65))
+- **Combat bots.** F3 › SERVER › COMBAT BOTS sets how many fighting bots a Reclaimer 0.10.6+ server's multiplayer games have, and how many of them fly or drive the map's vehicles. Bots take player places and always leave at least one for a person. ([#68](https://github.com/viik2k/oni-rcon/pull/68))
+- **Campaign.** F3 › SERVER › CAMPAIGN puts a 0.10.7+ server on a co-op campaign (Halo 3, CE, Halo 2, ODST, Reach or a mod's) from a mission and at a difficulty you pick. SWITCH PLAYLIST puts it back on multiplayer. ([#69](https://github.com/viik2k/oni-rcon/pull/69))
+- **Hit check and stalled joins.** F3 › SERVER › HIT CHECK chooses what a 0.10.8+ server does about impossible shots (log and report, remove the player, or nothing). STALLED JOINS asks a player whose join has stalled to join again. ([#70](https://github.com/viik2k/oni-rcon/pull/70))
+
+## Fixed
+
+- **Playlists.** The playlist check and editor now accept every field Reclaimer documents: lobby sizes, vote-time curves, co-op campaign and Firefight entries, start-together settings, and 1 to 256 games. Editing a playlist no longer drops a curve or lobby sizes. ([#71](https://github.com/viik2k/oni-rcon/pull/71))
 
 ## Under the hood
 
-- In-range dependency updates (Tauri 2.12.7, npm, cargo, uv).
+- In-range dependency updates (npm, cargo, uv). ([#72](https://github.com/viik2k/oni-rcon/pull/72))
 
 ## Upgrading
 
