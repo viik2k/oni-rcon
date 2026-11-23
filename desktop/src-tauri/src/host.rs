@@ -275,8 +275,14 @@ fn slug(name: &str) -> Result<String, String> {
     if s.is_empty() { Err("Name it with a letter or number in it.".into()) } else { Ok(s) }
 }
 
-const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "games"];
-const GAME_KEYS: &[&str] = &["map", "game", "name", "weight", "options", "world", "rules", "anti_cheat", "voice_team_only"];
+// host.html's "Playlist file reference" (read 2026-11-22), plus co-op entries and 0.10.9's start-together keys, which
+// the server's template says "a playlist entry may set".
+const PLAYLIST_KEYS: &[&str] = &["version", "name", "vote_seconds", "players", "recommended_players", "games"];
+const GAME_KEYS: &[&str] = &[
+    "map", "base_map", "game", "weight", "players", "recommended_players", "name", "teams", "rules", "options", "world", "anti_cheat",
+    "voice_team_only", "preview_image", "campaign", "odst", "start_rule", "start_wait_seconds", "start_at_limit", "spawn_hold_seconds",
+];
+const COOP_KEYS: &[&str] = &["campaign", "odst"];
 
 /// A playlist in the shape the dedicated server reads (version 2), or why it can't be saved. Unknown keys are refused,
 /// the way the server's own import refuses them; a weight of 1 and empty values are left out. Whether each map and game
@@ -294,13 +300,18 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
     if name.is_empty() {
         return Err("Give the playlist a name.".into());
     }
-    let vote = o.get("vote_seconds").map_or(Some(20), Value::as_i64).filter(|n| (5..=120).contains(n)).ok_or("The vote lasts 5 to 120 seconds.")?;
+    // A curve ({"points": [[players, seconds], ...]}) follows the lobby's size: the server checks its points.
+    let vote = match o.get("vote_seconds") {
+        None => json!(20),
+        Some(c) if c.is_object() => c.clone(),
+        Some(v) => json!(v.as_i64().filter(|n| (5..=120).contains(n)).ok_or("The vote lasts 5 to 120 seconds.")?),
+    };
     let games = o.get("games").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
-    if games.len() < 3 {
-        return Err(format!("A playlist needs at least 3 games (it has {}): players vote on three different games each time.", games.len()));
+    if games.is_empty() {
+        return Err("A playlist needs at least one game.".into());
     }
-    if games.len() > 128 {
-        return Err(format!("A playlist holds at most 128 games; this one has {}.", games.len()));
+    if games.len() > 256 {
+        return Err(format!("A playlist holds at most 256 games; this one has {}.", games.len()));
     }
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
@@ -311,7 +322,12 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
             return Err(format!("Game {n} has an unknown setting: {k}."));
         }
         let text = |k: &str| g.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let (map, game) = (text("map"), text("game"));
+        let coop: Vec<_> = COOP_KEYS.iter().filter_map(|k| g.get(*k).map(|v| (*k, v))).collect();
+        let (map, game) = match coop[..] {
+            [] => (text("map"), text("game")),
+            [(k, v)] if v.is_object() && !g.contains_key("map") && !g.contains_key("game") => (k.to_string(), v.to_string()),
+            _ => return Err(format!("Game {n} is a co-op entry: one campaign or odst object, with no map or game type.")),
+        };
         if map.is_empty() || game.is_empty() {
             return Err(format!("Game {n} needs both a map and a game type."));
         }
@@ -325,7 +341,13 @@ pub fn check_playlist(p: &serde_json::Value) -> Result<serde_json::Value, String
             g.iter().filter(|(k, v)| !(k.as_str() == "weight" && v.as_i64() == Some(1)) && !v.is_null() && v.as_str() != Some("")).map(|(k, v)| (k.clone(), v.clone())).collect();
         out.push(Value::Object(kept));
     }
-    Ok(json!({"version": 2, "name": name, "vote_seconds": vote, "games": out}))
+    let mut top = json!({"version": 2, "name": name, "vote_seconds": vote, "games": out});
+    for k in ["players", "recommended_players"] {
+        if let Some(v) = o.get(k).filter(|v| !v.is_null() && v.as_str() != Some("")) {
+            top[k] = v.clone();
+        }
+    }
+    Ok(top)
 }
 
 /// A playlist made in the console: its path from the server folder and its JSON, held to Reclaimer's rules.
@@ -1305,7 +1327,7 @@ mod tests {
         let (path, json) = playlist_file(&pl(" Friday Night! ", serde_json::json!([g("Guardian"), g("Valhalla"), g("The Pit")]))).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!((path.as_str(), &v["name"], &v["games"][2]["map"]), ("playlists/friday-night.playlist.json", &"Friday Night!".into(), &"The Pit".into()));
-        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla")]))).is_err(), "three at least");
+        assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian")]))).is_ok(), "one game is a playlist");
         assert!(playlist_file(&pl("x", serde_json::json!([g("Guardian"), g("Valhalla"), g("Guardian")]))).is_err(), "no game twice");
         assert!(playlist_file(&pl("!!", serde_json::json!([g("a"), g("b"), g("c")]))).is_err());
     }
@@ -1320,8 +1342,11 @@ mod tests {
         let many = |n: usize| (0..n).map(|i| json!({"map": format!("m{i}"), "game": "b"})).collect::<Vec<_>>();
         for (bad, words) in [
             (json!({"name": "", "games": games}), "name"),
-            (json!({"name": "x", "games": []}), "at least 3"),
-            (json!({"name": "x", "games": many(129)}), "at most 128"),
+            (json!({"name": "x", "games": []}), "at least one"),
+            (json!({"name": "x", "games": many(257)}), "at most 256"),
+            (json!({"name": "x", "games": [{"campaign": {"mission": 3010}, "map": "a"}]}), "co-op entry"),
+            (json!({"name": "x", "games": [{"campaign": {"mission": 3010}, "odst": {"mission": 6100}}]}), "co-op entry"),
+            (json!({"name": "x", "games": [{"odst": {"mission": 6100}}, {"odst": {"mission": 6100}}]}), "twice"),
             (json!({"name": "x", "games": [{"map": "a"}, {"map": "b", "game": "c"}, {"map": "d", "game": "e"}]}), "both a map and a game type"),
             (json!({"name": "x", "games": [{"map": "a", "game": "b", "weight": 0}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "weight"),
             (json!({"name": "x", "games": [{"map": "a", "game": "b", "script": 1}, {"map": "c", "game": "d"}, {"map": "e", "game": "f"}]}), "unknown setting"),
@@ -1331,6 +1356,18 @@ mod tests {
             let e = check_playlist(&bad).unwrap_err();
             assert!(e.contains(words), "{e:?} should mention {words:?}");
         }
+        assert!(check_playlist(&json!({"name": "x", "games": many(256)})).is_ok());
+        // Every field host.html's playlist reference names, a co-op entry and 0.10.9's start keys: saved as written.
+        let every = json!({"version": 2, "name": "Every", "players": "8-24", "recommended_players": "12-20",
+            "vote_seconds": {"points": [[2, 15], [16, 25]]}, "games": [
+            {"map": "Maps/arena.json", "base_map": "Valhalla", "game": "ctf", "weight": 2, "players": "12+", "recommended_players": "8-16",
+             "name": "Arena CTF", "teams": true, "rules": {"score_to_win": 50}, "options": {"rounds.minutes": {"points": [[4, 5], [16, 10]]}},
+             "world": {"sprint": "stamina"}, "anti_cheat": false, "voice_team_only": true, "preview_image": "arena.png",
+             "start_rule": "everyone", "start_wait_seconds": 135, "start_at_limit": "wait", "spawn_hold_seconds": 3},
+            {"campaign": {"mission": 3010, "difficulty": "heroic"}, "weight": 3},
+            {"odst": {"mode": "firefight", "mission": 6100, "insertion": 4}}]});
+        let (_, saved) = playlist_file(&every).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap(), every);
         assert!(console_playlist("playlists/a.playlist.json").is_ok());
         for bad in ["playlists/a.json", "playlists/../a.playlist.json", "Maps/a.playlist.json", "playlists/x/a.playlist.json"] {
             assert!(console_playlist(bad).is_err(), "{bad}");

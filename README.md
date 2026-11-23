@@ -102,8 +102,10 @@ Also:
   `queue_mode = "ballot"` puts them on the ballots instead of playing them in turn.
 - **Playlists.** PLAYLISTS (F3, desktop) lists the server folder's `playlists`, the ones made here and any other, with
   the playlists installed from F6. NEW and EDIT open an editor: a name, the seconds players get to vote (5 to 120) and
-  its games, a map and a game type each, with a weight for how often it comes up. Three games at least, each map and game
-  type once, no more than 128, in the shape the dedicated server reads. A playlist this console made is saved over; any
+  its games, a map and a game type each, with a weight for how often it comes up. One to 256 games (players vote from
+  three up), each map and game type once, in the shape the dedicated server reads. Every field of Reclaimer's playlist
+  reference is kept as written: lobby sizes, a vote-time curve, `teams`, `base_map`, vote images, co-op `campaign` and
+  `odst` entries and 0.10.9's start-together keys. A playlist this console made is saved over; any
   other is opened as a copy. USE ON THIS SERVER sets `playlist` in `dedicated.toml`. (From ibigs/oni-rcon, by RifleJock.)
 - **Automation rules.** AUTOMATION (F9, desktop) holds rules of WHEN something happens, ONLY IF it holds, THEN DO these: say in
   chat, message a player, the admins or a role, cancel a vote, shuffle the teams, post to Discord or Telegram. Build one step
