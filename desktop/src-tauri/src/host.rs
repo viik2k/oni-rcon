@@ -537,6 +537,57 @@ pub fn set_server_bots(text: &str, rcon_port: u16, bots: i64, pilots: i64) -> Re
     Ok(doc.to_string())
 }
 
+/// START TOGETHER (0.10.9, experimental): `start_rule` (`first_ready`, the default, or `everyone`: the game waits for
+/// every player), `start_wait_seconds` (15-600, 135), `start_at_limit` (`start`, the default: start with who's ready, or
+/// `wait`) and `spawn_hold_seconds` (0-10, 3). Ranges from the 0.10.9 binary's template; host.html doesn't list them yet.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct StartTogether {
+    pub rule: String,
+    pub wait: i64,
+    pub at_limit: String,
+    pub hold: i64,
+}
+pub const START_RULES: [&str; 2] = ["first_ready", "everyone"];
+pub const START_AT_LIMITS: [&str; 2] = ["start", "wait"];
+
+/// Start together as the [[server]] on `rcon_port` has it, else [defaults], else the server's defaults.
+pub fn server_start(text: &str, rcon_port: u16) -> Result<StartTogether, String> {
+    let doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("dedicated.toml doesn't read: {e}"))?;
+    let list = doc.get("server").and_then(toml_edit::Item::as_array_of_tables).ok_or("dedicated.toml has no [[server]]")?;
+    let t = list.iter().find(|t| on_port(t, rcon_port)).ok_or_else(|| format!("dedicated.toml has no [[server]] on RCON port {rcon_port}"))?;
+    let word = |k: &str, d: &str| t.get(k).or_else(|| doc.get("defaults").and_then(|x| x.get(k))).and_then(toml_edit::Item::as_str).unwrap_or(d).to_string();
+    Ok(StartTogether {
+        rule: word("start_rule", "first_ready"),
+        wait: server_int(&doc, t, "start_wait_seconds").unwrap_or(135),
+        at_limit: word("start_at_limit", "start"),
+        hold: server_int(&doc, t, "spawn_hold_seconds").unwrap_or(3),
+    })
+}
+
+/// Start together set on the [[server]] on `rcon_port`, all four keys written (so [defaults] can't outvote them), refused
+/// outside the ranges the server takes.
+pub fn set_server_start(text: &str, rcon_port: u16, s: &StartTogether) -> Result<String, String> {
+    if !START_RULES.contains(&s.rule.as_str()) {
+        return Err(format!("{} isn't a start rule: first_ready or everyone.", s.rule));
+    }
+    if !START_AT_LIMITS.contains(&s.at_limit.as_str()) {
+        return Err(format!("{} isn't what happens at the limit: start or wait.", s.at_limit));
+    }
+    if !(15..=600).contains(&s.wait) {
+        return Err("The lobby waits 15 to 600 seconds for everyone.".into());
+    }
+    if !(0..=10).contains(&s.hold) {
+        return Err("The spawn hold is 0 to 10 seconds.".into());
+    }
+    edit_server(text, rcon_port, |t| {
+        t["start_rule"] = toml_edit::value(&s.rule);
+        t["start_wait_seconds"] = toml_edit::value(s.wait);
+        t["start_at_limit"] = toml_edit::value(&s.at_limit);
+        t["spawn_hold_seconds"] = toml_edit::value(s.hold);
+        Ok(())
+    })
+}
+
 /// `id` added to, or taken off, the admins of the [[server]] on `rcon_port` only: Reclaimer has no other tiers.
 pub fn set_server_admin(text: &str, rcon_port: u16, id: &str, add: bool) -> Result<String, String> {
     let id = id.trim();
@@ -1376,6 +1427,31 @@ mod tests {
         assert_eq!(server_bots(&all, 49176).unwrap(), (2, 0), "[defaults] holds for every server");
         assert!(set_server_bots(&all, 49176, 4, 0).is_err() && set_server_bots(&all, 49176, 3, 0).is_ok());
         assert!(set_server_bots(TOML, 50177, 40, 10).is_ok(), "no max_players in the file: left to the form and the server");
+    }
+
+    #[test]
+    fn start_together_round_trips_and_refuses_out_of_range() {
+        let def = server_start(TOML, 50177).unwrap();
+        assert_eq!((def.rule.as_str(), def.wait, def.at_limit.as_str(), def.hold), ("first_ready", 135, "start", 3), "the server's defaults");
+        let want = StartTogether { rule: "everyone".into(), wait: 60, at_limit: "wait".into(), hold: 0 };
+        let on = set_server_start(TOML, 50177, &want).unwrap();
+        assert_eq!(server_start(&on, 50177).unwrap(), want);
+        assert_eq!(server_start(&on, 49176).unwrap(), def, "only the server it was set on");
+        let all = format!("[defaults]\nstart_rule = \"everyone\"\nstart_wait_seconds = 30\n{TOML}");
+        assert_eq!(server_start(&all, 49176).unwrap().wait, 30, "[defaults] holds for every server");
+        let back = set_server_start(&all, 49176, &def).unwrap();
+        assert_eq!(server_start(&back, 49176).unwrap(), def, "first_ready is written, never left to [defaults]");
+        for (bad, why) in [
+            (StartTogether { wait: 14, ..want.clone() }, "15 to 600"),
+            (StartTogether { wait: 601, ..want.clone() }, "15 to 600"),
+            (StartTogether { hold: 11, ..want.clone() }, "0 to 10"),
+            (StartTogether { hold: -1, ..want.clone() }, "0 to 10"),
+            (StartTogether { rule: "first".into(), ..want.clone() }, "start rule"),
+            (StartTogether { at_limit: "".into(), ..want.clone() }, "at the limit"),
+        ] {
+            assert!(set_server_start(TOML, 50177, &bad).unwrap_err().contains(why), "{bad:?}");
+        }
+        assert!(set_server_start(TOML, 50177, &StartTogether { wait: 600, hold: 10, ..want }).is_ok(), "the ends of the ranges");
     }
 
     #[test]
