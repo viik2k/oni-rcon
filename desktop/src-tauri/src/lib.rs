@@ -609,6 +609,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
         ("character_mods", _) => "".into(), // host::Mods, written whole by set_server_mods below
         ("campaign", _) => "".into(), // {campaign, mission, difficulty}, written by set_server_campaign below
         ("combat_bots", _) => "".into(), // {bots, pilots}, written by set_server_bots below
+        ("start_together", _) => "".into(), // host::StartTogether, written whole by set_server_start below
         _ => return Err(format!("{key} can't be set from here")),
     };
     if let Some(d) = h.hsetup.demo.clone() {
@@ -632,6 +633,7 @@ async fn server_setting(index: usize, key: String, value: Value, app: State<'_, 
             let d = value["difficulty"].as_str().filter(|d| host::DIFFICULTIES.contains(d)).ok_or("Difficulty is easy, normal, heroic or legendary.")?;
             host::set_server_campaign(&text, s.port, campaign, mission, d)?
         }
+        "start_together" => host::set_server_start(&text, s.port, &serde_json::from_value(value).map_err(|_| "Those aren't start together settings.")?)?,
         "combat_bots" => {
             let n = |k: &str| value[k].as_i64().ok_or_else(|| format!("{k} isn't a whole number"));
             host::set_server_bots(&text, s.port, n("bots")?, n("pilots")?)?
@@ -665,6 +667,19 @@ async fn server_bots(index: usize, app: State<'_, App>) -> Result<(i64, i64), St
     let t = install::target_for(s)?;
     let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
     host::server_bots(&text, s.port)
+}
+
+/// Its start together settings (0.10.9) as its dedicated.toml has them (host::StartTogether).
+#[tauri::command]
+async fn server_start(index: usize, app: State<'_, App>) -> Result<host::StartTogether, String> {
+    let h = hub_of(&app)?;
+    if let Some(d) = h.hsetup.demo.clone() {
+        return Ok(d.start(index));
+    }
+    let s = &h.stations.get(index).ok_or("no such server")?.server;
+    let t = install::target_for(s)?;
+    let text = t.read_text("../dedicated.toml").await.map_err(|e| format!("No dedicated.toml beside its content_dir: {e}"))?;
+    host::server_start(&text, s.port)
 }
 
 /// Its character mods as its dedicated.toml has them (host::Mods), and `found`: the folders in its content folder's Mods
@@ -1363,7 +1378,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, server_flag, server_bots, server_mods, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
+            launch_info, setup_probe, setup_check, setup_save, setup_host, pick_playlist, host_status, setup_find, setup_open, start_console, log_error, call, reconnect, set_password, restart_server, remove_server, server_setting, server_flag, server_bots, server_start, server_mods, playlists, save_playlist, playlist_library, playlist_read, save_game_type,
             set_labels, health_now, health_view, forge_listings, forge_favourites, forge_listing, forge_set_key,
             forge_status, forge_state, forge_plan, forge_put, forge_ack, forge_mine, forge_pick, forge_publish, forge_write, prefs_intro, plugins_list, plugins_found, plugin_install, plugin_enable, plugin_approve, plugin_view, plugin_action, plugin_session_start, plugin_get_requirement, plugin_recheck, plugin_send, plugin_call, plugin_filter, plugin_update_check, plugin_update, plugin_index, plugin_index_install, update_check, update_install, whats_new, reclaimer_latest,
             automation::automation_load, automation::automation_save, automation::discord_add, automation::discord_remove, automation::discord_post,
