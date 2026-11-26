@@ -645,6 +645,12 @@ impl FakeHost {
         })
     }
 
+    /// The start together settings `set` saved for server `i`, the server's defaults when never set.
+    pub fn start(&self, i: usize) -> crate::host::StartTogether {
+        let saved = self.fakes.get(i).map(|(_, f)| f.lock().status["start_together"].clone());
+        saved.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_else(|| crate::host::StartTogether { rule: "first_ready".into(), wait: 135, at_limit: "start".into(), hold: 3 })
+    }
+
     /// A setting `set` saved for server `i`, off when never set.
     pub fn flag(&self, i: usize, key: &str) -> bool {
         self.fakes.get(i).is_some_and(|(_, f)| f.lock().status[key].as_bool() == Some(true))

@@ -7,7 +7,7 @@ import { newPlaylist, type Playlist } from "./lib/content";
 import { projectOf, reclaimerOnly } from "./lib/projects";
 import { latestOf } from "./lib/forge";
 import { CATALOG, DISCORD_STEPS, MAX_RULES, ROLES, STARTERS, TELEGRAM_STEPS, TEMPLATE_HELP, block, chatOk, describe, describeBlock, plan, relay, sample, stepWords, telegramWhy, validate, type Field, type Part } from "./lib/rules";
-import { behind, since, CAMERAS, CAMPAIGNS, DIFFICULTIES, HIT_CHECKS, NETWORK_MODELS, SANDBOXES, redactData, hotReloads, notesText, num, pardonTarget, pick, queued, QUEUE_MAX, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
+import { behind, since, CAMERAS, CAMPAIGNS, DIFFICULTIES, HIT_CHECKS, NETWORK_MODELS, START_AT_LIMITS, START_RULES, SANDBOXES, redactData, hotReloads, notesText, num, pardonTarget, pick, queued, QUEUE_MAX, redactText, restartDue, targetOf, vpnCheck, type Dict, type Kick, type Line } from "./lib/util";
 
 export const BAN_TIMES: [string, string][] = [["Permanent", ""], ["30 minutes", "30m"], ["2 hours", "2h"], ["12 hours", "12h"], ["1 day", "1d"], ["7 days", "7d"], ["2 weeks", "2w"], ["30 days", "30d"]];
 export const KICK_TIMES: [string, string][] = [["Next step (10, 30, 60, then 120 minutes)", ""], ["None: they can rejoin at once", "0"], ["10 minutes", "10m"], ["1 hour", "1h"], ["2 hours", "2h"]];
@@ -22,12 +22,12 @@ export const COMMANDS = ["status", "players", "say", "tell", "kick", "ban", "ban
 export const OPS: [string, string, string][] = [["load", "LOAD MAP+MODE", "primary"], ["map", "CHANGE MAP", ""], ["mode", "CHANGE MODE", ""],
   ["nextmap", "QUEUE NEXT", ""], ["queue", "GAME QUEUE", ""], ["endround", "END ROUND", "warning"], ["endgame", "END GAME", "error"], ["next", "NEXT GAME", "warning"], ["replay", "REPLAY", "warning"], ["shuffle", "SHUFFLE TEAMS", ""],
   ["teamcount", "TEAM COUNT", ""], ["startvote", "CALL VOTE", ""], ["passvote", "PASS VOTE", "success"], ["cancelvote", "CANCEL VOTE", ""],
-  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""], ["restorestate", "RESTORE STATE", ""], ["sandbox", "SANDBOX", ""], ["netmodel", "NETWORKING", ""], ["campaign", "CAMPAIGN", ""], ["bots", "COMBAT BOTS", ""], ["hitcheck", "HIT CHECK", ""], ["stalledjoins", "STALLED JOINS", ""],
+  ["broadcast", "BROADCAST", "primary"], ["servername", "RENAME", ""], ["password", "JOIN PASSWORD", ""], ["maxping", "PING LIMIT", ""], ["capacity", "PLAYER CAPACITY", ""], ["camera", "CAMERA", ""], ["restorestate", "RESTORE STATE", ""], ["sandbox", "SANDBOX", ""], ["netmodel", "NETWORKING", ""], ["campaign", "CAMPAIGN", ""], ["bots", "COMBAT BOTS", ""], ["hitcheck", "HIT CHECK", ""], ["stalledjoins", "STALLED JOINS", ""], ["starttogether", "START TOGETHER", ""],
   ["charmods", "CHARACTER MODS", ""], ["playlist", "SWITCH PLAYLIST", ""], ["playlists", "PLAYLISTS", ""], ["newplaylist", "NEW PLAYLIST", ""], ["newgametype", "NEW GAME TYPE", ""], ["reconnect", "RECONNECT", ""], ["restart", "RESTART SERVER", "error"], ["remove", "REMOVE SERVER", "warning"]];
 /** What F3 does through a Project Reclaimer server's own files and formats: offered only on one. */
-export const RECLAIMER_OPS = ["capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
+export const RECLAIMER_OPS = ["capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "starttogether", "charmods", "playlist", "playlists", "newplaylist", "newgametype"];
 export const OP_GROUPS: [string, string[]][] = [["MATCH", ["load", "map", "mode", "nextmap", "queue", "endround", "endgame", "next", "replay"]],
-  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
+  ["TEAMS & VOTES", ["shuffle", "teamcount", "startvote", "passvote", "cancelvote"]], ["SERVER", ["broadcast", "servername", "password", "maxping", "capacity", "camera", "restorestate", "sandbox", "netmodel", "campaign", "bots", "hitcheck", "stalledjoins", "starttogether", "charmods", "playlist", "playlists", "newplaylist", "newgametype", "reconnect", "restart", "remove"]]];
 export const BAN_OPS: [string, string, string][] = [["newban", "NEW BAN", "error"], ["unban", "UNBAN  u", "warning"], ["vpnallow", "VPN ALLOW  a", ""],
   ["vpnrevoke", "VPN REVOKE  r", ""], ["vpncheck", "CHECK IP", ""], ["adminadd", "ADD ADMIN  p", "primary"], ["adminremove", "REMOVE ADMIN  d", "warning"],
   ["pardon", "PARDON  o", ""]];
@@ -61,6 +61,7 @@ export const TIPS: Record<string, string> = {
   "op-netmodel": "Enhanced networking (the default: each player gets what's near and in view first) or Halo 3's classic networking. Saved in its dedicated.toml; needs server 0.10.4 or later.",
   "op-hitcheck": "What the hit check does about a player whose shots it finds impossible: log and report them (the default from 0.10.8), remove them (as before 0.10.8), or nothing. Saved in its dedicated.toml; needs server 0.10.8 or later.",
   "op-stalledjoins": "Ask a player whose join into a running game has stalled for 45 seconds to join again, instead of leaving them stuck loading. Saved in its dedicated.toml; needs server 0.10.8 or later.",
+  "op-starttogether": "Experimental: have a game wait for every player before it starts, as Halo 3 did on the Xbox 360, then spawn everyone on the same tick. Saved in its dedicated.toml; needs server 0.10.9 or later.",
   "op-campaign": "Put it on a co-op campaign in place of its playlist or map: Halo 3's, Halo: CE's, Halo 2's, ODST's, Reach's or a mod's, from a mission and at a difficulty you pick. It holds 16 players at most and goes on to the next mission after each win. SWITCH PLAYLIST puts it back on multiplayer. Saved in its dedicated.toml; needs server 0.10.7 or later.",
   "op-bots": "Fighting bots that play its multiplayer games, some of them flying or driving the map's vehicles, so a lone player gets a game. They take player places, leaving at least one for a person. Saved in its dedicated.toml; needs server 0.10.6 or later.",
   "op-charmods": "Which character mods (cosmetic mods with a customization.json) its games include, whether players must accept them or play only as them, and whether players can download mods they're missing from it. Saved in its dedicated.toml; needs server 0.9.18 or later.",
@@ -319,6 +320,34 @@ async function stalledJoins(st: Station) {
   if (f) return saveSetting(st, "rejoin_stalled_joins", f.v === "on", "STALLED JOINS", `stalled joins ${f.v}`);
 }
 
+/** START TOGETHER (0.10.9, experimental): dedicated.toml's start_rule, start_wait_seconds, start_at_limit and
+ *  spawn_hold_seconds. host::set_server_start refuses what's out of range; this says so before it's sent. */
+async function startTogether(st: Station) {
+  const what = `START TOGETHER · ${st.label}`;
+  if (behind(st.info.version, "0.10.9")) return oni.notify(`${st.label} runs ${st.info.version}: starting together needs server 0.10.9 or later.`, what, "warning");
+  let now: { rule: string; wait: number; at_limit: string; hold: number };
+  try {
+    now = await invoke<typeof now>("server_start", { index: st.index });
+  } catch (e) {
+    return oni.notify(String(e), what, "error", 15);
+  }
+  const first = (opts: [string, string][], v: string) => [...opts.filter(([, k]) => k === v), ...opts.filter(([, k]) => k !== v)];
+  const f = await oni.form("START TOGETHER  (experimental)", [
+    ["rule", "A game starts", first(START_RULES, now.rule)],
+    ["wait", "Wait for everyone, seconds (15 to 600)", String(now.wait)],
+    ["limit", "Still not everyone by then", first(START_AT_LIMITS, now.at_limit)],
+    ["hold", "Hold before spawning, seconds (0 to 10)", String(now.hold)],
+  ], { verb: "SAVE", required: ["wait", "hold"],
+    note: `Waiting for everyone, the lobby says in chat whom it's waiting for; no wait lasts past ten times its limit. The hold shows "Starting in 3" and spawns everyone on the same tick. A playlist game can set its own. Experimental in Reclaimer 0.10.9. Saved in the server's dedicated.toml: it takes effect ${takesEffect(st)}.` });
+  if (!f) return;
+  const [wait, hold] = [Number(f.wait), Number(f.hold)];
+  const bad = !(Number.isInteger(wait) && wait >= 15 && wait <= 600) ? "The lobby waits 15 to 600 seconds for everyone."
+    : !(Number.isInteger(hold) && hold >= 0 && hold <= 10) ? "The spawn hold is 0 to 10 seconds." : "";
+  if (bad) return oni.notify(bad, `${what} · NOT SAVED`, "error", 15);
+  return saveSetting(st, "start_together", { rule: f.rule, wait, at_limit: f.limit, hold }, "START TOGETHER",
+    `start together: ${f.rule === "everyone" ? `everyone, up to ${wait} s, then ${f.limit}` : "first ready"}, ${hold} s hold`);
+}
+
 /** CHARACTER MODS (0.9.18): the character mods its games include, from its content folder's Mods, whether players must
  *  accept them to join or play only as them, and whether players can download mods they're missing from it. */
 async function characterMods(st: Station) {
@@ -524,6 +553,7 @@ export async function op(name: string, st = oni.cur) {
   }
   if (name === "restorestate") return restoreState(st);
   if (name === "stalledjoins") return stalledJoins(st);
+  if (name === "starttogether") return startTogether(st);
   if (name === "campaign") return campaign(st);
   if (name === "bots") return combatBots(st);
   if (name === "charmods") return characterMods(st);
